@@ -1,0 +1,35 @@
+appId: com.openchat.desktop
+productName: OpenChat
+copyright: Copyright 2026
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - resources/**/*
+  - package.json
+
+extraResources:
+  - from: resources/
+    to: resources/
+    filter:
+      - "**/*"
+
+mac:
+  target:
+    - dmg
+  artifactName: ${productName}-${version}-mac.${ext}
+  category: public.app-category.productivity
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-win.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+asar: true

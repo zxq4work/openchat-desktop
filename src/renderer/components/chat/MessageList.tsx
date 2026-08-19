@@ -1,0 +1,51 @@
+import React, { useEffect, useRef } from 'react'
+import { useConversationStore } from '../../stores/conversationStore'
+import { MessageItem } from './MessageItem'
+import { ContextBoundary } from './ContextBoundary'
+
+export function MessageList() {
+  const messages = useConversationStore((s) => s.activeMessages)
+  const segments = useConversationStore((s) => s.activeSegments)
+  const activeConversation = useConversationStore((s) => s.activeConversation)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages.length])
+
+  // 在 segment 边界处插入分割线
+  const segmentBoundaries = new Set<number>()
+  let currentSegmentId = ''
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].segmentId !== currentSegmentId) {
+      currentSegmentId = messages[i].segmentId
+      segmentBoundaries.add(i)
+    }
+  }
+
+  // 当前 segment 是否需要在末尾显示边界（无消息或最后一条消息不属于当前 segment）
+  const currentSegment = activeConversation
+    ? segments.find((s) => s.id === activeConversation.currentSegmentId)
+    : null
+  const showTrailingBoundary =
+    currentSegment &&
+    currentSegment.reason !== 'conversation-created' &&
+    (messages.length === 0 || messages[messages.length - 1].segmentId !== currentSegment.id)
+
+  return (
+    <div className="message-list">
+      {messages.map((msg, index) => {
+        const isBoundary = index > 0 && segmentBoundaries.has(index)
+        const segment = segments.find((s) => s.id === msg.segmentId)
+        return (
+          <React.Fragment key={msg.id}>
+            {isBoundary && segment && <ContextBoundary segment={segment} />}
+            <MessageItem message={msg} />
+          </React.Fragment>
+        )
+      })}
+      {showTrailingBoundary && currentSegment && <ContextBoundary segment={currentSegment} />}
+      <div ref={bottomRef} />
+    </div>
+  )
+}

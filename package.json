@@ -1,0 +1,39 @@
+{
+  "name": "openchat-desktop",
+  "version": "0.1.0",
+  "description": "A lightweight Chatbox-style ChatGPT desktop client",
+  "main": "dist/src/main/bootstrap/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite",
+    "build": "tsc --noEmit && vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "electron .",
+    "package": "electron-builder",
+    "package:win": "electron-builder --win",
+    "package:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "4.5.7",
+    "sql.js": "1.10.3",
+    "markdown-it": "13.0.2"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "13.0.7",
+    "@types/node": "18.19.39",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "@types/sql.js": "1.4.9",
+    "@vitejs/plugin-react": "4.3.1",
+    "electron": "22.3.27",
+    "electron-builder": "24.13.3",
+    "typescript": "5.4.5",
+    "vite": "4.5.3",
+    "vitest": "1.6.1"
+  }
+}
