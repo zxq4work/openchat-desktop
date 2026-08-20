@@ -25,7 +25,7 @@ export function App() {
     async function init() {
       const account = await window.openchat.auth.getStatus()
       setAuthStatus(account.loggedIn ? 'logged-in' : 'logged-out')
-      setAccount(account.email, account.planType, account.accountId)
+      setAccount(account.email, account.planType, account.userId, account.accountId)
 
       if (account.loggedIn) {
         const models = await window.openchat.models.refresh()
@@ -40,14 +40,14 @@ export function App() {
         // 只刷新一次：getStatus 会触发 checkAuth，但 checkAuth 已用 setStatusAndEmit 避免重复推送
         window.openchat.auth.getStatus().then((account) => {
           if (account.loggedIn) {
-            setAccount(account.email, account.planType, account.accountId)
+            setAccount(account.email, account.planType, account.userId, account.accountId)
           }
         })
         window.openchat.models.refresh().then((models) => {
           setModels(models)
         })
       } else if (status === 'logged-out') {
-        setAccount(null, null, null)
+        setAccount(null, null, null, null)
       }
     })
 
@@ -75,14 +75,27 @@ export function App() {
     }
 
     window.openchat.events.onChatDelta((event: unknown) => {
-      const e = event as { text?: string }
+      const e = event as { text?: string; conversationId?: string }
       if (e.text) {
+        const streamingId = useChatStreamStore.getState().streamingConversationId
+        if (!streamingId) {
+          useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
+        } else if (e.conversationId && e.conversationId !== streamingId) {
+          return
+        }
         pendingDeltas.push(e.text)
         startFlush()
       }
     })
 
-    window.openchat.events.onChatReasoningStarted(() => {
+    window.openchat.events.onChatReasoningStarted((event: unknown) => {
+      const e = event as { conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (!streamingId) {
+        useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
+      }
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
       const now = Date.now()
       // 一次 turn 可能有多个 reasoning 阶段，从前一个阶段累加
       const prevMeta = useChatStreamStore.getState().reasoningMeta
@@ -99,11 +112,14 @@ export function App() {
     })
 
     window.openchat.events.onChatReasoningCompleted((event: unknown) => {
+      const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta; conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
       if (reasoningElapsedTimer) {
         clearInterval(reasoningElapsedTimer)
         reasoningElapsedTimer = null
       }
-      const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta }
       if (e.reasoningMeta) {
         useChatStreamStore.getState().setReasoningMeta(e.reasoningMeta)
       }
@@ -111,7 +127,10 @@ export function App() {
     })
 
     window.openchat.events.onChatError((event: unknown) => {
-      const e = event as { errorCode?: string; errorMessage?: string }
+      const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
       console.error('[App] Chat error:', e.errorCode, e.errorMessage)
       if (flushTimer) {
         clearInterval(flushTimer)
@@ -137,7 +156,11 @@ export function App() {
       }
     })
 
-    window.openchat.events.onTurnCompleted(() => {
+    window.openchat.events.onTurnCompleted((event: unknown) => {
+      const e = event as { conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
       if (flushTimer) {
         clearInterval(flushTimer)
         flushTimer = null
@@ -152,12 +175,8 @@ export function App() {
         pendingDeltas.length = 0
         useChatStreamStore.getState().setBufferedText(accumulatedText)
       }
-      // 重置闭包中的累积变量，防止下一轮流式中出现旧内容残留
-      accumulatedText = ''
-      pendingDeltas.length = 0
-      useChatStreamStore.getState().reset()
-
-      // 重新加载消息以获取最终的 status/content
+      // 先重新加载消息以获取最终的 status/content，再重置流式状态
+      // 避免 reset() 清空 bufferedText 后消息内容短暂缺失导致高度抖动
       const id = useConversationStore.getState().activeConversationId
       if (id) {
         window.openchat.conversations.get(id).then((data) => {
@@ -166,7 +185,14 @@ export function App() {
             useConversationStore.getState().setActiveMessages(data.messages)
             useConversationStore.getState().setActiveSegments(data.segments)
           }
+          accumulatedText = ''
+          pendingDeltas.length = 0
+          useChatStreamStore.getState().reset()
         })
+      } else {
+        accumulatedText = ''
+        pendingDeltas.length = 0
+        useChatStreamStore.getState().reset()
       }
 
       // 刷新侧边栏列表（标题/preview 已更新）

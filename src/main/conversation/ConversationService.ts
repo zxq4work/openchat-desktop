@@ -17,6 +17,7 @@ import { TITLE_MAX_LENGTH } from '../../shared/constants'
 
 export interface StreamEvent {
   type: 'delta' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error'
+  conversationId?: string
   turnId?: string
   itemId?: string
   text?: string
@@ -261,6 +262,7 @@ export class ConversationService {
         // thread 创建失败，标记为 provider context lost
         this.emitStreamEvent({
           type: 'error',
+          conversationId,
           errorCode: 'ThreadStartFailed',
           errorMessage: err instanceof Error ? err.message : String(err),
         })
@@ -345,6 +347,7 @@ export class ConversationService {
       this.activeGeneration = null
       this.emitStreamEvent({
         type: 'error',
+        conversationId,
         errorCode: 'TurnStartFailed',
         errorMessage: err instanceof Error ? err.message : String(err),
       })
@@ -385,17 +388,19 @@ export class ConversationService {
 
   private handleStreamEvent(method: string, params: unknown): void {
     const event = params as Record<string, unknown>
+    const conversationId = this.activeGeneration?.conversationId
 
     switch (method) {
       case 'turn/started': {
         const turn = event.turn as Record<string, unknown> | undefined
-        this.emitStreamEvent({ type: 'turn-started', turnId: String(turn?.id ?? '') })
+        this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: String(turn?.id ?? '') })
         break
       }
 
       case 'item/started':
         this.emitStreamEvent({
           type: 'item-started',
+          conversationId,
           turnId: String(event.turnId),
           itemId: String(event.itemId),
         })
@@ -404,6 +409,7 @@ export class ConversationService {
       case 'item/agentMessage/delta':
         this.emitStreamEvent({
           type: 'delta',
+          conversationId,
           turnId: String(event.turnId),
           itemId: String(event.itemId),
           text: String(event.delta ?? ''),
@@ -414,6 +420,7 @@ export class ConversationService {
         this.handleItemCompleted(event)
         this.emitStreamEvent({
           type: 'item-completed',
+          conversationId,
           turnId: String(event.turnId),
           itemId: String(event.itemId),
         })
@@ -431,6 +438,7 @@ export class ConversationService {
 
   private async handleTurnCompleted(event: Record<string, unknown>): Promise<void> {
     const status = String(event.status ?? 'completed')
+    const conversationId = this.activeGeneration?.conversationId
 
     if (this.activeGeneration && this.activeGeneration.assistantMessageId) {
       const messageStatus: MessageStatus =
@@ -449,7 +457,7 @@ export class ConversationService {
       await this.storage.save()
     }
 
-    this.emitStreamEvent({ type: 'turn-completed', status })
+    this.emitStreamEvent({ type: 'turn-completed', conversationId, status })
   }
 
   private handleItemCompleted(event: Record<string, unknown>): void {
@@ -480,12 +488,13 @@ export class ConversationService {
     const error = event.error as Record<string, unknown> | undefined
     const code = error ? String(error.code ?? 'Unknown') : 'Unknown'
     const message = error ? String(error.message ?? '') : ''
+    const conversationId = this.activeGeneration?.conversationId
 
     if (this.activeGeneration && this.activeGeneration.assistantMessageId) {
       this.messages.updateError(this.activeGeneration.assistantMessageId, code, message)
       this.activeGeneration = null
     }
 
-    this.emitStreamEvent({ type: 'error', errorCode: code, errorMessage: message })
+    this.emitStreamEvent({ type: 'error', conversationId, errorCode: code, errorMessage: message })
   }
 }

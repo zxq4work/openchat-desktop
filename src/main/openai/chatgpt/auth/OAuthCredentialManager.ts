@@ -27,6 +27,19 @@ export class OAuthCredentialManager {
 
   async initialize(): Promise<void> {
     this.credential = await this.store.load()
+
+    // 旧版本凭证可能缺少 email/planType/userId，强制刷新以获取 ID Token
+    if (this.credential && (!this.credential.email || !this.credential.planType || !this.credential.userId)) {
+      try {
+        await this.refreshToken()
+      } catch {
+        // 刷新失败不影响使用，保留现有凭证
+      }
+    }
+
+    if (this.credential) {
+      console.log('[Account] logged in:', this.credential.email, '| plan:', this.credential.planType || 'unknown', '| userId:', this.credential.userId || 'unknown')
+    }
   }
 
   async isLoggedIn(): Promise<boolean> {
@@ -62,13 +75,14 @@ export class OAuthCredentialManager {
 
   async getPublicAccountInfo(): Promise<PublicAccountInfo> {
     if (!this.credential) {
-      return { loggedIn: false, email: null, planType: null, accountId: null }
+      return { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
     }
     return {
       loggedIn: true,
-      email: null, // accountId 不是邮箱
-      planType: null,
-      accountId: this.credential.accountId,
+      email: this.credential.email || null,
+      planType: this.credential.planType || null,
+      userId: this.credential.userId || null,
+      accountId: this.credential.accountId || null,
     }
   }
 

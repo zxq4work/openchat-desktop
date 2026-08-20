@@ -73,6 +73,11 @@ function findClosingDelim(text: string, startPos: number, open: string, close: s
 export function processLaTeX(markdown: string): string {
   if (!markdown) return ''
 
+  // CommonMark 规范：** 作为右翼定界符时，其前一个字符不能是 Unicode
+  // 标点符号。CJK 全角标点（如 ）。）属于 Unicode 标点，会导致紧跟的
+  // ** 加粗失效。在 CJK 标点与 ** 之间插入零宽空格来修复。
+  markdown = markdown.replace(/([\u3000-\u303F\uFF00-\uFFEF])\*\*/g, '$1\u200B**')
+
   const out: string[] = []
   let state: ScanState = 'TEXT'
   let i = 0

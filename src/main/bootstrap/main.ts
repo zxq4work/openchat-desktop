@@ -24,6 +24,7 @@ import { FileOAuthCredentialStore } from '../openai/chatgpt/auth/OAuthCredential
 import type { ChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { RealChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import type { OAuthClient } from '../openai/chatgpt/auth/OAuthClient'
+import { setProxyConfig } from '../openai/chatgpt/httpsClient'
 
 // Mock Provider (dev/test)
 import { MockAuthServer } from '../openai/chatgpt/auth/MockAuthServer'
@@ -41,6 +42,7 @@ const services = {
   threadService: null as ThreadService | null,
   chatService: null as ChatService | null,
   storage: null as StorageService | null,
+  settingsRepository: null as SettingsRepository | null,
   conversationService: null as ConversationService | null,
 
   // ChatGPT Direct Provider
@@ -106,7 +108,19 @@ async function createClients(
 async function initializeChatGPTProvider(): Promise<void> {
   const storage = services.storage!
   const settingsRepo = new SettingsRepository(storage)
+  services.settingsRepository = settingsRepo
   const credentialStore = new FileOAuthCredentialStore(settingsRepo)
+
+  // 加载持久化的代理配置
+  const rawProxyConfig = settingsRepo.get('proxy_config')
+  if (rawProxyConfig) {
+    try {
+      const proxyConfig = JSON.parse(rawProxyConfig)
+      setProxyConfig(proxyConfig)
+    } catch {
+      // 忽略损坏的配置
+    }
+  }
 
   const useMock = process.env.OPENCHAT_PROVIDER_MOCK !== 'false'
 
@@ -133,6 +147,11 @@ async function initializeChatGPTProvider(): Promise<void> {
 
 async function initializeAppServerProvider(): Promise<void> {
   const storage = services.storage!
+
+  // 确保 settingsRepository 已初始化（AppServer 模式下不需要 credentialStore）
+  if (!services.settingsRepository) {
+    services.settingsRepository = new SettingsRepository(storage)
+  }
 
   const mode = getAppServerMode()
   const binaryPath = getCodexBinaryPath()

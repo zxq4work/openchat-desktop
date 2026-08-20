@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import type { Message } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
@@ -16,6 +16,13 @@ export function Composer() {
   const setError = useChatStreamStore((s) => s.setError)
   const error = useChatStreamStore((s) => s.error)
 
+  // 错误提示自动消失
+  useEffect(() => {
+    if (!error) return
+    const timer = setTimeout(() => setError(null), 3000)
+    return () => clearTimeout(timer)
+  }, [error, setError])
+
   const handleSend = async () => {
     if (!activeConversation || !text.trim()) return
 
@@ -23,6 +30,7 @@ export function Composer() {
     const messageText = text.trim()
     setText('')
     setStatus('starting')
+    useChatStreamStore.getState().setStreamingConversationId(conversationId)
 
     try {
       await window.openchat.chat.send(conversationId, messageText)
@@ -59,6 +67,7 @@ export function Composer() {
   const handleStop = async () => {
     setStatus('stopping')
     setActiveAssistantMessage(null)
+    useChatStreamStore.getState().setStreamingConversationId(null)
     await window.openchat.chat.interrupt()
 
     // 刷新消息列表以获取更新后的状态（stopped）

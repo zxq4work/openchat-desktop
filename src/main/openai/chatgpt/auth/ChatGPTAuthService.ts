@@ -24,7 +24,7 @@ export class ChatGPTAuthService {
 
   get currentAccount(): PublicAccountInfo {
     // 同步快照，仅用于初始化
-    return { loggedIn: this.status === 'logged-in', email: null, planType: null, accountId: null }
+    return { loggedIn: this.status === 'logged-in', email: null, planType: null, userId: null, accountId: null }
   }
 
   onStatusChange(handler: (status: AuthStatus) => void): void {
@@ -53,11 +53,11 @@ export class ChatGPTAuthService {
         return info
       } else {
         this.setStatusAndEmit('logged-out')
-        return { loggedIn: false, email: null, planType: null, accountId: null }
+        return { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
       }
     } catch {
       this.setStatusAndEmit('logged-out')
-      return { loggedIn: false, email: null, planType: null, accountId: null }
+      return { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
     }
   }
 

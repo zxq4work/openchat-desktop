@@ -3,6 +3,7 @@ export interface PublicAccountInfo {
   loggedIn: boolean
   email: string | null
   planType: string | null
+  userId: string | null
   accountId: string | null
 }
 

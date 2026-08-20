@@ -5,7 +5,7 @@ import type { AccountUpdatedNotification } from '../../../vendor/openai/codex-0.
 
 export class AuthService {
   private client: OpenAIAppServerClient
-  private accountInfo: PublicAccountInfo = { loggedIn: false, email: null, planType: null, accountId: null }
+  private accountInfo: PublicAccountInfo = { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
   private status: AuthStatus = 'unknown'
   private pendingLoginId: string | null = null
   private statusChangeHandlers: Array<(status: AuthStatus) => void> = []
@@ -54,15 +54,16 @@ export class AuthService {
           loggedIn: true,
           email: account.type === 'chatgpt' ? account.email : null,
           planType: account.type === 'chatgpt' ? account.planType : null,
+          userId: null,
           accountId: null,
         }
         this.status = 'logged-in'
       } else {
-        this.accountInfo = { loggedIn: false, email: null, planType: null, accountId: null }
+        this.accountInfo = { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
         this.status = 'logged-out'
       }
     } catch {
-      this.accountInfo = { loggedIn: false, email: null, planType: null, accountId: null }
+      this.accountInfo = { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
       this.status = 'logged-out'
     }
     this.emitStatusChange()
@@ -107,7 +108,7 @@ export class AuthService {
 
   async logout(): Promise<void> {
     await this.client.logout()
-    this.accountInfo = { loggedIn: false, email: null, planType: null, accountId: null }
+    this.accountInfo = { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
     this.status = 'logged-out'
     this.emitStatusChange()
   }
@@ -125,7 +126,7 @@ export class AuthService {
 
   private handleAccountUpdated(notification: AccountUpdatedNotification): void {
     if (notification.authMode === null) {
-      this.accountInfo = { loggedIn: false, email: null, planType: null, accountId: null }
+      this.accountInfo = { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
       this.status = 'logged-out'
       this.emitStatusChange()
     }

@@ -12,14 +12,31 @@ export function MessageList() {
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
+  // 用户是否处于“贴底”状态：只有在底部附近才自动跟随滚动，否则尊重用户向上滚动阅读
+  const pinnedRef = useRef(true)
+
   const scrollToBottom = () => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }
 
   useEffect(() => {
+    pinnedRef.current = true
     scrollToBottom()
   }, [messages.length, segments.length])
+
+  // 监听用户滚动，判断是否贴底
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+
+    const handleScroll = () => {
+      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+      pinnedRef.current = distanceFromBottom < 80
+    }
+    list.addEventListener('scroll', handleScroll)
+    return () => list.removeEventListener('scroll', handleScroll)
+  }, [])
 
   // 流式输出期间，内容高度变化（如思考提示出现、文本增长）自动滚动到底部
   // 注意：必须观察内容包裹层（会随内容增长），而不是滚动容器（flex:1 高度固定，不会触发）
@@ -30,7 +47,7 @@ export function MessageList() {
     if (!content) return
 
     const observer = new ResizeObserver(() => {
-      scrollToBottom()
+      if (pinnedRef.current) scrollToBottom()
     })
     observer.observe(content)
 

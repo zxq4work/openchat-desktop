@@ -1,6 +1,11 @@
 import type { ModelInfo } from '../../../../shared/types/model'
 import type { ChatGPTCodexClient, ChatGPTModel } from '../transport/ChatGPTCodexClient'
 
+// /responses 端点实际支持的推理等级，用于过滤 /models 端点可能返回的不一致值
+const VALID_REASONING_EFFORTS = new Set([
+  'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+])
+
 export interface ModelPrompt {
   modelId: string
   instructionsTemplate: string
@@ -81,10 +86,11 @@ export class ChatGPTModelService {
       model: item.slug,
       displayName: item.display_name,
       hidden: false,
-      defaultReasoningEffort: this.extractReasoningLevel(item.default_reasoning_level),
+      defaultReasoningEffort: this.filterReasoningLevel(this.extractReasoningLevel(item.default_reasoning_level)),
       supportedReasoningEfforts: (item.supported_reasoning_levels ?? [])
         .map((level: unknown) => this.extractReasoningLevel(level))
         .filter((v): v is string => v != null)
+        .filter((v) => VALID_REASONING_EFFORTS.has(v))
         .map((reasoningEffort) => ({
           reasoningEffort,
           description: null,
@@ -103,6 +109,11 @@ export class ChatGPTModelService {
     const val = obj.effort ?? obj.level ?? obj.reasoning_effort ?? obj.reasoning_level ?? obj.value
     if (typeof val === 'string') return val
     console.error('[ChatGPTModelService] Unknown reasoning level shape:', JSON.stringify(raw))
+    return null
+  }
+
+  private filterReasoningLevel(level: string | null): string | null {
+    if (level && VALID_REASONING_EFFORTS.has(level)) return level
     return null
   }
 }

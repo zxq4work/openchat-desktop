@@ -73,15 +73,25 @@ export function ConversationSettingsDialog() {
         </div>
 
         <div className="settings-section">
-          <label className="settings-checkbox-label">
-            <input
-              type="checkbox"
-              checked={useModelInstructions}
-              onChange={(e) => setUseModelInstructions(e.target.checked)}
-            />
+          <label className="settings-switch-label">
             <span>使用模型自带提示词</span>
+            <div
+              className={`settings-switch ${useModelInstructions ? 'settings-switch-on' : ''}`}
+              onClick={() => setUseModelInstructions(!useModelInstructions)}
+              role="switch"
+              aria-checked={useModelInstructions}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setUseModelInstructions(!useModelInstructions)
+                }
+              }}
+            >
+              <div className="settings-switch-thumb" />
+            </div>
           </label>
-          <p className="settings-hint">
+          <p className="settings-switch-hint">
             Codex 模型自带任务指令模板，启用后会在角色设定之前注入模型的默认行为指令。
           </p>
         </div>

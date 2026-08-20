@@ -37,6 +37,10 @@ export const IPC_CHANNELS = {
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
 
+  // Settings
+  SETTINGS_GET_PROXY: 'settings:get-proxy',
+  SETTINGS_SET_PROXY: 'settings:set-proxy',
+
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',

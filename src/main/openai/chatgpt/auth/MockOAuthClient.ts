@@ -79,13 +79,25 @@ export class MockOAuthClient implements OAuthClient {
 
     const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url')
     const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
-    const fakeJwt = `${header}.${body}.mock_signature`
+    const accessToken = `${header}.${body}.mock_signature`
+
+    // 构造 fake ID token
+    const idTokenPayload = {
+      email: 'mock@example.com',
+      chatgpt_plan_type: 'free',
+      chatgpt_user_id: 'user_mock',
+    }
+    const idTokenBody = Buffer.from(JSON.stringify(idTokenPayload)).toString('base64url')
+    const idToken = `${header}.${idTokenBody}.mock_signature`
 
     return {
-      accessToken: fakeJwt,
+      accessToken,
       refreshToken: `mock-refresh-${this.refreshCount}`,
       expiresAt,
       accountId: 'acct_mock',
+      email: 'mock@example.com',
+      planType: 'free',
+      userId: 'user_mock',
     }
   }
 }

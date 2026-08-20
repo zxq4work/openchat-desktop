@@ -3,9 +3,16 @@ import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
 import type { Conversation, ContextSegment, Message } from '../../shared/types/conversation'
+import type { ProxyConfig } from '../../shared/types/settings'
+import { setProxyConfig } from '../openai/chatgpt/httpsClient'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
+  settingsRepository: {
+    get: (key: string) => string | null
+    set: (key: string, value: string) => void
+    remove: (key: string) => void
+  } | null
   authService: {
     checkAuth: () => Promise<PublicAccountInfo>
     loginBrowser: () => Promise<string>
@@ -37,9 +44,25 @@ interface Services {
 }
 
 export function registerIpcHandlers(services: Services): void {
+  // ===== Settings =====
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_PROXY, (): ProxyConfig | null => {
+    const raw = services.settingsRepository?.get('proxy_config') ?? null
+    if (!raw) return null
+    try {
+      return JSON.parse(raw) as ProxyConfig
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_PROXY, (_event, config: ProxyConfig): void => {
+    services.settingsRepository?.set('proxy_config', JSON.stringify(config))
+    setProxyConfig(config)
+  })
+
   // ===== Auth =====
   ipcMain.handle(IPC_CHANNELS.AUTH_GET_STATUS, async (): Promise<PublicAccountInfo> => {
-    return services.authService?.checkAuth() ?? { loggedIn: false, email: null, planType: null, accountId: null }
+    return services.authService?.checkAuth() ?? { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
   })
 
   ipcMain.handle(IPC_CHANNELS.AUTH_LOGIN_BROWSER, async (): Promise<string> => {

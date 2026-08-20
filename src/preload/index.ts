@@ -29,6 +29,8 @@ const IPC_CHANNELS = {
   CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
+  SETTINGS_GET_PROXY: 'settings:get-proxy',
+  SETTINGS_SET_PROXY: 'settings:set-proxy',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -70,6 +72,12 @@ const openchat = {
   chat: {
     send: (id: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, id, text),
     interrupt: () => ipcRenderer.invoke(IPC_CHANNELS.CHAT_INTERRUPT),
+  },
+
+  settings: {
+    getProxy: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_PROXY),
+    setProxy: (config: { enabled: boolean; protocol: string; host: string; port: string; username: string; password: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_PROXY, config),
   },
 
   events: {

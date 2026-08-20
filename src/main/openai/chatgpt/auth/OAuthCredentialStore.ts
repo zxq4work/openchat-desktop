@@ -8,6 +8,9 @@ export interface OAuthCredential {
   refreshToken: string
   expiresAt: number // epoch ms
   accountId: string // from JWT claim https://api.openai.com/auth → chatgpt_account_id
+  email: string // from ID token email / profile.email
+  planType: string // from chatgpt_plan_type
+  userId: string // from chatgpt_user_id
 }
 
 export interface OAuthCredentialStore {

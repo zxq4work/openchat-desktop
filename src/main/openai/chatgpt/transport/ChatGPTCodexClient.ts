@@ -78,7 +78,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     const data = await response.json() as { models?: ChatGPTModel[] } | ChatGPTModel[]
     const models = Array.isArray(data) ? data : (data.models ?? [])
     if (models.length > 0) {
-      console.log('[ChatGPTCodexClient] Raw first model shape:', JSON.stringify(models[0]))
+      console.log('[ChatGPTCodexClient] Models loaded:', models.length, 'first:', models[0].id, '|', models[0].display_name)
     }
     return models
   }
@@ -346,6 +346,8 @@ export class MockChatGPTCodexClient implements ChatGPTCodexClient {
   }
 
   async *sendResponses(_request: ResponsesRequest, signal?: AbortSignal): AsyncIterable<ResponsesSSEEvent> {
+    if (signal?.aborted) return
+
     const responseText = MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)]
 
     yield {

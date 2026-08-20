@@ -14,6 +14,7 @@ import type { ChatGPTModelService } from './models/ChatGPTModelService'
 
 export interface StreamEvent {
   type: 'delta' | 'reasoning-started' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error'
+  conversationId?: string
   turnId?: string
   itemId?: string
   text?: string
@@ -230,6 +231,17 @@ export class ChatGPTConversationService {
       effort = null
     }
 
+    // 防御性处理：验证 effort 在当前模型支持列表中，过滤掉 API 不支持的值（如 ultra）
+    const currentModel = this.modelService.currentModels.find((m) => m.id === modelId)
+    if (effort && currentModel) {
+      const supported = currentModel.supportedReasoningEfforts.map((s) => s.reasoningEffort)
+      if (!supported.includes(effort)) {
+        effort = this.modelService.resolveEffort(currentModel, null)
+        this.conversations.updateEffort(conversationId, effort ?? '')
+        await this.storage.save()
+      }
+    }
+
     const effortValue = effort ?? ''
 
     // 构造请求 input（当前 segment 的历史消息 + 新用户消息）
@@ -292,10 +304,11 @@ export class ChatGPTConversationService {
     }
 
     // 异步驱动流式生成
-    void this.runGeneration(segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController)
+    void this.runGeneration(conversationId, segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController)
   }
 
   private async runGeneration(
+    conversationId: string,
     systemPrompt: string,
     useModelInstructions: boolean,
     modelId: string,
@@ -358,13 +371,13 @@ export class ChatGPTConversationService {
             if (providerTurnId) {
               this.messages.updateProviderIds(assistantMessageId, providerTurnId, '')
             }
-            this.emitStreamEvent({ type: 'turn-started', turnId: providerTurnId ?? '' })
+            this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: providerTurnId ?? '' })
             break
 
           case 'response.output_item.added':
             if (event.item.type === 'reasoning') {
               reasoningStartedAt = Date.now()
-              this.emitStreamEvent({ type: 'reasoning-started', turnId: providerTurnId ?? '', itemId: event.item.id })
+              this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id })
             }
             break
 
@@ -386,14 +399,14 @@ export class ChatGPTConversationService {
                 console.log('[ChatGPTConversationService] provider did not return reasoning summary')
               }
               this.messages.updateReasoningMeta(assistantMessageId, meta)
-              this.emitStreamEvent({ type: 'reasoning-completed', turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
+              this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
             }
             break
 
           case 'response.output_text.delta':
             accumulatedContent += event.delta
             this.messages.updateContent(assistantMessageId, accumulatedContent)
-            this.emitStreamEvent({ type: 'delta', turnId: providerTurnId ?? '', text: event.delta })
+            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.delta })
             break
 
           case 'response.output_text.done':
@@ -401,18 +414,18 @@ export class ChatGPTConversationService {
               accumulatedContent = event.text
               this.messages.updateContent(assistantMessageId, accumulatedContent)
             }
-            this.emitStreamEvent({ type: 'item-completed', turnId: providerTurnId ?? '' })
+            this.emitStreamEvent({ type: 'item-completed', conversationId, turnId: providerTurnId ?? '' })
             break
 
           case 'response.completed':
             this.messages.updateContent(assistantMessageId, accumulatedContent)
             this.messages.updateStatus(assistantMessageId, 'completed')
-            this.emitStreamEvent({ type: 'turn-completed', status: 'completed' })
+            this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
             break
 
           case 'error':
             this.messages.updateError(assistantMessageId, event.code, event.message)
-            this.emitStreamEvent({ type: 'error', errorCode: event.code, errorMessage: event.message })
+            this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
             break
         }
       }
@@ -421,7 +434,7 @@ export class ChatGPTConversationService {
       if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
         if (abortController.signal.aborted) {
           this.messages.updateStatus(assistantMessageId, 'stopped')
-          this.emitStreamEvent({ type: 'turn-completed', status: 'interrupted' })
+          this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
         }
       }
     } catch (err) {
@@ -432,11 +445,11 @@ export class ChatGPTConversationService {
 
       if (isAborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
-        this.emitStreamEvent({ type: 'turn-completed', status: 'interrupted' })
+        this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
       } else {
         const code = 'StreamFailed'
         this.messages.updateError(assistantMessageId, code, message)
-        this.emitStreamEvent({ type: 'error', errorCode: code, errorMessage: message })
+        this.emitStreamEvent({ type: 'error', conversationId, errorCode: code, errorMessage: message })
       }
     } finally {
       if (this.activeGeneration?.assistantMessageId === assistantMessageId) {

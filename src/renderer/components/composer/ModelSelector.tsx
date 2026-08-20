@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useModelStore } from '../../stores/modelStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import type { ModelInfo } from '../../../shared/types/model'
@@ -10,6 +10,16 @@ export function ModelSelector() {
 
   const currentModelId = conversation?.defaultModelId ?? null
   const currentModel = models.find((m) => m.id === currentModelId) ?? null
+
+  // 如果在离线状态下创建会话导致 defaultModelId 为空，恢复网络后自动补上默认模型
+  useEffect(() => {
+    if (!conversation) return
+    if (conversation.defaultModelId) return
+    if (models.length === 0) return
+
+    const defaultModel = models[0]
+    handleChange(defaultModel)
+  }, [conversation?.id, models])
 
   const handleChange = (model: ModelInfo) => {
     if (!conversation) return

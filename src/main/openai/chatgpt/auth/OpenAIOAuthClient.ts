@@ -120,11 +120,18 @@ export class OpenAIOAuthClient implements OAuthClient {
     const expiresIn = Number(data.expires_in ?? 3600)
     const accountId = this.extractAccountId(accessToken)
 
+    // 从 ID Token 提取用户信息
+    const idToken = String(data.id_token ?? '')
+    const { email, planType, userId } = this.extractIdTokenClaims(idToken)
+
     return {
       accessToken,
       refreshToken,
       expiresAt: Date.now() + expiresIn * 1000,
       accountId,
+      email,
+      planType,
+      userId,
     }
   }
 
@@ -136,13 +143,34 @@ export class OpenAIOAuthClient implements OAuthClient {
     try {
       const parts = accessToken.split('.')
       if (parts.length < 2) return ''
-      // JWT 使用 base64url 编码（- 替代 +, _ 替代 /, 无 padding）
       const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
       const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'))
       const authClaim = payload['https://api.openai.com/auth']
       return authClaim?.chatgpt_account_id ?? ''
     } catch {
       return ''
+    }
+  }
+
+  /**
+   * 从 ID Token 提取 email、planType、userId
+   */
+  private extractIdTokenClaims(idToken: string): { email: string; planType: string; userId: string } {
+    try {
+      if (!idToken) return { email: '', planType: '', userId: '' }
+      const parts = idToken.split('.')
+      if (parts.length < 2) return { email: '', planType: '', userId: '' }
+      const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+      const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'))
+
+      const email = (payload.profile?.email ?? payload.email ?? '') as string
+      const authClaim = payload['https://api.openai.com/auth']
+      const planType = (authClaim?.chatgpt_plan_type ?? '') as string
+      const userId = (authClaim?.chatgpt_user_id ?? '') as string
+
+      return { email, planType, userId }
+    } catch {
+      return { email: '', planType: '', userId: '' }
     }
   }
 }

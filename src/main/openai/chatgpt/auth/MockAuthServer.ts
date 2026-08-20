@@ -40,6 +40,16 @@ export class MockAuthServer {
     }
   }
 
+  private makeIdToken(): string {
+    const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url')
+    const payload = Buffer.from(JSON.stringify({
+      email: 'mock@example.com',
+      chatgpt_plan_type: 'free',
+      chatgpt_user_id: 'user_mock_test',
+    })).toString('base64url')
+    return `${header}.${payload}.mock_sig`
+  }
+
   private handleRequest(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
     if (url.pathname === '/oauth/authorize') {
       this.handleAuthorize(req, res, url)
@@ -114,6 +124,7 @@ export class MockAuthServer {
         res.end(JSON.stringify({
           access_token: accessToken,
           refresh_token: 'mock-refresh-token',
+          id_token: this.makeIdToken(),
           expires_in: 3600,
           token_type: 'Bearer',
         }))
@@ -133,6 +144,7 @@ export class MockAuthServer {
         res.end(JSON.stringify({
           access_token: accessToken,
           refresh_token: 'mock-refresh-token-rotated',
+          id_token: this.makeIdToken(),
           expires_in: 3600,
           token_type: 'Bearer',
         }))

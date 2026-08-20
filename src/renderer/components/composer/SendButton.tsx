@@ -1,5 +1,6 @@
 import React from 'react'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useConversationStore } from '../../stores/conversationStore'
 
 interface Props {
   onSend: () => void
@@ -9,7 +10,9 @@ interface Props {
 
 export function SendButton({ onSend, onStop, hasText }: Props) {
   const status = useChatStreamStore((s) => s.status)
-  const isGenerating = status === 'streaming' || status === 'starting'
+  const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const isGenerating = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
 
   if (isGenerating) {
     return (

@@ -17,6 +17,7 @@
     "package:mac": "electron-builder --mac"
   },
   "dependencies": {
+    "https-proxy-agent": "^5.0.1",
     "katex": "^0.18.4",
     "react-markdown": "^9.0.1",
     "rehype-katex": "^7.0.0",
@@ -25,6 +26,7 @@
     "remark-math": "^6.0.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
+    "socks-proxy-agent": "^5.0.1",
     "sql.js": "1.10.3",
     "zustand": "4.5.7"
   },

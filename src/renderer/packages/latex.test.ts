@@ -129,4 +129,11 @@ describe('processLaTeX', () => {
     const result = processLaTeX(input)
     expect(result).toBe('成本是 $10 到 $20，公式：\n$$\nx+y\n$$\n')
   })
+
+  // Case 14: CJK 全角标点紧邻 ** 时插入零宽空格，修复加粗失效
+  it('inserts zero-width space between CJK punctuation and **', () => {
+    const input = '**Judith Grimes（茱蒂丝·格莱姆斯）**是美剧'
+    const result = processLaTeX(input)
+    expect(result).toBe('**Judith Grimes（茱蒂丝·格莱姆斯）\u200B**是美剧')
+  })
 })

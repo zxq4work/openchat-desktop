@@ -167,3 +167,12 @@ src/
 ## 待完成任务
 - 实现 Markdown 流式渲染优化
 - 验证 typecheck/build/test 全量通过
+
+## 验证命令（由用户执行）
+沙箱模式下 Claude Code 无法执行 npm/npx 等命令（`npx tsc --noEmit`、`npm install`、`npm run dev` 等会被拒绝或无法运行）。改动完成后由 Claude 列出需要验证的命令，**由用户在终端自行执行**，并把输出结果粘贴回来。
+
+常用验证命令：
+- `npx tsc --noEmit` — TypeScript 类型检查（全量）
+- `npm run build` — 完整构建
+- `npm run test` 或 `npm test` — 运行 latex.test.ts 等测试
+- `npm run dev` — 启动开发环境做功能验证

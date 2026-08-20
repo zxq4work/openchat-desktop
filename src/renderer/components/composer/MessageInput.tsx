@@ -1,5 +1,6 @@
 import React, { useRef } from 'react'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useConversationStore } from '../../stores/conversationStore'
 
 interface Props {
   text: string
@@ -10,6 +11,9 @@ interface Props {
 
 export function MessageInput({ text, onChange, onSend, onStop }: Props) {
   const status = useChatStreamStore((s) => s.status)
+  const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const isCurrentConversationStreaming = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -19,15 +23,16 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
     // Enter 发送，Shift+Enter 换行
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (status === 'streaming' || status === 'starting') {
-        onStop()
+      if (isCurrentConversationStreaming) {
+        // 当前会话正在流式生成，忽略回车，不停止也不发送
+        return
       } else if (text.trim()) {
         onSend()
       }
     }
     // Esc 停止生成
     if (e.key === 'Escape') {
-      if (status === 'streaming' || status === 'starting') {
+      if (isCurrentConversationStreaming) {
         onStop()
       }
     }
