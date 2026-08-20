@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { useModelStore } from '../../stores/modelStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import { EFFORT_LABELS } from '../../../shared/constants'
+import { Dropdown } from '../Dropdown'
 
 export function ReasoningSelector() {
   const models = useModelStore((s) => s.models)
@@ -43,14 +44,15 @@ export function ReasoningSelector() {
   const label = (id: string) => EFFORT_LABELS[id] ?? id
 
   return (
-    <div className="selector reasoning-selector">
-      <select value={currentEffort ?? ''} onChange={(e) => handleChange(e.target.value)}>
-        {efforts.map((effort) => (
-          <option key={effort.reasoningEffort} value={effort.reasoningEffort}>
-            {label(effort.reasoningEffort)}
-          </option>
-        ))}
-      </select>
-    </div>
+    <Dropdown
+      className="reasoning-selector"
+      value={currentEffort ?? ''}
+      options={efforts.map((effort) => ({
+        value: effort.reasoningEffort,
+        label: label(effort.reasoningEffort),
+      }))}
+      onChange={handleChange}
+      ariaLabel="选择推理强度"
+    />
   )
 }

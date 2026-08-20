@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import type { ProxyConfig, ProxyProtocol } from '../../../shared/types/settings'
 import { useModelStore } from '../../stores/modelStore'
+import { Dropdown } from '../Dropdown'
 
 const DEFAULT_CONFIG: ProxyConfig = {
   enabled: false,
@@ -76,15 +77,17 @@ export function ProxySettings() {
           <div className="proxy-form-row">
             <div className="proxy-field">
               <label className="proxy-label">协议</label>
-              <select
-                className="proxy-select"
+              <Dropdown
+                className="proxy-protocol-dropdown"
                 value={config.protocol}
-                onChange={(e) => update({ protocol: e.target.value as ProxyProtocol })}
-              >
-                <option value="http">HTTP</option>
-                <option value="https">HTTPS</option>
-                <option value="socks5">SOCKS5</option>
-              </select>
+                options={[
+                  { value: 'http', label: 'HTTP' },
+                  { value: 'https', label: 'HTTPS' },
+                  { value: 'socks5', label: 'SOCKS5' },
+                ]}
+                onChange={(v) => update({ protocol: v as ProxyProtocol })}
+                ariaLabel="选择代理协议"
+              />
             </div>
             <div className="proxy-field proxy-field-host">
               <label className="proxy-label">主机</label>

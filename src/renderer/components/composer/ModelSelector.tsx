@@ -2,6 +2,7 @@ import React, { useEffect } from 'react'
 import { useModelStore } from '../../stores/modelStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import type { ModelInfo } from '../../../shared/types/model'
+import { Dropdown } from '../Dropdown'
 
 export function ModelSelector() {
   const models = useModelStore((s) => s.models)
@@ -47,21 +48,16 @@ export function ModelSelector() {
   }
 
   return (
-    <div className="selector model-selector">
-      <select
-        value={currentModelId ?? ''}
-        onChange={(e) => {
-          const model = models.find((m) => m.id === e.target.value)
-          if (model) handleChange(model)
-        }}
-      >
-        {models.length === 0 && <option value="">无模型</option>}
-        {models.map((model) => (
-          <option key={model.id} value={model.id}>
-            {model.displayName}
-          </option>
-        ))}
-      </select>
-    </div>
+    <Dropdown
+      className="model-selector"
+      value={currentModelId ?? ''}
+      placeholder="无模型"
+      options={models.map((model) => ({ value: model.id, label: model.displayName }))}
+      onChange={(id) => {
+        const model = models.find((m) => m.id === id)
+        if (model) handleChange(model)
+      }}
+      ariaLabel="选择模型"
+    />
   )
 }

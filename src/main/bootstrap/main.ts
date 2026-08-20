@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import { AppServerProcess, AppServerMode } from '../openai/AppServerProcess'
@@ -122,7 +122,7 @@ async function initializeChatGPTProvider(): Promise<void> {
     }
   }
 
-  const useMock = process.env.OPENCHAT_PROVIDER_MOCK !== 'false'
+  const useMock = process.env.OPENCHAT_PROVIDER_MOCK === 'true'
 
   const { credentialManager, oauthClient, codexClient } = await createClients(useMock, credentialStore)
 
@@ -215,7 +215,10 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 800,
+    minHeight: 500,
     title: APP_TITLE,
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -277,6 +280,7 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   await initializeServices()
   registerIpcHandlers(services)
+  Menu.setApplicationMenu(null)
   createWindow()
 
   app.on('activate', () => {

@@ -168,6 +168,19 @@ src/
 - 实现 Markdown 流式渲染优化
 - 验证 typecheck/build/test 全量通过
 
+## 移除 Codex App Server 遗留代码（暂不执行）
+当前 `chatgpt` 提供商是默认且唯一实际使用的路径。以下内容仅 `OPENCHAT_PROVIDER=appserver` 时才会被引用，属于遗留死代码，**在最终版本发布前提醒用户是否移除**（不要主动删除）：
+
+- `src/main/openai/appserver-legacy/`（AppServer 实现：AppServerProcess / AppServerRpcClient / OpenAIAppServerClient / ThreadService / index.ts）
+- `src/main/openai/` 根目录下的 shim 与 AppServer 服务：
+  - `AppServerProcess.ts` / `AppServerRpcClient.ts` / `OpenAIAppServerClient.ts` / `ThreadService.ts`（`@deprecated` 一行 re-export）
+  - `AuthService.ts` / `ModelService.ts` / `ChatService.ts`（依赖 OpenAIAppServerClient）
+- `src/main/conversation/ConversationService.ts`（依赖 ThreadService + ChatService + ModelService，仅 appserver 路径使用）
+- `src/main/openai/protocol-facade.ts`（零引用死代码，类型已被 `shared/types/` 替代）
+- `vendor/openai/codex-0.148.0/`（约 2254 个文件，仅被上述代码引用）
+- `src/shared/constants/index.ts` 中的 `CODEX_VERSION` / `CODEX_TAG` / `CODEX_COMMIT`（移除后仅剩 `APP_NAME` / `APP_TITLE`）
+- `src/main/bootstrap/main.ts` 中的 `initializeAppServerProvider()` / `getAppServerMode()` / `getCodexBinaryPath()` / `getCodexHome()` / `getConfigPath()` 及相关 env 分支（`OPENCHAT_PROVIDER=appserver` / `OPENCHAT_APP_SERVER_MODE`）
+
 ## 验证命令（由用户执行）
 沙箱模式下 Claude Code 无法执行 npm/npx 等命令（`npx tsc --noEmit`、`npm install`、`npm run dev` 等会被拒绝或无法运行）。改动完成后由 Claude 列出需要验证的命令，**由用户在终端自行执行**，并把输出结果粘贴回来。
 

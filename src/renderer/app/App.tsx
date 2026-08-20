@@ -7,7 +7,6 @@ import { useUiStore } from '../stores/uiStore'
 import { useThemeStore } from '../stores/themeStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
-import { ConversationRoleDialog } from '../components/settings/ConversationRoleDialog'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
@@ -17,7 +16,6 @@ export function App() {
   const setAccount = useAuthStore((s) => s.setAccount)
   const setModels = useModelStore((s) => s.setModels)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
-  const roleDialogOpen = useUiStore((s) => s.roleDialogOpen)
   const settingsDialogOpen = useUiStore((s) => s.settingsDialogOpen)
   const conversationSettingsOpen = useUiStore((s) => s.conversationSettingsOpen)
 
@@ -255,6 +253,27 @@ export function App() {
     }
   }, [])
 
+  // 拦截 Ctrl/Cmd+A：仅在焦点位于可编辑输入框时允许全选，
+  // 避免原生应用里出现「整页文字被选中」的 HTML 页感
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isSelectAll = (e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')
+      if (!isSelectAll) return
+
+      const target = e.target as HTMLElement | null
+      const editable =
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+
+      if (!editable) {
+        e.preventDefault()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const handleNewConversation = useCallback(async () => {
     const models = useModelStore.getState().models
     const defaultModel = models.length > 0 ? models[0].id : null
@@ -279,7 +298,6 @@ export function App() {
     <div className="app-container">
       <Sidebar />
       <ChatView />
-      {roleDialogOpen && activeConversationId && <ConversationRoleDialog />}
       {conversationSettingsOpen && activeConversationId && <ConversationSettingsDialog />}
       {settingsDialogOpen && <SettingsDialog />}
     </div>

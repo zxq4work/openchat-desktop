@@ -6,7 +6,6 @@
  */
 
 import { spawn } from 'child_process'
-import { createServer } from 'net'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -17,19 +16,15 @@ function log(label, text) {
   console.log(`\x1b[36m[${label}]\x1b[0m ${text}`)
 }
 
-function portAvailable(port) {
-  return new Promise((resolve) => {
-    const server = createServer()
-    server.once('error', () => resolve(false))
-    server.once('listening', () => { server.close(); resolve(true) })
-    server.listen(port, '127.0.0.1')
-  })
-}
-
 async function waitForPort(port, timeoutMs = 30000) {
   const start = Date.now()
   while (Date.now() - start < timeoutMs) {
-    if (!(await portAvailable(port))) return true
+    try {
+      await fetch(`http://localhost:${port}`)
+      return true
+    } catch {
+      // not ready yet
+    }
     await new Promise((r) => setTimeout(r, 300))
   }
   return false

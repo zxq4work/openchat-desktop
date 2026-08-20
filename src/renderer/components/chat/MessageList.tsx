@@ -76,17 +76,33 @@ export function MessageList() {
   return (
     <div className="message-list" ref={listRef}>
       <div ref={contentRef}>
-        {messages.map((msg, index) => {
-          const isBoundary = index > 0 && segmentBoundaries.has(index)
-          const segment = segments.find((s) => s.id === msg.segmentId)
-          return (
-            <React.Fragment key={msg.id}>
-              {isBoundary && segment && <ContextBoundary segment={segment} />}
-              <MessageItem message={msg} />
-            </React.Fragment>
-          )
-        })}
-        {showTrailingBoundary && currentSegment && <ContextBoundary segment={currentSegment} />}
+        {messages.length === 0 && !showTrailingBoundary ? (
+          <div className="messages-empty">
+            <div className="messages-empty-icon">
+              <div className="messages-empty-bubble">
+                <span className="messages-empty-dot" />
+                <span className="messages-empty-dot" />
+                <span className="messages-empty-dot" />
+              </div>
+            </div>
+            <div className="messages-empty-title">开始对话</div>
+            <div className="messages-empty-hint">在下方输入消息，开启一段新的对话</div>
+          </div>
+        ) : (
+          <>
+            {messages.map((msg, index) => {
+              const isBoundary = index > 0 && segmentBoundaries.has(index)
+              const segment = segments.find((s) => s.id === msg.segmentId)
+              return (
+                <React.Fragment key={msg.id}>
+                  {isBoundary && segment && <ContextBoundary segment={segment} />}
+                  <MessageItem message={msg} />
+                </React.Fragment>
+              )
+            })}
+            {showTrailingBoundary && currentSegment && <ContextBoundary segment={currentSegment} />}
+          </>
+        )}
       </div>
     </div>
   )

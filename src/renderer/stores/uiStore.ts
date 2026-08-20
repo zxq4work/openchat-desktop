@@ -2,14 +2,12 @@ import { create } from 'zustand'
 
 interface UiState {
   sidebarCollapsed: boolean
-  roleDialogOpen: boolean
   settingsDialogOpen: boolean
   conversationSettingsOpen: boolean
   modelPickerOpen: boolean
   effortPickerOpen: boolean
 
   toggleSidebar: () => void
-  setRoleDialogOpen: (open: boolean) => void
   setSettingsDialogOpen: (open: boolean) => void
   setConversationSettingsOpen: (open: boolean) => void
   setModelPickerOpen: (open: boolean) => void
@@ -18,14 +16,12 @@ interface UiState {
 
 export const useUiStore = create<UiState>((set) => ({
   sidebarCollapsed: false,
-  roleDialogOpen: false,
   settingsDialogOpen: false,
   conversationSettingsOpen: false,
   modelPickerOpen: false,
   effortPickerOpen: false,
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
-  setRoleDialogOpen: (open) => set({ roleDialogOpen: open }),
   setSettingsDialogOpen: (open) => set({ settingsDialogOpen: open }),
   setConversationSettingsOpen: (open) => set({ conversationSettingsOpen: open }),
   setModelPickerOpen: (open) => set({ modelPickerOpen: open }),

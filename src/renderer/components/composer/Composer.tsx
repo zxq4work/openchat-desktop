@@ -4,7 +4,6 @@ import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { ModelSelector } from './ModelSelector'
 import { ReasoningSelector } from './ReasoningSelector'
-import { RoleSettingsButton } from './RoleSettingsButton'
 import { MessageInput } from './MessageInput'
 import { SendButton } from './SendButton'
 
@@ -97,7 +96,6 @@ export function Composer() {
         <div className="composer-controls">
           <ModelSelector />
           <ReasoningSelector />
-          <RoleSettingsButton />
           <div className="composer-spacer" />
           <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0} />
         </div>

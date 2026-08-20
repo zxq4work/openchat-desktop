@@ -47,7 +47,7 @@ export function ConversationSettingsDialog() {
   if (!conversation) return null
 
   return (
-    <div className="dialog-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setConversationSettingsOpen(false) }}>
+    <div className="dialog-overlay">
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <h3>会话设置</h3>
 

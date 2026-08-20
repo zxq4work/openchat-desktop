@@ -86,7 +86,7 @@ export function ConversationItem({ summary, active }: Props) {
           onClick={handleMenu}
           title="更多操作"
         >
-          ...
+          ⋮
         </button>
         {menuOpen && (
           <div className="conversation-dropdown">

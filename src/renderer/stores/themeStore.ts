@@ -32,8 +32,6 @@ interface ThemeState {
   applySystemTheme: () => void
 }
 
-const CYCLE_ORDER: ThemeMode[] = ['light', 'dark', 'system']
-
 export const useThemeStore = create<ThemeState>((set, get) => ({
   mode: readStoredMode(),
   resolved: resolveTheme(readStoredMode()),
@@ -46,8 +44,10 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   },
 
   cycle: () => {
-    const { mode } = get()
-    const next = CYCLE_ORDER[(CYCLE_ORDER.indexOf(mode) + 1) % CYCLE_ORDER.length]
+    const { mode, resolved } = get()
+    // 侧边栏按钮只在浅色/深色之间切换；如果当前是 system，取反当前实际主题
+    const current = mode === 'system' ? resolved : mode
+    const next = current === 'light' ? 'dark' : 'light'
     get().setMode(next)
   },
 
