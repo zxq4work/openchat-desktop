@@ -4,6 +4,7 @@ import { useModelStore } from '../stores/modelStore'
 import { useConversationStore } from '../stores/conversationStore'
 import { useChatStreamStore } from '../stores/chatStreamStore'
 import { useUiStore } from '../stores/uiStore'
+import { useThemeStore } from '../stores/themeStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationRoleDialog } from '../components/settings/ConversationRoleDialog'
@@ -204,6 +205,27 @@ export function App() {
     return () => {
       if (flushTimer) clearInterval(flushTimer)
       if (reasoningElapsedTimer) clearInterval(reasoningElapsedTimer)
+    }
+  }, [])
+
+  // 主题初始化与系统主题变化监听
+  useEffect(() => {
+    const resolved = useThemeStore.getState().resolved
+    document.documentElement.setAttribute('data-theme', resolved)
+
+    const unsubResolved = useThemeStore.subscribe((state) => {
+      document.documentElement.setAttribute('data-theme', state.resolved)
+    })
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleSystemChange = () => {
+      useThemeStore.getState().applySystemTheme()
+    }
+    mediaQuery.addEventListener('change', handleSystemChange)
+
+    return () => {
+      unsubResolved()
+      mediaQuery.removeEventListener('change', handleSystemChange)
     }
   }, [])
 
