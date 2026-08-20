@@ -7,6 +7,7 @@ import { useUiStore } from '../stores/uiStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationRoleDialog } from '../components/settings/ConversationRoleDialog'
+import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 
@@ -17,6 +18,7 @@ export function App() {
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
   const roleDialogOpen = useUiStore((s) => s.roleDialogOpen)
   const settingsDialogOpen = useUiStore((s) => s.settingsDialogOpen)
+  const conversationSettingsOpen = useUiStore((s) => s.conversationSettingsOpen)
 
   // 初始化认证和模型
   useEffect(() => {
@@ -58,9 +60,8 @@ export function App() {
   useEffect(() => {
     const pendingDeltas: string[] = []
     let accumulatedText = ''
-    const pendingReasoningDeltas: string[] = []
-    let accumulatedReasoningText = ''
     let flushTimer: ReturnType<typeof setInterval> | null = null
+    let reasoningElapsedTimer: ReturnType<typeof setInterval> | null = null
 
     const startFlush = () => {
       if (flushTimer) return
@@ -69,11 +70,6 @@ export function App() {
           accumulatedText += pendingDeltas.join('')
           pendingDeltas.length = 0
           useChatStreamStore.getState().setBufferedText(accumulatedText)
-        }
-        if (pendingReasoningDeltas.length > 0) {
-          accumulatedReasoningText += pendingReasoningDeltas.join('')
-          pendingReasoningDeltas.length = 0
-          useChatStreamStore.getState().setBufferedReasoningText(accumulatedReasoningText)
         }
       }, STREAM_FLUSH_MS)
     }
@@ -86,12 +82,32 @@ export function App() {
       }
     })
 
-    window.openchat.events.onChatReasoningDelta((event: unknown) => {
-      const e = event as { text?: string }
-      if (e.text) {
-        pendingReasoningDeltas.push(e.text)
-        startFlush()
+    window.openchat.events.onChatReasoningStarted(() => {
+      const now = Date.now()
+      // 一次 turn 可能有多个 reasoning 阶段，从前一个阶段累加
+      const prevMeta = useChatStreamStore.getState().reasoningMeta
+      const baseSeconds = prevMeta ? Math.round(prevMeta.duration / 1000) : 0
+      useChatStreamStore.getState().setReasoningStatus('thinking')
+      useChatStreamStore.getState().setReasoningStartedAt(now)
+      useChatStreamStore.getState().setReasoningElapsedSeconds(baseSeconds)
+      // 每秒更新一次思考耗时
+      if (reasoningElapsedTimer) clearInterval(reasoningElapsedTimer)
+      reasoningElapsedTimer = setInterval(() => {
+        const elapsed = baseSeconds + Math.round((Date.now() - now) / 1000)
+        useChatStreamStore.getState().setReasoningElapsedSeconds(elapsed)
+      }, 1000)
+    })
+
+    window.openchat.events.onChatReasoningCompleted((event: unknown) => {
+      if (reasoningElapsedTimer) {
+        clearInterval(reasoningElapsedTimer)
+        reasoningElapsedTimer = null
       }
+      const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta }
+      if (e.reasoningMeta) {
+        useChatStreamStore.getState().setReasoningMeta(e.reasoningMeta)
+      }
+      useChatStreamStore.getState().setReasoningStatus('completed')
     })
 
     window.openchat.events.onChatError((event: unknown) => {
@@ -101,6 +117,12 @@ export function App() {
         clearInterval(flushTimer)
         flushTimer = null
       }
+      if (reasoningElapsedTimer) {
+        clearInterval(reasoningElapsedTimer)
+        reasoningElapsedTimer = null
+      }
+      accumulatedText = ''
+      pendingDeltas.length = 0
       useChatStreamStore.getState().reset()
 
       const id = useConversationStore.getState().activeConversationId
@@ -120,17 +142,19 @@ export function App() {
         clearInterval(flushTimer)
         flushTimer = null
       }
+      if (reasoningElapsedTimer) {
+        clearInterval(reasoningElapsedTimer)
+        reasoningElapsedTimer = null
+      }
       // 最后 flush 一次
       if (pendingDeltas.length > 0) {
         accumulatedText += pendingDeltas.join('')
         pendingDeltas.length = 0
         useChatStreamStore.getState().setBufferedText(accumulatedText)
       }
-      if (pendingReasoningDeltas.length > 0) {
-        accumulatedReasoningText += pendingReasoningDeltas.join('')
-        pendingReasoningDeltas.length = 0
-        useChatStreamStore.getState().setBufferedReasoningText(accumulatedReasoningText)
-      }
+      // 重置闭包中的累积变量，防止下一轮流式中出现旧内容残留
+      accumulatedText = ''
+      pendingDeltas.length = 0
       useChatStreamStore.getState().reset()
 
       // 重新加载消息以获取最终的 status/content
@@ -153,6 +177,7 @@ export function App() {
 
     return () => {
       if (flushTimer) clearInterval(flushTimer)
+      if (reasoningElapsedTimer) clearInterval(reasoningElapsedTimer)
     }
   }, [])
 
@@ -207,6 +232,7 @@ export function App() {
       <Sidebar />
       <ChatView />
       {roleDialogOpen && activeConversationId && <ConversationRoleDialog />}
+      {conversationSettingsOpen && activeConversationId && <ConversationSettingsDialog />}
       {settingsDialogOpen && <SettingsDialog />}
     </div>
   )

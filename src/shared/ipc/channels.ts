@@ -22,6 +22,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_ROLE: 'conversations:update-role',
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
+  CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
 
   // Chat
@@ -31,7 +32,8 @@ export const IPC_CHANNELS = {
 
   // Events (Main -> Renderer)
   CHAT_DELTA: 'chat:delta',
-  CHAT_REASONING_DELTA: 'chat:reasoning-delta',
+  CHAT_REASONING_STARTED: 'chat:reasoning-started',
+  CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
 

@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import type { Message } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { ModelSelector } from './ModelSelector'
@@ -36,7 +37,7 @@ export function Composer() {
 
         // 找到正在流式生成的 assistant 消息，设为 active 以便渲染增量文本
         const streamingMsg = data.messages.find(
-          (m) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
+          (m: Message) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
         )
         if (streamingMsg) {
           setActiveAssistantMessage(streamingMsg.id)
@@ -79,16 +80,18 @@ export function Composer() {
 
   return (
     <div className="composer">
-      {error && (
-        <div className="composer-error">{error}</div>
-      )}
-      <MessageInput text={text} onChange={setText} onSend={handleSend} onStop={handleStop} />
-      <div className="composer-controls">
-        <ModelSelector />
-        <ReasoningSelector />
-        <RoleSettingsButton />
-        <div className="composer-spacer" />
-        <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0} />
+      <div className="composer-inner">
+        {error && (
+          <div className="composer-error">{error}</div>
+        )}
+        <MessageInput text={text} onChange={setText} onSend={handleSend} onStop={handleStop} />
+        <div className="composer-controls">
+          <ModelSelector />
+          <ReasoningSelector />
+          <RoleSettingsButton />
+          <div className="composer-spacer" />
+          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0} />
+        </div>
       </div>
     </div>
   )

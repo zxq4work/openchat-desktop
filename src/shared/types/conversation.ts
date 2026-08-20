@@ -6,6 +6,7 @@ export interface Conversation {
   defaultModelId: string | null
   defaultReasoningEffort: string | null
   currentSegmentId: string
+  useModelInstructions: boolean
   createdAt: number
   updatedAt: number
 }
@@ -41,13 +42,20 @@ export type MessageStatus =
   | 'stopped'
   | 'failed'
 
+export interface ReasoningMeta {
+  duration: number
+  effort: string
+  summary: string[]
+  available: boolean
+}
+
 export interface Message {
   id: string
   conversationId: string
   segmentId: string
   role: 'user' | 'assistant'
   content: string
-  reasoningContent: string | null
+  reasoningMeta: ReasoningMeta | null
   status: MessageStatus
   modelId: string | null
   reasoningEffort: string | null

@@ -19,12 +19,14 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_ROLE: 'conversations:update-role',
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
+  CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   CHAT_SEND: 'chat:send',
   CHAT_INTERRUPT: 'chat:interrupt',
   CHAT_REGENERATE_LAST: 'chat:regenerate-last',
   CHAT_DELTA: 'chat:delta',
-  CHAT_REASONING_DELTA: 'chat:reasoning-delta',
+  CHAT_REASONING_STARTED: 'chat:reasoning-started',
+  CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
@@ -60,6 +62,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_MODEL, id, modelId),
     updateEffort: (id: string, effort: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_EFFORT, id, effort),
+    updateUseModelInstructions: (id: string, useModelInstructions: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS, id, useModelInstructions),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
   },
 
@@ -84,10 +88,15 @@ const openchat = {
       ipcRenderer.on(IPC_CHANNELS.CHAT_DELTA, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_DELTA, handler)
     },
-    onChatReasoningDelta: (cb: (event: unknown) => void) => {
+    onChatReasoningStarted: (cb: (event: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
-      ipcRenderer.on(IPC_CHANNELS.CHAT_REASONING_DELTA, handler)
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_REASONING_DELTA, handler)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_REASONING_STARTED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_REASONING_STARTED, handler)
+    },
+    onChatReasoningCompleted: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_REASONING_COMPLETED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_REASONING_COMPLETED, handler)
     },
     onTurnCompleted: (cb: (event: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)

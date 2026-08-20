@@ -9,7 +9,7 @@
     "dev:vite": "vite",
     "build": "tsc --noEmit && vite build",
     "build:main": "tsc -p tsconfig.main.json",
-    "test": "vitest run",
+    "test": "node --require ./scripts/polyfill-crypto.js ./node_modules/vitest/vitest.mjs run",
     "test:watch": "vitest",
     "start": "electron .",
     "package": "electron-builder",
@@ -17,14 +17,19 @@
     "package:mac": "electron-builder --mac"
   },
   "dependencies": {
+    "katex": "^0.18.4",
+    "react-markdown": "^9.0.1",
+    "rehype-katex": "^7.0.0",
+    "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "zustand": "4.5.7",
     "sql.js": "1.10.3",
-    "markdown-it": "13.0.2"
+    "zustand": "4.5.7"
   },
   "devDependencies": {
-    "@types/markdown-it": "13.0.7",
+    "@types/katex": "^0.16.8",
     "@types/node": "18.19.39",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",

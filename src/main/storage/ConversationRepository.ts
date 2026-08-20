@@ -38,7 +38,7 @@ export class ConversationRepository {
     const result = db.exec(`
       SELECT id, title, system_prompt, system_prompt_revision,
              default_model_id, default_reasoning_effort,
-             current_segment_id, created_at, updated_at
+             current_segment_id, use_model_instructions, created_at, updated_at
       FROM conversations WHERE id = ?
     `, [id])
 
@@ -54,8 +54,8 @@ export class ConversationRepository {
       INSERT INTO conversations (
         id, title, system_prompt, system_prompt_revision,
         default_model_id, default_reasoning_effort,
-        current_segment_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        current_segment_id, use_model_instructions, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.title,
@@ -64,6 +64,7 @@ export class ConversationRepository {
       conversation.defaultModelId,
       conversation.defaultReasoningEffort,
       conversation.currentSegmentId,
+      conversation.useModelInstructions ? 1 : 0,
       conversation.createdAt,
       conversation.updatedAt,
     ])
@@ -112,6 +113,14 @@ export class ConversationRepository {
     ])
   }
 
+  updateUseModelInstructions(id: string, useModelInstructions: boolean): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET use_model_instructions = ?, updated_at = ? WHERE id = ?`,
+      [useModelInstructions ? 1 : 0, Date.now(), id]
+    )
+  }
+
   remove(id: string): void {
     const db = this.storage.database
     db.run(`DELETE FROM conversations WHERE id = ?`, [id])
@@ -126,8 +135,9 @@ export class ConversationRepository {
       defaultModelId: row[4] ? String(row[4]) : null,
       defaultReasoningEffort: row[5] ? String(row[5]) : null,
       currentSegmentId: String(row[6]),
-      createdAt: Number(row[7]),
-      updatedAt: Number(row[8]),
+      useModelInstructions: row[7] ? Number(row[7]) === 1 : false,
+      createdAt: Number(row[8]),
+      updatedAt: Number(row[9]),
     }
   }
 }

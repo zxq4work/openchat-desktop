@@ -28,6 +28,7 @@ interface Services {
     updateRole: (id: string, prompt: string) => void
     updateModel: (id: string, modelId: string) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
+    updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string) => Promise<void>
     interrupt: () => Promise<void>
@@ -103,6 +104,10 @@ export function registerIpcHandlers(services: Services): void {
     await services.conversationService?.updateEffort(id, effort)
   })
 
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS, async (_event, id: string, useModelInstructions: boolean): Promise<void> => {
+    await services.conversationService?.updateUseModelInstructions(id, useModelInstructions)
+  })
+
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, (_event, id: string): ContextSegment | null => {
     return services.conversationService?.newTopic(id) ?? null
   })
@@ -135,8 +140,11 @@ export function registerIpcHandlers(services: Services): void {
       case 'delta':
         win.webContents.send(IPC_CHANNELS.CHAT_DELTA, event)
         break
-      case 'reasoning-delta':
-        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_DELTA, event)
+      case 'reasoning-started':
+        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_STARTED, event)
+        break
+      case 'reasoning-completed':
+        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_COMPLETED, event)
         break
       case 'turn-completed':
         win.webContents.send(IPC_CHANNELS.CHAT_TURN_COMPLETED, event)

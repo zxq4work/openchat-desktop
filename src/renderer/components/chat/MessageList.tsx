@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
+import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { MessageItem } from './MessageItem'
 import { ContextBoundary } from './ContextBoundary'
 
@@ -7,11 +8,34 @@ export function MessageList() {
   const messages = useConversationStore((s) => s.activeMessages)
   const segments = useConversationStore((s) => s.activeSegments)
   const activeConversation = useConversationStore((s) => s.activeConversation)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const streamStatus = useChatStreamStore((s) => s.status)
+  const listRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  const scrollToBottom = () => {
+    const list = listRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages.length])
+    scrollToBottom()
+  }, [messages.length, segments.length])
+
+  // 流式输出期间，内容高度变化（如思考提示出现、文本增长）自动滚动到底部
+  // 注意：必须观察内容包裹层（会随内容增长），而不是滚动容器（flex:1 高度固定，不会触发）
+  useEffect(() => {
+    if (streamStatus !== 'streaming' && streamStatus !== 'starting') return
+
+    const content = contentRef.current
+    if (!content) return
+
+    const observer = new ResizeObserver(() => {
+      scrollToBottom()
+    })
+    observer.observe(content)
+
+    return () => observer.disconnect()
+  }, [streamStatus])
 
   // 在 segment 边界处插入分割线
   const segmentBoundaries = new Set<number>()
@@ -33,19 +57,20 @@ export function MessageList() {
     (messages.length === 0 || messages[messages.length - 1].segmentId !== currentSegment.id)
 
   return (
-    <div className="message-list">
-      {messages.map((msg, index) => {
-        const isBoundary = index > 0 && segmentBoundaries.has(index)
-        const segment = segments.find((s) => s.id === msg.segmentId)
-        return (
-          <React.Fragment key={msg.id}>
-            {isBoundary && segment && <ContextBoundary segment={segment} />}
-            <MessageItem message={msg} />
-          </React.Fragment>
-        )
-      })}
-      {showTrailingBoundary && currentSegment && <ContextBoundary segment={currentSegment} />}
-      <div ref={bottomRef} />
+    <div className="message-list" ref={listRef}>
+      <div ref={contentRef}>
+        {messages.map((msg, index) => {
+          const isBoundary = index > 0 && segmentBoundaries.has(index)
+          const segment = segments.find((s) => s.id === msg.segmentId)
+          return (
+            <React.Fragment key={msg.id}>
+              {isBoundary && segment && <ContextBoundary segment={segment} />}
+              <MessageItem message={msg} />
+            </React.Fragment>
+          )
+        })}
+        {showTrailingBoundary && currentSegment && <ContextBoundary segment={currentSegment} />}
+      </div>
     </div>
   )
 }

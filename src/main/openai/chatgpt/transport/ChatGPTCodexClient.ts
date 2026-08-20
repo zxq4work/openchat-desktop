@@ -15,6 +15,11 @@ export interface ChatGPTModel {
   input_modalities: string[]
   supports_personality: boolean
   is_default: boolean
+  base_instructions?: string
+  model_messages?: {
+    instructions_template?: string
+    instructions_variables?: unknown
+  }
 }
 
 export interface ResponsesRequest {
@@ -23,11 +28,13 @@ export interface ResponsesRequest {
   input: Array<{ role: string; content: string }>
   store?: boolean
   stream?: boolean
-  reasoning?: { effort: string }
+  reasoning?: { effort: string; summary?: string }
 }
 
 export type ResponsesSSEEvent =
   | { type: 'response.created'; response: unknown }
+  | { type: 'response.output_item.added'; item: { type: string; id: string }; output_index: number }
+  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string }; output_index: number }
   | { type: 'response.output_text.delta'; delta: string }
   | { type: 'response.output_text.done'; text: string }
   | { type: 'response.reasoning_text.delta'; delta: string }
@@ -86,7 +93,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
       input: request.input,
       store: false,
       stream: true,
-      ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+      ...(request.reasoning ? { reasoning: { ...request.reasoning, summary: request.reasoning.summary ?? 'auto' } } : {}),
     })
 
     const parsedUrl = new URL(`${BASE_URL}/backend-api/codex/responses`)
@@ -261,12 +268,10 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
             if (!parsed.type) {
               continue
             }
-            // 诊断日志：打印所有事件类型
-            if (parsed.type.includes('reasoning')) {
-              console.log('[ChatGPTCodexClient] Reasoning event:', parsed.type, JSON.stringify(parsed).slice(0, 300))
-            }
             if (parsed.type && (
               parsed.type === 'response.created' ||
+              parsed.type === 'response.output_item.added' ||
+              parsed.type === 'response.output_item.done' ||
               parsed.type === 'response.output_text.delta' ||
               parsed.type === 'response.output_text.done' ||
               parsed.type === 'response.reasoning_text.delta' ||
@@ -277,8 +282,6 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
               parsed.type === 'error'
             )) {
               yield parsed as ResponsesSSEEvent
-            } else {
-              console.log('[ChatGPTCodexClient] Filtered event type:', parsed.type)
             }
           } catch {
             // 跳过无法解析的 SSE 数据

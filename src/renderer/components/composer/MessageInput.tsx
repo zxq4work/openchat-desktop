@@ -13,6 +13,9 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME 组合输入中不处理（如中文输入法按回车确认英文）
+    if (e.nativeEvent.isComposing) return
+
     // Enter 发送，Shift+Enter 换行
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()

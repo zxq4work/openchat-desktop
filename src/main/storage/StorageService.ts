@@ -42,8 +42,18 @@ export class StorageService {
       this.db.run("ALTER TABLE messages ADD COLUMN provider_payload_json TEXT")
       changed = true
     }
-    if (!columnNames.includes('reasoning_content')) {
-      this.db.run("ALTER TABLE messages ADD COLUMN reasoning_content TEXT")
+    if (!columnNames.includes('reasoning_json')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN reasoning_json TEXT")
+      changed = true
+    }
+
+    // 迁移：conversations 表 use_model_instructions 列
+    const convCols = this.db.exec("PRAGMA table_info(conversations)")
+    const convColumnNames = convCols.length > 0 && convCols[0].values
+      ? convCols[0].values.map((row) => String(row[1]))
+      : []
+    if (!convColumnNames.includes('use_model_instructions')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN use_model_instructions INTEGER NOT NULL DEFAULT 1")
       changed = true
     }
     return changed
@@ -98,6 +108,7 @@ export class StorageService {
         default_model_id TEXT,
         default_reasoning_effort TEXT,
         current_segment_id TEXT NOT NULL,
+        use_model_instructions INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -125,7 +136,7 @@ export class StorageService {
         segment_id TEXT NOT NULL,
         role TEXT NOT NULL,
         content TEXT NOT NULL,
-        reasoning_content TEXT,
+        reasoning_json TEXT,
         status TEXT NOT NULL,
         model_id TEXT,
         reasoning_effort TEXT,

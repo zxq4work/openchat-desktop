@@ -1,6 +1,7 @@
-import React from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { ConversationSummary } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
+import { useUiStore } from '../../stores/uiStore'
 
 interface Props {
   summary: ConversationSummary
@@ -14,6 +15,20 @@ export function ConversationItem({ summary, active }: Props) {
   const setActiveMessages = useConversationStore((s) => s.setActiveMessages)
   const setActiveSegments = useConversationStore((s) => s.setActiveSegments)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const setConversationSettingsOpen = useUiStore((s) => s.setConversationSettingsOpen)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const handleOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [menuOpen])
 
   const handleClick = async () => {
     setActiveConversationId(summary.id)
@@ -25,11 +40,27 @@ export function ConversationItem({ summary, active }: Props) {
     }
   }
 
-  const handleDelete = async (e: React.MouseEvent) => {
+  const handleMenu = (e: React.MouseEvent) => {
     e.stopPropagation()
+    setMenuOpen((prev) => !prev)
+  }
+
+  const handleOpenSettings = async () => {
+    setActiveConversationId(summary.id)
+    const data = await window.openchat.conversations.get(summary.id)
+    if (data) {
+      setActiveConversation(data.conversation)
+      setActiveMessages(data.messages)
+      setActiveSegments(data.segments)
+    }
+    setConversationSettingsOpen(true)
+    setMenuOpen(false)
+  }
+
+  const handleDelete = async () => {
+    setMenuOpen(false)
     await window.openchat.conversations.remove(summary.id)
 
-    // 如果删除的是当前激活的会话，清空激活状态
     if (activeConversationId === summary.id) {
       setActiveConversationId(null)
       setActiveConversation(null)
@@ -37,26 +68,38 @@ export function ConversationItem({ summary, active }: Props) {
       setActiveSegments([])
     }
 
-    // 刷新列表
     const list = await window.openchat.conversations.list()
     setSummaries(list)
   }
 
   return (
     <div
-      className={`conversation-item ${active ? 'active' : ''}`}
+      className={`conversation-item ${active ? 'active' : ''} ${menuOpen ? 'menu-open' : ''}`}
       onClick={handleClick}
       title={summary.title}
     >
       <div className="conversation-title">{summary.title}</div>
       <div className="conversation-preview">{summary.preview}</div>
-      <button
-        className="conversation-delete-btn"
-        onClick={handleDelete}
-        title="删除会话"
-      >
-        ✕
-      </button>
+      <div className="conversation-menu-wrapper" ref={menuRef}>
+        <button
+          className="conversation-menu-btn"
+          onClick={handleMenu}
+          title="更多操作"
+        >
+          ...
+        </button>
+        {menuOpen && (
+          <div className="conversation-dropdown">
+            <button className="conversation-dropdown-item" onClick={handleOpenSettings}>
+              设置
+            </button>
+            <div className="conversation-dropdown-divider" />
+            <button className="conversation-dropdown-item conversation-dropdown-item-danger" onClick={handleDelete}>
+              删除
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

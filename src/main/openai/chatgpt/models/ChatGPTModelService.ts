@@ -1,15 +1,25 @@
 import type { ModelInfo } from '../../../../shared/types/model'
 import type { ChatGPTCodexClient, ChatGPTModel } from '../transport/ChatGPTCodexClient'
 
+export interface ModelPrompt {
+  modelId: string
+  instructionsTemplate: string
+}
+
 export class ChatGPTModelService {
   private client: ChatGPTCodexClient
   private models: ModelInfo[] = []
   private loading = false
   private lastUpdatedAt: number | null = null
   private error: string | null = null
+  private instructionsTemplateMap: Map<string, string> = new Map()
 
   constructor(client: ChatGPTCodexClient) {
     this.client = client
+  }
+
+  getInstructionsTemplate(modelId: string): string | null {
+    return this.instructionsTemplateMap.get(modelId) ?? null
   }
 
   get currentModels(): ModelInfo[] {
@@ -31,7 +41,14 @@ export class ChatGPTModelService {
 
     try {
       const rawModels = await this.client.listModels()
-      this.models = rawModels.map((m) => this.toModelInfo(m))
+      this.models = rawModels.map((m) => {
+        // 捕获 instructions_template 用于默认系统提示词
+        const template = m.model_messages?.instructions_template ?? m.base_instructions
+        if (template) {
+          this.instructionsTemplateMap.set(m.slug, template)
+        }
+        return this.toModelInfo(m)
+      })
       this.lastUpdatedAt = Date.now()
       return this.models
     } catch (err) {

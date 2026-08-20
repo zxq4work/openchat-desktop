@@ -1,5 +1,5 @@
 import { StorageService } from './StorageService'
-import type { Message, MessageStatus } from '../../shared/types/conversation'
+import type { Message, MessageStatus, ReasoningMeta } from '../../shared/types/conversation'
 import { MESSAGE_PAGE_SIZE } from '../../shared/constants'
 
 export class MessageRepository {
@@ -12,7 +12,7 @@ export class MessageRepository {
   getByConversationId(conversationId: string, limit = MESSAGE_PAGE_SIZE, offset = 0): Message[] {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_content, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages
@@ -29,7 +29,7 @@ export class MessageRepository {
   getBySegmentId(segmentId: string): Message[] {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_content, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages
@@ -45,7 +45,7 @@ export class MessageRepository {
   getById(id: string): Message | null {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_content, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages WHERE id = ?
@@ -60,7 +60,7 @@ export class MessageRepository {
     const db = this.storage.database
     db.run(`
       INSERT INTO messages (
-        id, conversation_id, segment_id, role, content, reasoning_content, status,
+        id, conversation_id, segment_id, role, content, reasoning_json, status,
         model_id, reasoning_effort, provider_turn_id, provider_item_id,
         provider_payload_json, error_code, error_message, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -70,7 +70,7 @@ export class MessageRepository {
       message.segmentId,
       message.role,
       message.content,
-      message.reasoningContent ?? null,
+      message.reasoningMeta ? JSON.stringify(message.reasoningMeta) : null,
       message.status,
       message.modelId,
       message.reasoningEffort,
@@ -93,10 +93,10 @@ export class MessageRepository {
     ])
   }
 
-  updateReasoningContent(id: string, reasoningContent: string): void {
+  updateReasoningMeta(id: string, meta: ReasoningMeta): void {
     const db = this.storage.database
-    db.run(`UPDATE messages SET reasoning_content = ?, updated_at = ? WHERE id = ?`, [
-      reasoningContent,
+    db.run(`UPDATE messages SET reasoning_json = ?, updated_at = ? WHERE id = ?`, [
+      JSON.stringify(meta),
       Date.now(),
       id,
     ])
@@ -136,13 +136,14 @@ export class MessageRepository {
   }
 
   private rowToMessage(row: unknown[]): Message {
+    const reasoningJson = row[5] ? String(row[5]) : null
     return {
       id: String(row[0]),
       conversationId: String(row[1]),
       segmentId: String(row[2]),
       role: String(row[3]) as 'user' | 'assistant',
       content: String(row[4]),
-      reasoningContent: row[5] ? String(row[5]) : null,
+      reasoningMeta: reasoningJson ? JSON.parse(reasoningJson) as ReasoningMeta : null,
       status: String(row[6]) as MessageStatus,
       modelId: row[7] ? String(row[7]) : null,
       reasoningEffort: row[8] ? String(row[8]) : null,

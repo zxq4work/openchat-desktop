@@ -13,13 +13,14 @@ import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 
 export interface StreamEvent {
-  type: 'delta' | 'reasoning-delta' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error'
+  type: 'delta' | 'reasoning-started' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error'
   turnId?: string
   itemId?: string
   text?: string
   status?: string
   errorCode?: string
   errorMessage?: string
+  reasoningMeta?: import('../../../shared/types/conversation').ReasoningMeta
 }
 
 export class ChatGPTConversationService {
@@ -72,6 +73,7 @@ export class ChatGPTConversationService {
       defaultModelId: null,
       defaultReasoningEffort: null,
       currentSegmentId: '',
+      useModelInstructions: true,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -104,6 +106,7 @@ export class ChatGPTConversationService {
       defaultModelId,
       defaultReasoningEffort,
       currentSegmentId: segmentId,
+      useModelInstructions: true,
       createdAt: now,
       updatedAt: now,
     }
@@ -240,7 +243,7 @@ export class ChatGPTConversationService {
       segmentId: segment.id,
       role: 'user',
       content: text,
-      reasoningContent: null,
+      reasoningMeta: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -267,7 +270,7 @@ export class ChatGPTConversationService {
       segmentId: segment.id,
       role: 'assistant',
       content: '',
-      reasoningContent: null,
+      reasoningMeta: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -289,11 +292,12 @@ export class ChatGPTConversationService {
     }
 
     // 异步驱动流式生成
-    void this.runGeneration(segment.systemPromptSnapshot, modelId, effortValue, assistantMessage.id, input, abortController)
+    void this.runGeneration(segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController)
   }
 
   private async runGeneration(
-    instructions: string,
+    systemPrompt: string,
+    useModelInstructions: boolean,
     modelId: string,
     effort: string,
     assistantMessageId: string,
@@ -301,20 +305,51 @@ export class ChatGPTConversationService {
     abortController: AbortController
   ): Promise<void> {
     try {
+      // 动态生成基础 metadata（日期/时区不能持久化，否则跨天过期）
+      const modelInstructions = useModelInstructions
+        ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
+        : ''
+      const conversationSystemPrompt = systemPrompt.trim()
+        ? systemPrompt
+        : 'You are a helpful assistant.'
+      const baseMetadata = [
+        `Current model: ${modelId}`,
+        `Current date: ${this.getLocalDate()}`,
+        `Current timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
+        'Additional info for this conversation:',
+        '',
+        conversationSystemPrompt,
+      ].join('\n')
+
+      const mathInstructions = [
+        '',
+        'When using LaTeX math:',
+        '- Always wrap inline math with \\( ... \\).',
+        '- Always wrap display math with \\[ ... \\].',
+        '- Do not emit bare LaTeX commands outside math delimiters.',
+      ].join('\n')
+
+      const instructions = modelInstructions
+        ? `${modelInstructions}\n\n${baseMetadata}${mathInstructions}`
+        : `${baseMetadata}${mathInstructions}`
+
       const request = {
         model: modelId,
         instructions,
         input,
         store: false,
         stream: true,
-        ...(effort ? { reasoning: { effort } } : {}),
+        ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
       }
+
+      console.log('[ChatGPTConversationService] Request reasoning:', JSON.stringify({ effort, summary: effort ? 'auto' : null }))
 
       this.messages.updateStatus(assistantMessageId, 'streaming')
 
       let accumulatedContent = ''
-      let accumulatedReasoning = ''
       let providerTurnId: string | null = null
+      let reasoningStartedAt: number | null = null
+      let totalReasoningDuration = 0
 
       for await (const event of this.codexClient.sendResponses(request, abortController.signal)) {
         switch (event.type) {
@@ -326,18 +361,32 @@ export class ChatGPTConversationService {
             this.emitStreamEvent({ type: 'turn-started', turnId: providerTurnId ?? '' })
             break
 
-          case 'response.reasoning_text.delta':
-          case 'response.reasoning_summary_text.delta':
-            accumulatedReasoning += event.delta
-            this.messages.updateReasoningContent(assistantMessageId, accumulatedReasoning)
-            this.emitStreamEvent({ type: 'reasoning-delta', turnId: providerTurnId ?? '', text: event.delta })
+          case 'response.output_item.added':
+            if (event.item.type === 'reasoning') {
+              reasoningStartedAt = Date.now()
+              this.emitStreamEvent({ type: 'reasoning-started', turnId: providerTurnId ?? '', itemId: event.item.id })
+            }
             break
 
-          case 'response.reasoning_text.done':
-          case 'response.reasoning_summary_text.done':
-            if (event.text) {
-              accumulatedReasoning = event.text
-              this.messages.updateReasoningContent(assistantMessageId, accumulatedReasoning)
+          case 'response.output_item.done':
+            if (event.item.type === 'reasoning') {
+              const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+              totalReasoningDuration += phaseDuration
+              const summary = (event.item.summary ?? [])
+                .filter((s) => s.type === 'summary_text' && typeof s.text === 'string')
+                .map((s) => s.text)
+              const meta = {
+                duration: totalReasoningDuration,
+                effort: effort || '',
+                summary,
+                available: summary.length > 0,
+              }
+              console.log('[ChatGPTConversationService] Reasoning phase done, phaseDuration:', phaseDuration, 'totalDuration:', totalReasoningDuration, 'summary.length:', summary.length)
+              if (summary.length === 0) {
+                console.log('[ChatGPTConversationService] provider did not return reasoning summary')
+              }
+              this.messages.updateReasoningMeta(assistantMessageId, meta)
+              this.emitStreamEvent({ type: 'reasoning-completed', turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
             }
             break
 
@@ -437,5 +486,18 @@ export class ChatGPTConversationService {
   private deriveTitle(text: string): string {
     const trimmed = text.trim().replace(/\n/g, ' ')
     return trimmed.slice(0, TITLE_MAX_LENGTH) || '新对话'
+  }
+
+  private getLocalDate(): string {
+    const now = new Date()
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const day = String(now.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  async updateUseModelInstructions(id: string, useModelInstructions: boolean): Promise<void> {
+    this.conversations.updateUseModelInstructions(id, useModelInstructions)
+    await this.storage.save()
   }
 }

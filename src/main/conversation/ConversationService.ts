@@ -81,6 +81,7 @@ export class ConversationService {
       defaultModelId: null,
       defaultReasoningEffort: null,
       currentSegmentId: '',
+      useModelInstructions: true,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -113,6 +114,7 @@ export class ConversationService {
       defaultModelId,
       defaultReasoningEffort,
       currentSegmentId: segmentId,
+      useModelInstructions: true,
       createdAt: now,
       updatedAt: now,
     }
@@ -206,6 +208,11 @@ export class ConversationService {
     await this.storage.save()
   }
 
+  async updateUseModelInstructions(id: string, useModelInstructions: boolean): Promise<void> {
+    this.conversations.updateUseModelInstructions(id, useModelInstructions)
+    await this.storage.save()
+  }
+
   newTopic(id: string): ContextSegment | null {
     const conversation = this.conversations.getById(id)
     if (!conversation) return null
@@ -269,7 +276,7 @@ export class ConversationService {
       segmentId: segment.id,
       role: 'user',
       content: text,
-      reasoningContent: null,
+      reasoningMeta: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -296,7 +303,7 @@ export class ConversationService {
       segmentId: segment.id,
       role: 'assistant',
       content: '',
-      reasoningContent: null,
+      reasoningMeta: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
