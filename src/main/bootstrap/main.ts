@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell, globalShortcut } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import { AppServerProcess, AppServerMode } from '../openai/AppServerProcess'
@@ -252,6 +252,15 @@ function createWindow(): void {
     }
   })
 
+  if (!app.isPackaged) {
+    const toggleDevTools = () => {
+      const focused = BrowserWindow.getFocusedWindow() ?? mainWindow
+      focused?.webContents.toggleDevTools()
+    }
+    globalShortcut.register('CommandOrControl+Alt+I', toggleDevTools)
+    globalShortcut.register('F12', toggleDevTools)
+  }
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https://') || url.startsWith('http://')) {
       shell.openExternal(url)
@@ -297,6 +306,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
   services.appServerProcess?.stop()
   services.mockAuthServer?.stop()
   services.storage?.close()

@@ -98,9 +98,25 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
 
     const parsedUrl = new URL(`${BASE_URL}/backend-api/codex/responses`)
 
-    const parser = new ResponsesStreamParser()
+    console.log('[ChatGPT API] POST', parsedUrl.href)
+    console.log('[ChatGPT API] Model:', request.model)
+    console.log('[ChatGPT API] Instructions length:', request.instructions.length)
+    console.log('[ChatGPT API] Input messages:', request.input.length)
+    console.log('[ChatGPT API] Reasoning:', request.reasoning ?? 'none')
 
-    yield* this.streamRequest(parsedUrl, token, accountId, body, parser, signal)
+    const parser = new ResponsesStreamParser()
+    const startTime = Date.now()
+
+    let eventCount = 0
+    try {
+      for await (const event of this.streamRequest(parsedUrl, token, accountId, body, parser, signal)) {
+        eventCount++
+        yield event
+      }
+    } finally {
+      const elapsed = Date.now() - startTime
+      console.log('[ChatGPT API] Completed in', elapsed, 'ms, events:', eventCount)
+    }
   }
 
   private async fetchWithAuth(url: string, token: string, accountId: string | null): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
@@ -167,6 +183,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
           headers,
           agent: getProxyAgent(),
         }, (res) => {
+          console.log('[ChatGPT API] Response status:', res.statusCode)
           if (res.statusCode === 401) {
             let body = ''
             res.on('data', (chunk: Buffer) => { body += chunk.toString() })
