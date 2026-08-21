@@ -387,6 +387,15 @@ textarea {
   font-size: 13px;
   font-weight: 500;
   transition: background 0.12s, color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.settings-btn-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .settings-btn:hover {
@@ -476,8 +485,8 @@ textarea {
 }
 
 .theme-toggle-btn .theme-toggle-icon {
-  font-size: 13px;
-  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 /* ========================================
