@@ -334,17 +334,9 @@ export class ChatGPTConversationService {
         conversationSystemPrompt,
       ].join('\n')
 
-      const mathInstructions = [
-        '',
-        'When using LaTeX math:',
-        '- Always wrap inline math with \\( ... \\).',
-        '- Always wrap display math with \\[ ... \\].',
-        '- Do not emit bare LaTeX commands outside math delimiters.',
-      ].join('\n')
-
       const instructions = modelInstructions
-        ? `${modelInstructions}\n\n${baseMetadata}${mathInstructions}`
-        : `${baseMetadata}${mathInstructions}`
+        ? `${modelInstructions}\n\n${baseMetadata}`
+        : baseMetadata
 
       const request = {
         model: modelId,
