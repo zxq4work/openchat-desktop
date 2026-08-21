@@ -10,12 +10,15 @@ import type {
 } from '../../../shared/types/conversation'
 import { TITLE_MAX_LENGTH } from '../../../shared/constants'
 import type { ChatGPTCodexClient, ProviderInputItem } from './transport/ChatGPTCodexClient'
+import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { ToolLoopController } from './tools/ToolLoopController'
 import type { ToolLoopCallbacks } from './tools/ToolLoopController'
 import { WebSearchToolExecutor } from './tools/WebSearchToolExecutor'
 import { ChatGPTCodexSearchClient } from './search/ChatGPTCodexSearchClient'
 import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
+import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
+import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { SEARCH_COMMANDS_JSON_SCHEMA } from '../../../shared/schema/searchCommandsSchema'
 
 export interface StreamEvent {
@@ -43,6 +46,7 @@ export class ChatGPTConversationService {
   private codexClient: ChatGPTCodexClient
   private modelService: ChatGPTModelService
   private toolLoopController: ToolLoopController
+  private usageService: ChatGPTUsageService
 
   // 全局只允许一个 active generation
   private activeGeneration: {
@@ -57,7 +61,8 @@ export class ChatGPTConversationService {
     storage: StorageService,
     codexClient: ChatGPTCodexClient,
     modelService: ChatGPTModelService,
-    credentialManager: OAuthCredentialManager
+    credentialManager: OAuthCredentialManager,
+    usageService: ChatGPTUsageService
   ) {
     this.storage = storage
     this.conversations = new ConversationRepository(storage)
@@ -68,6 +73,7 @@ export class ChatGPTConversationService {
     const searchClient = new ChatGPTCodexSearchClient(credentialManager)
     const searchExecutor = new WebSearchToolExecutor(searchClient)
     this.toolLoopController = new ToolLoopController(codexClient, searchExecutor)
+    this.usageService = usageService
   }
 
   onStreamEvent(handler: (event: StreamEvent) => void): void {
@@ -262,6 +268,15 @@ export class ChatGPTConversationService {
 
     const effortValue = effort ?? ''
 
+    // 发送前检查 Codex Usage：仅 exhausted 时阻止，unknown/unavailable 不阻止
+    const usageState = this.usageService.getState()
+    if (usageState.state === 'exhausted') {
+      const nowMs = Date.now()
+      if (usageState.resetAt && usageState.resetAt * 1000 > nowMs) {
+        throw new CodexUsageExhaustedError(usageState.resetAt, usageState.usage?.plan_type)
+      }
+    }
+
     // 构造请求 input（当前 segment 的历史消息 + 新用户消息 + 可选 web 工具声明）
     const input = this.buildInput(segment.id, text, conversation.webSearchEnabled)
 
@@ -373,13 +388,20 @@ export class ChatGPTConversationService {
       const message = err instanceof Error ? err.message : String(err)
       const isAborted = abortController.signal.aborted
 
+      // 收到 usage_limit_reached 429：同步 usage 状态为 exhausted
+      if (err instanceof UsageLimitReachedError) {
+        this.usageService.markExhaustedFrom429(err.resetsAt)
+        // 后台 refresh 一次 /wham/usage 以获取完整状态
+        void this.usageService.refresh()
+      }
+
       console.error('[ChatGPTConversationService] Stream error:', message, err instanceof Error ? err.stack : '')
 
       if (isAborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
       } else {
-        const code = 'StreamFailed'
+        const code = err instanceof UsageLimitReachedError ? 'CODEX_USAGE_EXHAUSTED' : 'StreamFailed'
         this.messages.updateError(assistantMessageId, code, message)
         this.emitStreamEvent({ type: 'error', conversationId, errorCode: code, errorMessage: message })
       }

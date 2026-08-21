@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { CodexUsageView } from '../shared/types/usage'
 
 // Inline IPC channel constants to avoid module resolution issues in sandboxed preload
 const IPC_CHANNELS = {
@@ -40,6 +41,9 @@ const IPC_CHANNELS = {
   SHORTCUT_SETTINGS: 'shortcut:settings',
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
   DIAGNOSTICS_CODEX_USAGE: 'diagnostics:codex-usage',
+  CODEX_USAGE_GET_STATE: 'codex-usage:get-state',
+  CODEX_USAGE_REFRESH: 'codex-usage:refresh',
+  CODEX_USAGE_CHANGED: 'codex-usage:changed',
 } as const
 
 const openchat = {
@@ -155,6 +159,16 @@ const openchat = {
 
   diagnostics: {
     codexUsage: () => ipcRenderer.invoke(IPC_CHANNELS.DIAGNOSTICS_CODEX_USAGE),
+  },
+
+  codexUsage: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.CODEX_USAGE_GET_STATE),
+    refresh: () => ipcRenderer.invoke(IPC_CHANNELS.CODEX_USAGE_REFRESH),
+    onChanged: (cb: (view: CodexUsageView) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, view: CodexUsageView) => cb(view)
+      ipcRenderer.on(IPC_CHANNELS.CODEX_USAGE_CHANGED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CODEX_USAGE_CHANGED, handler)
+    },
   },
 }
 

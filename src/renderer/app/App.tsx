@@ -5,6 +5,7 @@ import { useConversationStore } from '../stores/conversationStore'
 import { useChatStreamStore } from '../stores/chatStreamStore'
 import { useUiStore } from '../stores/uiStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useCodexUsageStore } from '../stores/codexUsageStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
@@ -35,6 +36,15 @@ export function App() {
     }
     init()
 
+    // 初始化 Codex Usage 状态
+    window.openchat.codexUsage.get().then((view) => {
+      useCodexUsageStore.getState().setUsage(view)
+    })
+
+    const cleanupUsage = window.openchat.codexUsage.onChanged((view) => {
+      useCodexUsageStore.getState().setUsage(view)
+    })
+
     const cleanupAuth = window.openchat.events.onAuthChanged((status: string) => {
       setAuthStatus(status as 'logged-in' | 'logged-out' | 'logging-in')
       if (status === 'logged-in') {
@@ -54,6 +64,7 @@ export function App() {
 
     return () => {
       cleanupAuth()
+      cleanupUsage()
     }
   }, [setAuthStatus, setAccount, setModels])
 

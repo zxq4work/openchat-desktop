@@ -31,6 +31,7 @@ import { MockAuthServer } from '../openai/chatgpt/auth/MockAuthServer'
 import { MockOAuthClient } from '../openai/chatgpt/auth/MockOAuthClient'
 import { MockChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
+import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -50,6 +51,7 @@ const services = {
   chatgptProvider: null as ChatGPTSubscriptionProvider | null,
   chatgptConversationService: null as ChatGPTConversationService | null,
   credentialManager: null as OAuthCredentialManager | null,
+  usageService: null as ChatGPTUsageService | null,
   mockAuthServer: null as MockAuthServer | null,
 }
 
@@ -140,13 +142,20 @@ async function initializeChatGPTProvider(): Promise<void> {
   services.authService = provider.authService as unknown as AuthService
   services.modelService = provider.modelService as unknown as ModelService
 
+  const usageService = new ChatGPTUsageService(credentialManager)
+  services.usageService = usageService
+
   services.chatgptConversationService = new ChatGPTConversationService(
     storage,
     codexClient,
     provider.modelService,
-    credentialManager
+    credentialManager,
+    usageService
   )
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
+
+  // 后台异步查询 usage，不阻塞窗口打开
+  void usageService.refresh()
 }
 
 async function initializeAppServerProvider(): Promise<void> {

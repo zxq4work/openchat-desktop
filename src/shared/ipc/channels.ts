@@ -53,6 +53,11 @@ export const IPC_CHANNELS = {
   // Shell
   SHELL_OPEN_EXTERNAL: 'shell:open-external',
 
+  // Codex Usage
+  CODEX_USAGE_GET_STATE: 'codex-usage:get-state',
+  CODEX_USAGE_REFRESH: 'codex-usage:refresh',
+  CODEX_USAGE_CHANGED: 'codex-usage:changed',
+
   // Diagnostics
   DIAGNOSTICS_CODEX_USAGE: 'diagnostics:codex-usage',
 } as const

@@ -7,6 +7,8 @@ import type { ProxyConfig } from '../../shared/types/settings'
 import { setProxyConfig } from '../openai/chatgpt/httpsClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredentialManager'
+import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
+import type { CodexUsageView } from '../../shared/types/usage'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -45,6 +47,7 @@ interface Services {
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
   credentialManager: OAuthCredentialManager | null
+  usageService: ChatGPTUsageService | null
 }
 
 export function registerIpcHandlers(services: Services): void {
@@ -152,6 +155,15 @@ export function registerIpcHandlers(services: Services): void {
     await services.conversationService?.interrupt()
   })
 
+  // ===== Codex Usage =====
+  ipcMain.handle(IPC_CHANNELS.CODEX_USAGE_GET_STATE, (): CodexUsageView => {
+    return services.usageService?.getView() ?? { state: 'unknown' }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CODEX_USAGE_REFRESH, async (): Promise<void> => {
+    await services.usageService?.refresh()
+  })
+
   // ===== Diagnostics (临时调试用) =====
   ipcMain.handle(IPC_CHANNELS.DIAGNOSTICS_CODEX_USAGE, async (): Promise<void> => {
     if (services.credentialManager) {
@@ -174,6 +186,12 @@ export function registerIpcHandlers(services: Services): void {
   }
 
   // ===== Events (Main -> Renderer) =====
+  services.usageService?.onChange((view) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    win.webContents.send(IPC_CHANNELS.CODEX_USAGE_CHANGED, view)
+  })
+
   services.conversationService?.onStreamEvent((event) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (!win) return

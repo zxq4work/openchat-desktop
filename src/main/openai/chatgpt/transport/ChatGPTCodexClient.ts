@@ -5,6 +5,21 @@ import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { getProxyAgent } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
 
+// ---- Error Types ----
+
+export class UsageLimitReachedError extends Error {
+  code: 'USAGE_LIMIT_REACHED' = 'USAGE_LIMIT_REACHED'
+  resetsAt?: number
+  planType?: string
+
+  constructor(message: string, resetsAt?: number, planType?: string) {
+    super(message)
+    this.name = 'UsageLimitReachedError'
+    this.resetsAt = resetsAt
+    this.planType = planType
+  }
+}
+
 // ---- Types ----
 
 export interface ChatGPTModel {
@@ -222,6 +237,22 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
             const msg = logNon2xxResponse(endpoint, 'POST', res.statusCode ?? 0, res.headers, body)
             if (res.statusCode === 401) {
               reject(new Error('Unauthorized: ' + body.slice(0, 200)))
+            } else if (res.statusCode === 429) {
+              // 检测是否为 usage_limit_reached（非临时限流）
+              try {
+                const parsed = JSON.parse(body) as { error?: { type?: string; message?: string; resets_at?: number; plan_type?: string } }
+                if (parsed.error?.type === 'usage_limit_reached') {
+                  reject(new UsageLimitReachedError(
+                    parsed.error.message ?? 'Usage limit reached',
+                    parsed.error.resets_at,
+                    parsed.error.plan_type
+                  ))
+                  return
+                }
+              } catch {
+                // 非 JSON body 或解析失败，当作普通 429
+              }
+              reject(new Error(msg))
             } else {
               reject(new Error(msg))
             }

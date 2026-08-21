@@ -7,6 +7,16 @@ import { ReasoningSelector } from './ReasoningSelector'
 import { WebSearchToggle } from './WebSearchToggle'
 import { MessageInput } from './MessageInput'
 import { SendButton } from './SendButton'
+import { useCodexUsageStore, isCodexExhausted } from '../../stores/codexUsageStore'
+
+function formatResetTime(resetAt: number): string {
+  const d = new Date(resetAt * 1000)
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  return `${month}月${day}日 ${hours}:${minutes}`
+}
 
 export function Composer() {
   const [text, setText] = useState('')
@@ -15,6 +25,8 @@ export function Composer() {
   const setActiveAssistantMessage = useChatStreamStore((s) => s.setActiveAssistantMessage)
   const setError = useChatStreamStore((s) => s.setError)
   const error = useChatStreamStore((s) => s.error)
+  const usage = useCodexUsageStore((s) => s.usage)
+  const exhausted = isCodexExhausted(usage)
 
   // 错误提示自动消失
   useEffect(() => {
@@ -25,6 +37,7 @@ export function Composer() {
 
   const handleSend = async () => {
     if (!activeConversation || !text.trim()) return
+    if (exhausted) return
 
     const conversationId = activeConversation.id
     const messageText = text.trim()
@@ -90,6 +103,12 @@ export function Composer() {
   return (
     <div className="composer">
       <div className="composer-inner">
+        {exhausted && (
+          <div className="composer-usage-exhausted">
+            Codex 额度已用尽
+            {usage.resetAt ? `，将于 ${formatResetTime(usage.resetAt)} 恢复。` : '。'}
+          </div>
+        )}
         {error && (
           <div className="composer-error">{error}</div>
         )}
@@ -99,7 +118,7 @@ export function Composer() {
           <ReasoningSelector />
           <WebSearchToggle />
           <div className="composer-spacer" />
-          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0} />
+          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0 && !exhausted} />
         </div>
       </div>
     </div>
