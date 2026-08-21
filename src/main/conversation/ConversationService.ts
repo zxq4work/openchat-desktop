@@ -83,6 +83,7 @@ export class ConversationService {
       defaultReasoningEffort: null,
       currentSegmentId: '',
       useModelInstructions: true,
+      webSearchEnabled: false,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -116,6 +117,7 @@ export class ConversationService {
       defaultReasoningEffort,
       currentSegmentId: segmentId,
       useModelInstructions: true,
+      webSearchEnabled: false,
       createdAt: now,
       updatedAt: now,
     }
@@ -214,6 +216,11 @@ export class ConversationService {
     await this.storage.save()
   }
 
+  async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
+    this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
+    await this.storage.save()
+  }
+
   newTopic(id: string): ContextSegment | null {
     const conversation = this.conversations.getById(id)
     if (!conversation) return null
@@ -279,6 +286,7 @@ export class ConversationService {
       role: 'user',
       content: text,
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -306,6 +314,7 @@ export class ConversationService {
       role: 'assistant',
       content: '',
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,

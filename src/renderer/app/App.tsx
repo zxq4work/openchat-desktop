@@ -9,6 +9,8 @@ import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
+import { presentSearchResults } from '../packages/SearchResultPresenter'
+import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 
 export function App() {
@@ -123,6 +125,60 @@ export function App() {
         useChatStreamStore.getState().setReasoningMeta(e.reasoningMeta)
       }
       useChatStreamStore.getState().setReasoningStatus('completed')
+    })
+
+    window.openchat.events.onWebSearchStarted((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallId?: string; toolCallArgs?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      let query: string | null = null
+      if (e.toolCallArgs) {
+        try {
+          const args = JSON.parse(e.toolCallArgs) as Record<string, unknown>
+          if (Array.isArray(args.search_query) && args.search_query.length > 0) {
+            const first = args.search_query[0] as Record<string, unknown>
+            if (typeof first.q === 'string') query = first.q
+          }
+        } catch {
+          query = null
+        }
+      }
+      useChatStreamStore.getState().setWebSearchStatus({ active: true, callId: e.toolCallId ?? null, query, error: null })
+    })
+
+    window.openchat.events.onWebSearchCompleted((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallId?: string; webSearchResults?: unknown[] }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      const results: WebSearchResultItem[] = e.webSearchResults
+        ? presentSearchResults(e.webSearchResults).map((card) => ({
+            title: card.title ?? card.name ?? null,
+            url: card.url ?? card.link ?? null,
+            snippet: card.snippet ?? card.description ?? card.text ?? null,
+          }))
+        : []
+
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        query: null,
+        error: null,
+        results,
+      })
+    })
+
+    window.openchat.events.onWebSearchError((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallError?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        error: e.toolCallError ?? '搜索失败',
+      })
     })
 
     window.openchat.events.onChatError((event: unknown) => {

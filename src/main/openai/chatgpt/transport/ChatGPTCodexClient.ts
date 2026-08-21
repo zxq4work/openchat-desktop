@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'http'
 import { ResponsesStreamParser } from './ResponsesStreamParser'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { getProxyAgent } from '../httpsClient'
+import { logNon2xxResponse } from '../rateLimitDiagnostics'
 
 // ---- Types ----
 
@@ -16,25 +17,44 @@ export interface ChatGPTModel {
   supports_personality: boolean
   is_default: boolean
   base_instructions?: string
+  use_responses_lite?: boolean
+  web_search_tool_type?: string | null
   model_messages?: {
     instructions_template?: string
     instructions_variables?: unknown
   }
 }
 
+// Provider 输入项：支持普通消息、additional_tools 声明、
+// function_call（模型工具调用）以及 function_call_output（工具回传结果）
+export type ProviderInputItem =
+  | { role: string; content: string }
+  | { type: 'additional_tools'; role: string; tools: unknown[] }
+  | { type: 'function_call'; call_id: string; name: string; arguments: string; namespace?: string }
+  | { type: 'function_call_output'; call_id: string; output: string }
+
 export interface ResponsesRequest {
   model: string
   instructions: string
-  input: Array<{ role: string; content: string }>
+  input: ProviderInputItem[]
   store?: boolean
   stream?: boolean
   reasoning?: { effort: string; summary?: string }
 }
 
+export interface ProviderFunctionCall {
+  type: 'function_call'
+  id?: string
+  call_id: string
+  namespace?: string
+  name: string
+  arguments: string
+}
+
 export type ResponsesSSEEvent =
   | { type: 'response.created'; response: unknown }
-  | { type: 'response.output_item.added'; item: { type: string; id: string }; output_index: number }
-  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string }; output_index: number }
+  | { type: 'response.output_item.added'; item: { type: string; id: string; name?: string; namespace?: string }; output_index: number }
+  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string; name?: string; namespace?: string; call_id?: string; arguments?: string }; output_index: number }
   | { type: 'response.output_text.delta'; delta: string }
   | { type: 'response.output_text.done'; text: string }
   | { type: 'response.reasoning_text.delta'; delta: string }
@@ -98,23 +118,26 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
 
     const parsedUrl = new URL(`${BASE_URL}/backend-api/codex/responses`)
 
-    console.log('[ChatGPT API] POST', parsedUrl.href)
-    console.log('[ChatGPT API] Model:', request.model)
-    console.log('[ChatGPT API] Instructions length:', request.instructions.length)
-    console.log('[ChatGPT API] Input messages:', request.input.length)
-    console.log('[ChatGPT API] Reasoning:', request.reasoning ?? 'none')
+    console.log('[ChatGPT Request]')
+    console.log('endpoint=POST', parsedUrl.href)
+    console.log('model=', request.model)
+    console.log('instructions_length=', request.instructions.length)
+    console.log('input_messages=', request.input.length)
+    console.log('reasoning=', request.reasoning ?? 'none')
 
     const parser = new ResponsesStreamParser()
     const startTime = Date.now()
 
     let eventCount = 0
+    const statusRef = { status: 0 }
     try {
-      for await (const event of this.streamRequest(parsedUrl, token, accountId, body, parser, signal)) {
+      for await (const event of this.streamRequest(parsedUrl, token, accountId, body, parser, signal, statusRef)) {
         eventCount++
         yield event
       }
     } finally {
       const elapsed = Date.now() - startTime
+      console.log('[ChatGPT Request] status=', statusRef.status)
       console.log('[ChatGPT API] Completed in', elapsed, 'ms, events:', eventCount)
     }
   }
@@ -160,7 +183,8 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     accountId: string | null,
     body: string,
     parser: ResponsesStreamParser,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    statusRef?: { status: number }
   ): AsyncIterable<ResponsesSSEEvent> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
@@ -183,34 +207,25 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
           headers,
           agent: getProxyAgent(),
         }, (res) => {
-          console.log('[ChatGPT API] Response status:', res.statusCode)
-          if (res.statusCode === 401) {
-            let body = ''
-            res.on('data', (chunk: Buffer) => { body += chunk.toString() })
-            res.on('end', () => {
-              console.error('[ChatGPTCodexClient] 401 response body:', body)
+          if (statusRef) statusRef.status = res.statusCode ?? 0
+          console.log('[ChatGPT Request] status=', res.statusCode)
+          const endpoint = `POST ${url.hostname}${url.pathname}${url.search}`
+          if (res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(res)
+            return
+          }
+
+          // 非 2xx：收集 body 后统一处理
+          let body = ''
+          res.on('data', (chunk: Buffer) => { body += chunk.toString() })
+          res.on('end', () => {
+            const msg = logNon2xxResponse(endpoint, 'POST', res.statusCode ?? 0, res.headers, body)
+            if (res.statusCode === 401) {
               reject(new Error('Unauthorized: ' + body.slice(0, 200)))
-            })
-            return
-          }
-          if (res.statusCode === 429) {
-            reject(new Error('Rate limited'))
-            return
-          }
-          if (res.statusCode != null && res.statusCode >= 500) {
-            reject(new Error(`Server error: ${res.statusCode}`))
-            return
-          }
-          if (res.statusCode != null && res.statusCode >= 400) {
-            let body = ''
-            res.on('data', (chunk: Buffer) => { body += chunk.toString() })
-            res.on('end', () => {
-              console.error('[ChatGPTCodexClient] 400 response body:', body)
-              reject(new Error(`Request failed: ${res.statusCode}, body: ${body.slice(0, 500)}`))
-            })
-            return
-          }
-          resolve(res)
+            } else {
+              reject(new Error(msg))
+            }
+          })
         })
 
         if (signal) {

@@ -792,6 +792,175 @@ textarea {
 }
 
 /* ========================================
+   Web Search Toggle
+   ======================================== */
+
+.web-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+
+.web-search-toggle:hover {
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.web-search-toggle-on {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.web-search-toggle-on:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.web-search-toggle-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.web-search-toggle-label {
+  line-height: 1;
+}
+
+/* ========================================
+   Web Search Status (AssistantMessage)
+   ======================================== */
+
+.message-web-search {
+  margin: 6px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-light);
+  font-size: 12px;
+  color: var(--accent);
+  transition: var(--theme-transition);
+}
+
+.message-web-search-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+  animation: webSearchPulse 1.4s ease-in-out infinite;
+}
+
+.message-web-search-query {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-web-search-error {
+  margin: 6px 0 10px;
+  padding: 8px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+  background: var(--danger-bg);
+  font-size: 12px;
+  color: var(--danger);
+}
+
+@keyframes webSearchPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* 搜索参考页面列表 */
+.message-search-results {
+  margin: 6px 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  overflow: hidden;
+  transition: var(--theme-transition);
+}
+
+.message-search-results-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.message-search-results-header:hover {
+  background: var(--bg-hover);
+}
+
+.message-search-results-icon {
+  font-size: 13px;
+}
+
+.message-search-results-arrow {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.message-search-results-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.message-search-result-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.message-search-result-item:last-child {
+  border-bottom: none;
+}
+
+.message-search-result-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  display: block;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-search-result-title:hover {
+  text-decoration: underline;
+}
+
+.message-search-result-snippet {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ========================================
    Message Input — large rounded area
    ======================================== */
 

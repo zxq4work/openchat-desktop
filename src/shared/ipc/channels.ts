@@ -23,6 +23,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
+  CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
 
   // Chat
@@ -36,6 +37,9 @@ export const IPC_CHANNELS = {
   CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
+  CHAT_WEB_SEARCH_STARTED: 'chat:web-search-started',
+  CHAT_WEB_SEARCH_COMPLETED: 'chat:web-search-completed',
+  CHAT_WEB_SEARCH_ERROR: 'chat:web-search-error',
 
   // Settings
   SETTINGS_GET_PROXY: 'settings:get-proxy',
@@ -45,4 +49,10 @@ export const IPC_CHANNELS = {
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
+
+  // Shell
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
+
+  // Diagnostics
+  DIAGNOSTICS_CODEX_USAGE: 'diagnostics:codex-usage',
 } as const

@@ -30,6 +30,7 @@ import { setProxyConfig } from '../openai/chatgpt/httpsClient'
 import { MockAuthServer } from '../openai/chatgpt/auth/MockAuthServer'
 import { MockOAuthClient } from '../openai/chatgpt/auth/MockOAuthClient'
 import { MockChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
+import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -48,6 +49,7 @@ const services = {
   // ChatGPT Direct Provider
   chatgptProvider: null as ChatGPTSubscriptionProvider | null,
   chatgptConversationService: null as ChatGPTConversationService | null,
+  credentialManager: null as OAuthCredentialManager | null,
   mockAuthServer: null as MockAuthServer | null,
 }
 
@@ -125,6 +127,7 @@ async function initializeChatGPTProvider(): Promise<void> {
   const useMock = process.env.OPENCHAT_PROVIDER_MOCK === 'true'
 
   const { credentialManager, oauthClient, codexClient } = await createClients(useMock, credentialStore)
+  services.credentialManager = credentialManager
 
   const provider = new ChatGPTSubscriptionProvider(
     credentialManager,
@@ -140,7 +143,8 @@ async function initializeChatGPTProvider(): Promise<void> {
   services.chatgptConversationService = new ChatGPTConversationService(
     storage,
     codexClient,
-    provider.modelService
+    provider.modelService,
+    credentialManager
   )
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
 }

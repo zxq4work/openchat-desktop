@@ -5,6 +5,8 @@ import type { ModelInfo } from '../../shared/types/model'
 import type { Conversation, ContextSegment, Message } from '../../shared/types/conversation'
 import type { ProxyConfig } from '../../shared/types/settings'
 import { setProxyConfig } from '../openai/chatgpt/httpsClient'
+import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
+import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredentialManager'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -36,11 +38,13 @@ interface Services {
     updateModel: (id: string, modelId: string) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
+    updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string) => Promise<void>
     interrupt: () => Promise<void>
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
+  credentialManager: OAuthCredentialManager | null
 }
 
 export function registerIpcHandlers(services: Services): void {
@@ -131,6 +135,10 @@ export function registerIpcHandlers(services: Services): void {
     await services.conversationService?.updateUseModelInstructions(id, useModelInstructions)
   })
 
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, async (_event, id: string, webSearchEnabled: boolean): Promise<void> => {
+    await services.conversationService?.updateWebSearchEnabled(id, webSearchEnabled)
+  })
+
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, (_event, id: string): ContextSegment | null => {
     return services.conversationService?.newTopic(id) ?? null
   })
@@ -142,6 +150,18 @@ export function registerIpcHandlers(services: Services): void {
 
   ipcMain.handle(IPC_CHANNELS.CHAT_INTERRUPT, async (): Promise<void> => {
     await services.conversationService?.interrupt()
+  })
+
+  // ===== Diagnostics (临时调试用) =====
+  ipcMain.handle(IPC_CHANNELS.DIAGNOSTICS_CODEX_USAGE, async (): Promise<void> => {
+    if (services.credentialManager) {
+      await fetchCodexUsage(services.credentialManager)
+    }
+  })
+
+  // ===== Shell =====
+  ipcMain.handle(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, (_event, url: string): void => {
+    shell.openExternal(url)
   })
 
   // ===== Auth Events (Main -> Renderer) =====
@@ -174,6 +194,15 @@ export function registerIpcHandlers(services: Services): void {
         break
       case 'error':
         win.webContents.send(IPC_CHANNELS.CHAT_ERROR, event)
+        break
+      case 'web-search-started':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_STARTED, event)
+        break
+      case 'web-search-completed':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_COMPLETED, event)
+        break
+      case 'web-search-error':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, event)
         break
     }
   })

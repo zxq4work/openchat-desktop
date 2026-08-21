@@ -9,11 +9,17 @@ import type {
   Message,
 } from '../../../shared/types/conversation'
 import { TITLE_MAX_LENGTH } from '../../../shared/constants'
-import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
+import type { ChatGPTCodexClient, ProviderInputItem } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
+import { ToolLoopController } from './tools/ToolLoopController'
+import type { ToolLoopCallbacks } from './tools/ToolLoopController'
+import { WebSearchToolExecutor } from './tools/WebSearchToolExecutor'
+import { ChatGPTCodexSearchClient } from './search/ChatGPTCodexSearchClient'
+import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
+import { SEARCH_COMMANDS_JSON_SCHEMA } from '../../../shared/schema/searchCommandsSchema'
 
 export interface StreamEvent {
-  type: 'delta' | 'reasoning-started' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error'
+  type: 'delta' | 'reasoning-started' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error'
   conversationId?: string
   turnId?: string
   itemId?: string
@@ -22,6 +28,11 @@ export interface StreamEvent {
   errorCode?: string
   errorMessage?: string
   reasoningMeta?: import('../../../shared/types/conversation').ReasoningMeta
+  toolCallId?: string
+  toolCallName?: string
+  toolCallArgs?: string
+  toolCallError?: string
+  webSearchResults?: unknown[]
 }
 
 export class ChatGPTConversationService {
@@ -31,6 +42,7 @@ export class ChatGPTConversationService {
   private storage: StorageService
   private codexClient: ChatGPTCodexClient
   private modelService: ChatGPTModelService
+  private toolLoopController: ToolLoopController
 
   // 全局只允许一个 active generation
   private activeGeneration: {
@@ -44,7 +56,8 @@ export class ChatGPTConversationService {
   constructor(
     storage: StorageService,
     codexClient: ChatGPTCodexClient,
-    modelService: ChatGPTModelService
+    modelService: ChatGPTModelService,
+    credentialManager: OAuthCredentialManager
   ) {
     this.storage = storage
     this.conversations = new ConversationRepository(storage)
@@ -52,6 +65,9 @@ export class ChatGPTConversationService {
     this.messages = new MessageRepository(storage)
     this.codexClient = codexClient
     this.modelService = modelService
+    const searchClient = new ChatGPTCodexSearchClient(credentialManager)
+    const searchExecutor = new WebSearchToolExecutor(searchClient)
+    this.toolLoopController = new ToolLoopController(codexClient, searchExecutor)
   }
 
   onStreamEvent(handler: (event: StreamEvent) => void): void {
@@ -75,6 +91,7 @@ export class ChatGPTConversationService {
       defaultReasoningEffort: null,
       currentSegmentId: '',
       useModelInstructions: true,
+      webSearchEnabled: false,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -108,6 +125,7 @@ export class ChatGPTConversationService {
       defaultReasoningEffort,
       currentSegmentId: segmentId,
       useModelInstructions: true,
+      webSearchEnabled: false,
       createdAt: now,
       updatedAt: now,
     }
@@ -244,8 +262,8 @@ export class ChatGPTConversationService {
 
     const effortValue = effort ?? ''
 
-    // 构造请求 input（当前 segment 的历史消息 + 新用户消息）
-    const input = this.buildInput(segment.id, text)
+    // 构造请求 input（当前 segment 的历史消息 + 新用户消息 + 可选 web 工具声明）
+    const input = this.buildInput(segment.id, text, conversation.webSearchEnabled)
 
     // 创建 UserMessage
     const now = Date.now()
@@ -256,6 +274,7 @@ export class ChatGPTConversationService {
       role: 'user',
       content: text,
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -283,6 +302,7 @@ export class ChatGPTConversationService {
       role: 'assistant',
       content: '',
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -304,7 +324,7 @@ export class ChatGPTConversationService {
     }
 
     // 异步驱动流式生成
-    void this.runGeneration(conversationId, segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController)
+    void this.runGeneration(conversationId, segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController, conversation.webSearchEnabled)
   }
 
   private async runGeneration(
@@ -314,11 +334,11 @@ export class ChatGPTConversationService {
     modelId: string,
     effort: string,
     assistantMessageId: string,
-    input: Array<{ role: string; content: string }>,
-    abortController: AbortController
+    input: ProviderInputItem[],
+    abortController: AbortController,
+    webSearchEnabled: boolean
   ): Promise<void> {
     try {
-      // 动态生成基础 metadata（日期/时区不能持久化，否则跨天过期）
       const modelInstructions = useModelInstructions
         ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
         : ''
@@ -338,96 +358,16 @@ export class ChatGPTConversationService {
         ? `${modelInstructions}\n\n${baseMetadata}`
         : baseMetadata
 
-      const request = {
-        model: modelId,
-        instructions,
-        input,
-        store: false,
-        stream: true,
-        ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
-      }
-
-      console.log('[ChatGPTConversationService] Request reasoning:', JSON.stringify({ effort, summary: effort ? 'auto' : null }))
-
       this.messages.updateStatus(assistantMessageId, 'streaming')
 
-      let accumulatedContent = ''
-      let providerTurnId: string | null = null
-      let reasoningStartedAt: number | null = null
-      let totalReasoningDuration = 0
-
-      for await (const event of this.codexClient.sendResponses(request, abortController.signal)) {
-        switch (event.type) {
-          case 'response.created':
-            providerTurnId = this.extractResponseId(event.response)
-            if (providerTurnId) {
-              this.messages.updateProviderIds(assistantMessageId, providerTurnId, '')
-            }
-            this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: providerTurnId ?? '' })
-            break
-
-          case 'response.output_item.added':
-            if (event.item.type === 'reasoning') {
-              reasoningStartedAt = Date.now()
-              this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id })
-            }
-            break
-
-          case 'response.output_item.done':
-            if (event.item.type === 'reasoning') {
-              const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
-              totalReasoningDuration += phaseDuration
-              const summary = (event.item.summary ?? [])
-                .filter((s) => s.type === 'summary_text' && typeof s.text === 'string')
-                .map((s) => s.text)
-              const meta = {
-                duration: totalReasoningDuration,
-                effort: effort || '',
-                summary,
-                available: summary.length > 0,
-              }
-              console.log('[ChatGPTConversationService] Reasoning phase done, phaseDuration:', phaseDuration, 'totalDuration:', totalReasoningDuration, 'summary.length:', summary.length)
-              if (summary.length === 0) {
-                console.log('[ChatGPTConversationService] provider did not return reasoning summary')
-              }
-              this.messages.updateReasoningMeta(assistantMessageId, meta)
-              this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
-            }
-            break
-
-          case 'response.output_text.delta':
-            accumulatedContent += event.delta
-            this.messages.updateContent(assistantMessageId, accumulatedContent)
-            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.delta })
-            break
-
-          case 'response.output_text.done':
-            if (event.text) {
-              accumulatedContent = event.text
-              this.messages.updateContent(assistantMessageId, accumulatedContent)
-            }
-            this.emitStreamEvent({ type: 'item-completed', conversationId, turnId: providerTurnId ?? '' })
-            break
-
-          case 'response.completed':
-            this.messages.updateContent(assistantMessageId, accumulatedContent)
-            this.messages.updateStatus(assistantMessageId, 'completed')
-            this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
-            break
-
-          case 'error':
-            this.messages.updateError(assistantMessageId, event.code, event.message)
-            this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
-            break
-        }
-      }
-
-      // 流结束但未收到 response.completed（被中断或异常结束）
-      if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
-        if (abortController.signal.aborted) {
-          this.messages.updateStatus(assistantMessageId, 'stopped')
-          this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
-        }
+      if (webSearchEnabled) {
+        await this.runGenerationWithWebSearch(
+          conversationId, modelId, instructions, effort, assistantMessageId, input, abortController
+        )
+      } else {
+        await this.runGenerationDirect(
+          conversationId, modelId, instructions, effort, assistantMessageId, input, abortController
+        )
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -451,6 +391,231 @@ export class ChatGPTConversationService {
     }
   }
 
+  private async runGenerationWithWebSearch(
+    conversationId: string,
+    modelId: string,
+    instructions: string,
+    effort: string,
+    assistantMessageId: string,
+    input: ProviderInputItem[],
+    abortController: AbortController
+  ): Promise<void> {
+    let accumulatedContent = ''
+    let providerTurnId: string | null = null
+    let reasoningStartedAt: number | null = null
+    let totalReasoningDuration = 0
+
+    const callbacks: ToolLoopCallbacks = {
+      onToolCall: (toolCall) => {
+        this.emitStreamEvent({
+          type: 'web-search-started',
+          conversationId,
+          toolCallId: toolCall.callId,
+          toolCallName: toolCall.name,
+          toolCallArgs: toolCall.arguments,
+        })
+      },
+      onToolResult: (callId, success, rawResults) => {
+        if (success) {
+          this.emitStreamEvent({
+            type: 'web-search-completed',
+            conversationId,
+            toolCallId: callId,
+            webSearchResults: rawResults,
+          })
+        } else {
+          this.emitStreamEvent({
+            type: 'web-search-error',
+            conversationId,
+            toolCallId: callId,
+          })
+        }
+      },
+      onDelta: (text) => {
+        accumulatedContent += text
+        this.messages.updateContent(assistantMessageId, accumulatedContent)
+        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text })
+      },
+      onReasoningStarted: (itemId) => {
+        reasoningStartedAt = Date.now()
+        this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
+      },
+      onReasoningCompleted: (itemId) => {
+        const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+        totalReasoningDuration += phaseDuration
+        const meta = {
+          duration: totalReasoningDuration,
+          effort: effort || '',
+          summary: [] as string[],
+          available: false,
+        }
+        this.messages.updateReasoningMeta(assistantMessageId, meta)
+        this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId, reasoningMeta: meta })
+      },
+      onTurnStarted: (turnId) => {
+        if (turnId && !providerTurnId) {
+          providerTurnId = turnId
+          this.messages.updateProviderIds(assistantMessageId, turnId, '')
+        }
+        this.emitStreamEvent({ type: 'turn-started', conversationId, turnId })
+      },
+      onItemStarted: (_itemId, _itemType) => {
+        // 工具循环内部处理
+      },
+      onItemCompleted: (_itemId, _itemType) => {
+        // 工具循环内部处理
+      },
+      getProviderTurnId: () => providerTurnId,
+      setProviderTurnId: (id) => {
+        providerTurnId = id
+        this.messages.updateProviderIds(assistantMessageId, id, '')
+      },
+    }
+
+    const currentUserText = input
+      .filter((item): item is { role: string; content: string } => 'role' in item && item.role === 'user')
+      .map((item) => item.content)
+      .pop() ?? ''
+
+    const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+
+    const result = await this.toolLoopController.run(
+      modelId,
+      instructions,
+      input,
+      effort,
+      currentUserText,
+      segmentId,
+      abortController.signal,
+      callbacks
+    )
+
+    this.messages.updateContent(assistantMessageId, result.finalText)
+    this.messages.updateStatus(assistantMessageId, 'completed')
+
+    // 持久化搜索结果
+    if (result.toolCallHistory.length > 0) {
+      const allResults: Array<{ title: string | null; url: string | null; snippet: string | null }> = []
+      for (const entry of result.toolCallHistory) {
+        for (const item of entry.rawResults) {
+          if (item && typeof item === 'object') {
+            const obj = item as Record<string, unknown>
+            allResults.push({
+              title: (typeof obj.title === 'string' ? obj.title : null) ?? (typeof obj.name === 'string' ? obj.name : null),
+              url: (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null),
+              snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null) ?? (typeof obj.text === 'string' ? obj.text : null),
+            })
+          }
+        }
+      }
+      if (allResults.length > 0) {
+        this.messages.updateWebSearchResults(assistantMessageId, allResults)
+      }
+    }
+
+    this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+  }
+
+  private async runGenerationDirect(
+    conversationId: string,
+    modelId: string,
+    instructions: string,
+    effort: string,
+    assistantMessageId: string,
+    input: ProviderInputItem[],
+    abortController: AbortController
+  ): Promise<void> {
+    const request = {
+      model: modelId,
+      instructions,
+      input,
+      store: false,
+      stream: true,
+      ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
+    }
+
+    console.log('[ChatGPTConversationService] Request reasoning:', JSON.stringify({ effort, summary: effort ? 'auto' : null }))
+
+    let accumulatedContent = ''
+    let providerTurnId: string | null = null
+    let reasoningStartedAt: number | null = null
+    let totalReasoningDuration = 0
+
+    for await (const event of this.codexClient.sendResponses(request, abortController.signal)) {
+      switch (event.type) {
+        case 'response.created':
+          providerTurnId = this.extractResponseId(event.response)
+          if (providerTurnId) {
+            this.messages.updateProviderIds(assistantMessageId, providerTurnId, '')
+          }
+          this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: providerTurnId ?? '' })
+          break
+
+        case 'response.output_item.added':
+          if (event.item.type === 'reasoning') {
+            reasoningStartedAt = Date.now()
+            this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id })
+          }
+          break
+
+        case 'response.output_item.done':
+          if (event.item.type === 'reasoning') {
+            const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+            totalReasoningDuration += phaseDuration
+            const summary = (event.item.summary ?? [])
+              .filter((s) => s.type === 'summary_text' && typeof s.text === 'string')
+              .map((s) => s.text)
+            const meta = {
+              duration: totalReasoningDuration,
+              effort: effort || '',
+              summary,
+              available: summary.length > 0,
+            }
+            console.log('[ChatGPTConversationService] Reasoning phase done, phaseDuration:', phaseDuration, 'totalDuration:', totalReasoningDuration, 'summary.length:', summary.length)
+            if (summary.length === 0) {
+              console.log('[ChatGPTConversationService] provider did not return reasoning summary')
+            }
+            this.messages.updateReasoningMeta(assistantMessageId, meta)
+            this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
+          }
+          break
+
+        case 'response.output_text.delta':
+          accumulatedContent += event.delta
+          this.messages.updateContent(assistantMessageId, accumulatedContent)
+          this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.delta })
+          break
+
+        case 'response.output_text.done':
+          if (event.text) {
+            accumulatedContent = event.text
+            this.messages.updateContent(assistantMessageId, accumulatedContent)
+          }
+          this.emitStreamEvent({ type: 'item-completed', conversationId, turnId: providerTurnId ?? '' })
+          break
+
+        case 'response.completed':
+          this.messages.updateContent(assistantMessageId, accumulatedContent)
+          this.messages.updateStatus(assistantMessageId, 'completed')
+          this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+          break
+
+        case 'error':
+          this.messages.updateError(assistantMessageId, event.code, event.message)
+          this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
+          break
+      }
+    }
+
+    // 流结束但未收到 response.completed（被中断或异常结束）
+    if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
+      if (abortController.signal.aborted) {
+        this.messages.updateStatus(assistantMessageId, 'stopped')
+        this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
+      }
+    }
+  }
+
   async interrupt(): Promise<void> {
     if (!this.activeGeneration) return
 
@@ -463,9 +628,9 @@ export class ChatGPTConversationService {
     }
   }
 
-  private buildInput(segmentId: string, newUserText: string): Array<{ role: string; content: string }> {
+  private buildInput(segmentId: string, newUserText: string, webSearchEnabled: boolean): ProviderInputItem[] {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
-    const input: Array<{ role: string; content: string }> = []
+    const input: ProviderInputItem[] = []
 
     for (const msg of segmentMessages) {
       if (msg.status === 'completed' && msg.content) {
@@ -474,8 +639,22 @@ export class ChatGPTConversationService {
     }
 
     // 新用户消息已在 sendMessage 中先入库，循环可能已包含，去重
-    if (!input.some((item) => item.role === 'user' && item.content === newUserText)) {
+    if (!input.some((item) => 'role' in item && item.role === 'user' && 'content' in item && item.content === newUserText)) {
       input.push({ role: 'user', content: newUserText })
+    }
+
+    // 开启网页搜索时，注入 web.run 工具声明
+    if (webSearchEnabled) {
+      input.unshift({
+        type: 'additional_tools',
+        role: 'developer',
+        tools: [{
+          type: 'function',
+          name: 'run',
+          description: 'Search the web for real-time information. Use this when the user asks about current events, recent data, or anything requiring up-to-date knowledge.',
+          parameters: SEARCH_COMMANDS_JSON_SCHEMA,
+        }],
+      })
     }
 
     return input
@@ -503,6 +682,11 @@ export class ChatGPTConversationService {
 
   async updateUseModelInstructions(id: string, useModelInstructions: boolean): Promise<void> {
     this.conversations.updateUseModelInstructions(id, useModelInstructions)
+    await this.storage.save()
+  }
+
+  async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
+    this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
     await this.storage.save()
   }
 }

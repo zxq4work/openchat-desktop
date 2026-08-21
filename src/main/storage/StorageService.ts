@@ -56,6 +56,19 @@ export class StorageService {
       this.db.run("ALTER TABLE conversations ADD COLUMN use_model_instructions INTEGER NOT NULL DEFAULT 1")
       changed = true
     }
+    if (!convColumnNames.includes('web_search_enabled')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAULT 0")
+      changed = true
+    }
+
+    const msgCols = this.db.exec("PRAGMA table_info(messages)")
+    const msgColumnNames = msgCols.length > 0 && msgCols[0].values
+      ? msgCols[0].values.map((row) => String(row[1]))
+      : []
+    if (!msgColumnNames.includes('web_search_results_json')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN web_search_results_json TEXT")
+      changed = true
+    }
     return changed
   }
 
@@ -109,6 +122,7 @@ export class StorageService {
         default_reasoning_effort TEXT,
         current_segment_id TEXT NOT NULL,
         use_model_instructions INTEGER NOT NULL DEFAULT 1,
+        web_search_enabled INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -137,6 +151,7 @@ export class StorageService {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         reasoning_json TEXT,
+        web_search_results_json TEXT,
         status TEXT NOT NULL,
         model_id TEXT,
         reasoning_effort TEXT,

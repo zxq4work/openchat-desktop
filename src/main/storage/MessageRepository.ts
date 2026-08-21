@@ -1,5 +1,5 @@
 import { StorageService } from './StorageService'
-import type { Message, MessageStatus, ReasoningMeta } from '../../shared/types/conversation'
+import type { Message, MessageStatus, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
 import { MESSAGE_PAGE_SIZE } from '../../shared/constants'
 
 export class MessageRepository {
@@ -12,7 +12,7 @@ export class MessageRepository {
   getByConversationId(conversationId: string, limit = MESSAGE_PAGE_SIZE, offset = 0): Message[] {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages
@@ -29,7 +29,7 @@ export class MessageRepository {
   getBySegmentId(segmentId: string): Message[] {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages
@@ -45,7 +45,7 @@ export class MessageRepository {
   getById(id: string): Message | null {
     const db = this.storage.database
     const result = db.exec(`
-      SELECT id, conversation_id, segment_id, role, content, reasoning_json, status,
+      SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
       FROM messages WHERE id = ?
@@ -60,10 +60,10 @@ export class MessageRepository {
     const db = this.storage.database
     db.run(`
       INSERT INTO messages (
-        id, conversation_id, segment_id, role, content, reasoning_json, status,
+        id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
         model_id, reasoning_effort, provider_turn_id, provider_item_id,
         provider_payload_json, error_code, error_message, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       message.id,
       message.conversationId,
@@ -71,6 +71,7 @@ export class MessageRepository {
       message.role,
       message.content,
       message.reasoningMeta ? JSON.stringify(message.reasoningMeta) : null,
+      message.webSearchResults ? JSON.stringify(message.webSearchResults) : null,
       message.status,
       message.modelId,
       message.reasoningEffort,
@@ -97,6 +98,15 @@ export class MessageRepository {
     const db = this.storage.database
     db.run(`UPDATE messages SET reasoning_json = ?, updated_at = ? WHERE id = ?`, [
       JSON.stringify(meta),
+      Date.now(),
+      id,
+    ])
+  }
+
+  updateWebSearchResults(id: string, results: WebSearchResultItem[]): void {
+    const db = this.storage.database
+    db.run(`UPDATE messages SET web_search_results_json = ?, updated_at = ? WHERE id = ?`, [
+      JSON.stringify(results),
       Date.now(),
       id,
     ])
@@ -137,6 +147,7 @@ export class MessageRepository {
 
   private rowToMessage(row: unknown[]): Message {
     const reasoningJson = row[5] ? String(row[5]) : null
+    const webSearchResultsJson = row[6] ? String(row[6]) : null
     return {
       id: String(row[0]),
       conversationId: String(row[1]),
@@ -144,16 +155,17 @@ export class MessageRepository {
       role: String(row[3]) as 'user' | 'assistant',
       content: String(row[4]),
       reasoningMeta: reasoningJson ? JSON.parse(reasoningJson) as ReasoningMeta : null,
-      status: String(row[6]) as MessageStatus,
-      modelId: row[7] ? String(row[7]) : null,
-      reasoningEffort: row[8] ? String(row[8]) : null,
-      providerTurnId: row[9] ? String(row[9]) : null,
-      providerItemId: row[10] ? String(row[10]) : null,
-      providerPayloadJson: row[11] ? String(row[11]) : null,
-      errorCode: row[12] ? String(row[12]) : null,
-      errorMessage: row[13] ? String(row[13]) : null,
-      createdAt: Number(row[14]),
-      updatedAt: Number(row[15]),
+      webSearchResults: webSearchResultsJson ? JSON.parse(webSearchResultsJson) : null,
+      status: String(row[7]) as MessageStatus,
+      modelId: row[8] ? String(row[8]) : null,
+      reasoningEffort: row[9] ? String(row[9]) : null,
+      providerTurnId: row[10] ? String(row[10]) : null,
+      providerItemId: row[11] ? String(row[11]) : null,
+      providerPayloadJson: row[12] ? String(row[12]) : null,
+      errorCode: row[13] ? String(row[13]) : null,
+      errorMessage: row[14] ? String(row[14]) : null,
+      createdAt: Number(row[15]),
+      updatedAt: Number(row[16]),
     }
   }
 }

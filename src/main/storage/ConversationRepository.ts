@@ -38,7 +38,7 @@ export class ConversationRepository {
     const result = db.exec(`
       SELECT id, title, system_prompt, system_prompt_revision,
              default_model_id, default_reasoning_effort,
-             current_segment_id, use_model_instructions, created_at, updated_at
+             current_segment_id, use_model_instructions, web_search_enabled, created_at, updated_at
       FROM conversations WHERE id = ?
     `, [id])
 
@@ -54,8 +54,8 @@ export class ConversationRepository {
       INSERT INTO conversations (
         id, title, system_prompt, system_prompt_revision,
         default_model_id, default_reasoning_effort,
-        current_segment_id, use_model_instructions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        current_segment_id, use_model_instructions, web_search_enabled, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.title,
@@ -65,6 +65,7 @@ export class ConversationRepository {
       conversation.defaultReasoningEffort,
       conversation.currentSegmentId,
       conversation.useModelInstructions ? 1 : 0,
+      conversation.webSearchEnabled ? 1 : 0,
       conversation.createdAt,
       conversation.updatedAt,
     ])
@@ -121,6 +122,14 @@ export class ConversationRepository {
     )
   }
 
+  updateWebSearchEnabled(id: string, webSearchEnabled: boolean): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET web_search_enabled = ?, updated_at = ? WHERE id = ?`,
+      [webSearchEnabled ? 1 : 0, Date.now(), id]
+    )
+  }
+
   remove(id: string): void {
     const db = this.storage.database
     db.run(`DELETE FROM conversations WHERE id = ?`, [id])
@@ -136,8 +145,9 @@ export class ConversationRepository {
       defaultReasoningEffort: row[5] ? String(row[5]) : null,
       currentSegmentId: String(row[6]),
       useModelInstructions: row[7] ? Number(row[7]) === 1 : false,
-      createdAt: Number(row[8]),
-      updatedAt: Number(row[9]),
+      webSearchEnabled: row[8] ? Number(row[8]) === 1 : false,
+      createdAt: Number(row[9]),
+      updatedAt: Number(row[10]),
     }
   }
 }

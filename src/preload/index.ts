@@ -20,6 +20,7 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
+  CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   CHAT_SEND: 'chat:send',
   CHAT_INTERRUPT: 'chat:interrupt',
@@ -29,11 +30,16 @@ const IPC_CHANNELS = {
   CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
+  CHAT_WEB_SEARCH_STARTED: 'chat:web-search-started',
+  CHAT_WEB_SEARCH_COMPLETED: 'chat:web-search-completed',
+  CHAT_WEB_SEARCH_ERROR: 'chat:web-search-error',
   SETTINGS_GET_PROXY: 'settings:get-proxy',
   SETTINGS_SET_PROXY: 'settings:set-proxy',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
+  DIAGNOSTICS_CODEX_USAGE: 'diagnostics:codex-usage',
 } as const
 
 const openchat = {
@@ -66,6 +72,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_EFFORT, id, effort),
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS, id, useModelInstructions),
+    updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, id, webSearchEnabled),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
   },
 
@@ -116,6 +124,21 @@ const openchat = {
       ipcRenderer.on(IPC_CHANNELS.CHAT_ERROR, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_ERROR, handler)
     },
+    onWebSearchStarted: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_WEB_SEARCH_STARTED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_WEB_SEARCH_STARTED, handler)
+    },
+    onWebSearchCompleted: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_WEB_SEARCH_COMPLETED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_WEB_SEARCH_COMPLETED, handler)
+    },
+    onWebSearchError: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, handler)
+    },
     onNewConversation: (cb: () => void) => {
       const handler = () => cb()
       ipcRenderer.on(IPC_CHANNELS.SHORTCUT_NEW_CONVERSATION, handler)
@@ -126,6 +149,12 @@ const openchat = {
       ipcRenderer.on(IPC_CHANNELS.SHORTCUT_NEW_TOPIC, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SHORTCUT_NEW_TOPIC, handler)
     },
+  },
+
+  openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, url),
+
+  diagnostics: {
+    codexUsage: () => ipcRenderer.invoke(IPC_CHANNELS.DIAGNOSTICS_CODEX_USAGE),
   },
 }
 
