@@ -1,14 +1,17 @@
 import { ipcMain, BrowserWindow, shell } from 'electron'
+import * as https from 'https'
+import * as http from 'http'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
 import type { Conversation, ContextSegment, Message } from '../../shared/types/conversation'
 import type { ProxyConfig } from '../../shared/types/settings'
-import { setProxyConfig } from '../openai/chatgpt/httpsClient'
+import { setProxyConfig, getProxyAgent } from '../openai/chatgpt/httpsClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
 import type { CodexUsageView } from '../../shared/types/usage'
+import type { CustomProviderConfig } from '../../shared/types/provider'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -16,6 +19,13 @@ interface Services {
     get: (key: string) => string | null
     set: (key: string, value: string) => void
     remove: (key: string) => void
+  } | null
+  providerConfigService: {
+    listSafe: () => Array<Omit<CustomProviderConfig, 'apiKey'> & { hasApiKey: boolean }>
+    create: (config: Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>) => Omit<CustomProviderConfig, 'apiKey'> & { hasApiKey: boolean }
+    delete: (id: string) => void
+    update: (id: string, updates: Partial<Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>>) => void
+    getApiKey?: (id: string) => string | null
   } | null
   authService: {
     checkAuth: () => Promise<PublicAccountInfo>
@@ -41,13 +51,70 @@ interface Services {
     updateEffort: (id: string, effort: string) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
+    updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
-    sendMessage: (id: string, text: string) => Promise<void>
+    sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message } | null>
     interrupt: () => Promise<void>
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
   credentialManager: OAuthCredentialManager | null
   usageService: ChatGPTUsageService | null
+}
+
+async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url)
+    const lib = parsed.protocol === 'https:' ? https : http
+    const req = lib.request(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        path: parsed.pathname + parsed.search,
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          Accept: 'application/json',
+        },
+        timeout: 15000,
+        agent: getProxyAgent(),
+      },
+      (res) => {
+        let data = ''
+        res.on('data', (chunk: Buffer) => { data += chunk.toString() })
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const parsed = JSON.parse(data)
+              const models: string[] = []
+              if (Array.isArray(parsed)) {
+                // 直接数组
+                for (const item of parsed) {
+                  if (item && typeof item === 'object' && typeof item.id === 'string') {
+                    models.push(item.id)
+                  }
+                }
+              } else if (Array.isArray(parsed.data)) {
+                // { data: [{ id: "..." }] }
+                for (const item of parsed.data) {
+                  if (item && typeof item === 'object' && typeof item.id === 'string') {
+                    models.push(item.id)
+                  }
+                }
+              }
+              resolve(models)
+            } catch {
+              reject(new Error('Invalid JSON from models endpoint'))
+            }
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data.slice(0, 200)}`))
+          }
+        })
+      }
+    )
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')) })
+    req.on('error', reject)
+    req.end()
+  })
 }
 
 export function registerIpcHandlers(services: Services): void {
@@ -146,9 +213,43 @@ export function registerIpcHandlers(services: Services): void {
     return services.conversationService?.newTopic(id) ?? null
   })
 
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, async (_event, id: string, providerConfigId: string | null): Promise<void> => {
+    await services.conversationService?.updateProviderConfig(id, providerConfigId)
+  })
+
+  // ===== Providers =====
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_LIST, () => {
+    return services.providerConfigService?.listSafe() ?? []
+  })
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_CREATE, (_event, config: Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>) => {
+    return services.providerConfigService?.create(config) ?? null
+  })
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_DELETE, (_event, id: string) => {
+    services.providerConfigService?.delete(id)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_UPDATE, (_event, id: string, updates: Partial<Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>>) => {
+    services.providerConfigService?.update(id, updates)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, async (_event, params: { baseUrl: string; apiKey: string; modelsPath?: string; providerId?: string }) => {
+    const { baseUrl, apiKey: inputKey, modelsPath, providerId } = params
+    // 编辑模式下 apiKey 可能为空，尝试从存储中获取
+    let apiKey = inputKey
+    if (!apiKey && providerId) {
+      apiKey = services.providerConfigService?.getApiKey?.(providerId) ?? ''
+    }
+    const url = modelsPath
+      ? (baseUrl.replace(/\/+$/, '') + (modelsPath.startsWith('/') ? modelsPath : '/' + modelsPath))
+      : (baseUrl.replace(/\/+$/, '') + '/models')
+    return await fetchModelsFromUrl(url, apiKey)
+  })
+
   // ===== Chat =====
-  ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_event, id: string, text: string): Promise<void> => {
-    await services.conversationService?.sendMessage(id, text)
+  ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_event, id: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message } | null> => {
+    return await (services.conversationService?.sendMessage(id, text) ?? null)
   })
 
   ipcMain.handle(IPC_CHANNELS.CHAT_INTERRUPT, async (): Promise<void> => {
@@ -203,6 +304,9 @@ export function registerIpcHandlers(services: Services): void {
         break
       case 'reasoning-started':
         win.webContents.send(IPC_CHANNELS.CHAT_REASONING_STARTED, event)
+        break
+      case 'reasoning-delta':
+        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_DELTA, event)
         break
       case 'reasoning-completed':
         win.webContents.send(IPC_CHANNELS.CHAT_REASONING_COMPLETED, event)

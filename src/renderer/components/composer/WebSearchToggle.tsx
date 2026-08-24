@@ -1,44 +1,38 @@
 import React from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
-import { useModelStore } from '../../stores/modelStore'
 import { useCodexUsageStore, isCodexExhausted } from '../../stores/codexUsageStore'
 
 export function WebSearchToggle() {
   const activeConversation = useConversationStore((s) => s.activeConversation)
-  const models = useModelStore((s) => s.models)
   const usage = useCodexUsageStore((s) => s.usage)
   const exhausted = isCodexExhausted(usage)
+  // 使用自定义服务时，忽略 Codex 额度限制
+  const isExhausted = exhausted && !activeConversation?.providerConfigId
 
   const webSearchEnabled = activeConversation?.webSearchEnabled ?? false
 
-  // 检查当前模型是否支持 web search
-  const currentModel = activeConversation?.defaultModelId
-    ? models.find((m) => m.id === activeConversation.defaultModelId)
-    : null
-  const webSearchSupported = currentModel?.webSearchToolType != null
-
-  if (!activeConversation || !webSearchSupported) return null
+  // 搜索开关对所有 Provider 开放（Codex / Compatible / Responses）
+  if (!activeConversation) return null
 
   const handleToggle = async () => {
-    if (exhausted) return
+    if (isExhausted) return
     const newValue = !webSearchEnabled
     await window.openchat.conversations.updateWebSearchEnabled(activeConversation.id, newValue)
-    // 刷新本地状态
     const data = await window.openchat.conversations.get(activeConversation.id)
     if (data) {
       useConversationStore.getState().setActiveConversation(data.conversation)
     }
   }
 
-  const title = exhausted
+  const title = isExhausted
     ? 'Codex 额度已用尽，恢复后可继续联网搜索'
-    : (webSearchEnabled ? '关闭网页搜索' : '开启网页搜索')
+    : (webSearchEnabled ? 'OpenChat 网页搜索（已开启）' : 'OpenChat 网页搜索')
 
   return (
     <button
       className={`web-search-toggle ${webSearchEnabled ? 'web-search-toggle-on' : ''}`}
       onClick={handleToggle}
-      disabled={exhausted}
+      disabled={isExhausted}
       title={title}
     >
       <svg className="web-search-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

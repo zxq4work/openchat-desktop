@@ -38,7 +38,8 @@ export class ConversationRepository {
     const result = db.exec(`
       SELECT id, title, system_prompt, system_prompt_revision,
              default_model_id, default_reasoning_effort,
-             current_segment_id, use_model_instructions, web_search_enabled, created_at, updated_at
+             current_segment_id, use_model_instructions, web_search_enabled,
+             provider_config_id, created_at, updated_at
       FROM conversations WHERE id = ?
     `, [id])
 
@@ -54,8 +55,9 @@ export class ConversationRepository {
       INSERT INTO conversations (
         id, title, system_prompt, system_prompt_revision,
         default_model_id, default_reasoning_effort,
-        current_segment_id, use_model_instructions, web_search_enabled, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        current_segment_id, use_model_instructions, web_search_enabled,
+        provider_config_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.title,
@@ -66,6 +68,7 @@ export class ConversationRepository {
       conversation.currentSegmentId,
       conversation.useModelInstructions ? 1 : 0,
       conversation.webSearchEnabled ? 1 : 0,
+      conversation.providerConfigId ?? null,
       conversation.createdAt,
       conversation.updatedAt,
     ])
@@ -130,6 +133,14 @@ export class ConversationRepository {
     )
   }
 
+  updateProviderConfigId(id: string, providerConfigId: string | null): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET provider_config_id = ?, updated_at = ? WHERE id = ?`,
+      [providerConfigId ?? null, Date.now(), id]
+    )
+  }
+
   remove(id: string): void {
     const db = this.storage.database
     db.run(`DELETE FROM conversations WHERE id = ?`, [id])
@@ -146,8 +157,9 @@ export class ConversationRepository {
       currentSegmentId: String(row[6]),
       useModelInstructions: row[7] ? Number(row[7]) === 1 : false,
       webSearchEnabled: row[8] ? Number(row[8]) === 1 : false,
-      createdAt: Number(row[9]),
-      updatedAt: Number(row[10]),
+      providerConfigId: row[9] ? String(row[9]) : null,
+      createdAt: Number(row[10]),
+      updatedAt: Number(row[11]),
     }
   }
 }

@@ -34,6 +34,7 @@ export const IPC_CHANNELS = {
   // Events (Main -> Renderer)
   CHAT_DELTA: 'chat:delta',
   CHAT_REASONING_STARTED: 'chat:reasoning-started',
+  CHAT_REASONING_DELTA: 'chat:reasoning-delta',
   CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
@@ -60,4 +61,12 @@ export const IPC_CHANNELS = {
 
   // Diagnostics
   DIAGNOSTICS_CODEX_USAGE: 'diagnostics:codex-usage',
+
+  // Providers
+  PROVIDERS_LIST: 'providers:list',
+  PROVIDERS_CREATE: 'providers:create',
+  PROVIDERS_DELETE: 'providers:delete',
+  PROVIDERS_UPDATE: 'providers:update',
+  PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
+  CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
 } as const

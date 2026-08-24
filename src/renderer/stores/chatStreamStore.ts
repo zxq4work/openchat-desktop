@@ -6,6 +6,7 @@ export type StreamStatus = 'idle' | 'starting' | 'streaming' | 'stopping'
 export interface WebSearchStatus {
   active: boolean
   callId: string | null
+  toolName: string | null
   query: string | null
   error: string | null
   results: WebSearchResultItem[]
@@ -21,6 +22,7 @@ interface ChatStreamState {
   reasoningStartedAt: number | null
   reasoningMeta: ReasoningMeta | null
   reasoningElapsedSeconds: number
+  reasoningText: string
   error: string | null
   webSearchStatus: WebSearchStatus
 
@@ -33,6 +35,7 @@ interface ChatStreamState {
   setReasoningStartedAt: (timestamp: number | null) => void
   setReasoningMeta: (meta: ReasoningMeta | null) => void
   setReasoningElapsedSeconds: (seconds: number) => void
+  setReasoningText: (text: string) => void
   setError: (error: string | null) => void
   setWebSearchStatus: (status: Partial<WebSearchStatus>) => void
   reset: () => void
@@ -48,8 +51,9 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   reasoningStartedAt: null,
   reasoningMeta: null,
   reasoningElapsedSeconds: 0,
+  reasoningText: '',
   error: null,
-  webSearchStatus: { active: false, callId: null, query: null, error: null, results: [] },
+  webSearchStatus: { active: false, callId: null, toolName: null, query: null, error: null, results: [] },
 
   setStatus: (status) => set({ status }),
   setActiveTurn: (turnId) => set({ activeTurnId: turnId }),
@@ -60,6 +64,7 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   setReasoningStartedAt: (timestamp) => set({ reasoningStartedAt: timestamp }),
   setReasoningMeta: (meta) => set({ reasoningMeta: meta }),
   setReasoningElapsedSeconds: (seconds) => set({ reasoningElapsedSeconds: seconds }),
+  setReasoningText: (text) => set({ reasoningText: text }),
   setError: (error) => set({ error }),
   setWebSearchStatus: (status) => set((s) => ({ webSearchStatus: { ...s.webSearchStatus, ...status } })),
   reset: () =>
@@ -73,7 +78,8 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
       reasoningStartedAt: null,
       reasoningMeta: null,
       reasoningElapsedSeconds: 0,
+      reasoningText: '',
       error: null,
-      webSearchStatus: { active: false, callId: null, query: null, error: null, results: [] },
+      webSearchStatus: { active: false, callId: null, toolName: null, query: null, error: null, results: [] },
     }),
 }))

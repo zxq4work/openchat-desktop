@@ -6,6 +6,7 @@ import { useChatStreamStore } from '../stores/chatStreamStore'
 import { useUiStore } from '../stores/uiStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useCodexUsageStore } from '../stores/codexUsageStore'
+import { useProviderStore, type SafeProviderConfig } from '../stores/providerStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
@@ -35,6 +36,11 @@ export function App() {
       }
     }
     init()
+
+    // 初始化 Provider 列表
+    window.openchat.providers.list().then((list) => {
+      useProviderStore.getState().setProviders(list as SafeProviderConfig[])
+    })
 
     // 初始化 Codex Usage 状态
     window.openchat.codexUsage.get().then((view) => {
@@ -74,6 +80,7 @@ export function App() {
     let accumulatedText = ''
     let flushTimer: ReturnType<typeof setInterval> | null = null
     let reasoningElapsedTimer: ReturnType<typeof setInterval> | null = null
+    let reasoningTextAccum = ''
 
     const startFlush = () => {
       if (flushTimer) return
@@ -108,6 +115,11 @@ export function App() {
       }
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
+      // 多阶段推理：追加分隔符，不清空已有文本
+      if (reasoningTextAccum) {
+        reasoningTextAccum += '\n\n'
+      }
+
       const now = Date.now()
       // 一次 turn 可能有多个 reasoning 阶段，从前一个阶段累加
       const prevMeta = useChatStreamStore.getState().reasoningMeta
@@ -121,6 +133,18 @@ export function App() {
         const elapsed = baseSeconds + Math.round((Date.now() - now) / 1000)
         useChatStreamStore.getState().setReasoningElapsedSeconds(elapsed)
       }, 1000)
+    })
+
+    window.openchat.events.onChatReasoningDelta((event: unknown) => {
+      const e = event as { text?: string; conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (!streamingId) {
+        useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
+      } else if (e.conversationId && e.conversationId !== streamingId) return
+      if (e.text) {
+        reasoningTextAccum += e.text
+        useChatStreamStore.getState().setReasoningText(reasoningTextAccum)
+      }
     })
 
     window.openchat.events.onChatReasoningCompleted((event: unknown) => {
@@ -139,7 +163,7 @@ export function App() {
     })
 
     window.openchat.events.onWebSearchStarted((event: unknown) => {
-      const e = event as { conversationId?: string; toolCallId?: string; toolCallArgs?: string }
+      const e = event as { conversationId?: string; toolCallId?: string; toolCallName?: string; toolCallArgs?: string }
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -147,15 +171,22 @@ export function App() {
       if (e.toolCallArgs) {
         try {
           const args = JSON.parse(e.toolCallArgs) as Record<string, unknown>
-          if (Array.isArray(args.search_query) && args.search_query.length > 0) {
-            const first = args.search_query[0] as Record<string, unknown>
-            if (typeof first.q === 'string') query = first.q
+          if (typeof args.query === 'string') {
+            query = args.query
+          } else if (typeof args.url === 'string') {
+            query = args.url
           }
         } catch {
           query = null
         }
       }
-      useChatStreamStore.getState().setWebSearchStatus({ active: true, callId: e.toolCallId ?? null, query, error: null })
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: true,
+        callId: e.toolCallId ?? null,
+        toolName: e.toolCallName ?? null,
+        query,
+        error: null,
+      })
     })
 
     window.openchat.events.onWebSearchCompleted((event: unknown) => {
@@ -208,6 +239,7 @@ export function App() {
       }
       accumulatedText = ''
       pendingDeltas.length = 0
+      reasoningTextAccum = ''
       useChatStreamStore.getState().reset()
 
       const id = useConversationStore.getState().activeConversationId
@@ -253,11 +285,13 @@ export function App() {
           }
           accumulatedText = ''
           pendingDeltas.length = 0
+          reasoningTextAccum = ''
           useChatStreamStore.getState().reset()
         })
       } else {
         accumulatedText = ''
         pendingDeltas.length = 0
+        reasoningTextAccum = ''
         useChatStreamStore.getState().reset()
       }
 

@@ -96,6 +96,39 @@ export function getProxyAgent(): HttpsProxyAgent | undefined {
   return proxyAgentCache
 }
 
+// 判断主机名是否为局域网/本地地址，这些地址不应走代理
+function isPrivateOrLocalHost(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return true
+  }
+  if (hostname.endsWith('.local')) {
+    return true
+  }
+  // 私有 IPv4 网段
+  const parts = hostname.split('.')
+  if (parts.length === 4 && parts.every((p) => /^\d+$/.test(p))) {
+    const a = parseInt(parts[0], 10)
+    const b = parseInt(parts[1], 10)
+    if (a === 10) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 192 && b === 168) return true
+    if (a === 169 && b === 254) return true
+    if (a === 0) return true
+  }
+  return false
+}
+
+/**
+ * 获取代理 Agent，但对局域网/本地地址跳过代理
+ * 自定义模型服务常部署在局域网，走代理会导致连接失败
+ */
+export function getProxyAgentForHost(hostname: string): HttpsProxyAgent | undefined {
+  if (isPrivateOrLocalHost(hostname)) {
+    return undefined
+  }
+  return getProxyAgent()
+}
+
 export interface HttpsResponse {
   status: number
   ok: boolean

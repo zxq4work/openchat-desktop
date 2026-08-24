@@ -23,11 +23,13 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
+  CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
   CHAT_SEND: 'chat:send',
   CHAT_INTERRUPT: 'chat:interrupt',
   CHAT_REGENERATE_LAST: 'chat:regenerate-last',
   CHAT_DELTA: 'chat:delta',
   CHAT_REASONING_STARTED: 'chat:reasoning-started',
+  CHAT_REASONING_DELTA: 'chat:reasoning-delta',
   CHAT_REASONING_COMPLETED: 'chat:reasoning-completed',
   CHAT_TURN_COMPLETED: 'chat:turn-completed',
   CHAT_ERROR: 'chat:error',
@@ -44,6 +46,11 @@ const IPC_CHANNELS = {
   CODEX_USAGE_GET_STATE: 'codex-usage:get-state',
   CODEX_USAGE_REFRESH: 'codex-usage:refresh',
   CODEX_USAGE_CHANGED: 'codex-usage:changed',
+  PROVIDERS_LIST: 'providers:list',
+  PROVIDERS_CREATE: 'providers:create',
+  PROVIDERS_DELETE: 'providers:delete',
+  PROVIDERS_UPDATE: 'providers:update',
+  PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
 } as const
 
 const openchat = {
@@ -78,6 +85,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS, id, useModelInstructions),
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, id, webSearchEnabled),
+    updateProviderConfig: (id: string, providerConfigId: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, id, providerConfigId),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
   },
 
@@ -90,6 +99,15 @@ const openchat = {
     getProxy: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_PROXY),
     setProxy: (config: { enabled: boolean; protocol: string; host: string; port: string; username: string; password: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_PROXY, config),
+  },
+
+  providers: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_LIST),
+    create: (config: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_CREATE, config),
+    delete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_DELETE, id),
+    update: (id: string, updates: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_UPDATE, id, updates),
+    fetchModels: (baseUrl: string, apiKey: string, modelsPath?: string, providerId?: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, { baseUrl, apiKey, modelsPath, providerId }),
   },
 
   events: {
@@ -112,6 +130,11 @@ const openchat = {
       const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
       ipcRenderer.on(IPC_CHANNELS.CHAT_REASONING_STARTED, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_REASONING_STARTED, handler)
+    },
+    onChatReasoningDelta: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_REASONING_DELTA, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_REASONING_DELTA, handler)
     },
     onChatReasoningCompleted: (cb: (event: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)

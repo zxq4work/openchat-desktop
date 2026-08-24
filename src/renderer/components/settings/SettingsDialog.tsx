@@ -3,6 +3,7 @@ import { useUiStore } from '../../stores/uiStore'
 import { useThemeStore, type ThemeMode } from '../../stores/themeStore'
 import { AccountPanel } from './AccountPanel'
 import { ProxySettings } from './ProxySettings'
+import { ProviderSettings } from './ProviderSettings'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -56,6 +57,12 @@ export function SettingsDialog() {
           <div className="settings-section">
             <h4>代理</h4>
             <ProxySettings />
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-section">
+            <ProviderSettings />
           </div>
 
           <div className="settings-section-divider" />

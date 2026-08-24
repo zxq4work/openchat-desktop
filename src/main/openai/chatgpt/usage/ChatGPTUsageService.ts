@@ -62,7 +62,15 @@ export class ChatGPTUsageService {
       this.logUsage(usage)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      console.error('[Codex Usage] fetch failed:', message)
+      const isNotAuthed = err instanceof Error && err.name === 'NotAuthenticatedError'
+      const isNetworkError = message.includes('ETIMEDOUT') || message.includes('ECONNREFUSED') || message.includes('ENOTFOUND') || message.includes('socket hang up')
+      if (isNotAuthed) {
+        console.log('[Codex Usage] skipped (not authenticated)')
+      } else if (isNetworkError) {
+        console.log('[Codex Usage] network unavailable:', message)
+      } else {
+        console.warn('[Codex Usage] fetch failed:', message)
+      }
       this.state = { state: 'unavailable', error: message, fetchedAt: Date.now() }
     } finally {
       this.emitChange()

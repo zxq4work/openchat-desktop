@@ -97,6 +97,7 @@ export class ChatGPTUsageClient {
             data += chunk.toString()
           })
           res.on('end', () => {
+            cleanup()
             resolve({
               status: res.statusCode ?? 0,
               headers: res.headers,
@@ -108,6 +109,10 @@ export class ChatGPTUsageClient {
 
       let abortHandler: (() => void) | null = null
       if (signal) {
+        if (signal.aborted) {
+          reject(new Error('Aborted'))
+          return
+        }
         abortHandler = () => {
           request.destroy(new Error('Aborted'))
           reject(new Error('Aborted'))
@@ -115,10 +120,15 @@ export class ChatGPTUsageClient {
         signal.addEventListener('abort', abortHandler, { once: true })
       }
 
-      request.on('error', (err) => {
+      const cleanup = () => {
         if (abortHandler && signal) {
           signal.removeEventListener('abort', abortHandler)
+          abortHandler = null
         }
+      }
+
+      request.on('error', (err) => {
+        cleanup()
         reject(err)
       })
 

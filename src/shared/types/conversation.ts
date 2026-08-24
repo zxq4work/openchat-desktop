@@ -8,6 +8,7 @@ export interface Conversation {
   currentSegmentId: string
   useModelInstructions: boolean
   webSearchEnabled: boolean
+  providerConfigId: string | null
   createdAt: number
   updatedAt: number
 }

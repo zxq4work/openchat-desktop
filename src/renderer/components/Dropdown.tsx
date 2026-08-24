@@ -97,7 +97,12 @@ export function Dropdown({
     const handleResize = () => close()
     // 触发按钮所在容器滚动时（如设置弹窗），菜单会与按钮错位，直接关闭
     const handleScroll = (e: Event) => {
-      if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return
+      const target = e.target
+      // 菜单自身滚动不关闭
+      if (menuRef.current && target instanceof Node && menuRef.current.contains(target)) return
+      // 只有按钮所在容器滚动时才关闭（按钮位置变化导致菜单错位）
+      // 无关容器的滚动（如流式回答时消息列表自动滚动）不应关闭菜单
+      if (rootRef.current && target instanceof Node && !target.contains(rootRef.current)) return
       close()
     }
 

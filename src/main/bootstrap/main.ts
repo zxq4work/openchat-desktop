@@ -32,6 +32,14 @@ import { MockOAuthClient } from '../openai/chatgpt/auth/MockOAuthClient'
 import { MockChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
+import { ToolRegistry } from '../tools/ToolRegistry'
+import { WebSearchTool } from '../tools/WebSearchTool'
+import { WebFetchTool } from '../tools/WebFetchTool'
+import { WebSearchService } from '../web-search/WebSearchService'
+import { BingHtmlSearchEngine } from '../web-search/BingHtmlSearchEngine'
+import { WebFetchService } from '../web-search/WebFetchService'
+import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
+import { ProviderConfigService } from '../providers/ProviderConfigService'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -53,6 +61,13 @@ const services = {
   credentialManager: null as OAuthCredentialManager | null,
   usageService: null as ChatGPTUsageService | null,
   mockAuthServer: null as MockAuthServer | null,
+
+  // New architecture
+  toolRegistry: null as ToolRegistry | null,
+  webSearchService: null as WebSearchService | null,
+  webFetchService: null as WebFetchService | null,
+  providerConfigRepository: null as ProviderConfigRepository | null,
+  providerConfigService: null as ProviderConfigService | null,
 }
 
 function getAppServerMode(): AppServerMode {
@@ -145,17 +160,38 @@ async function initializeChatGPTProvider(): Promise<void> {
   const usageService = new ChatGPTUsageService(credentialManager)
   services.usageService = usageService
 
+  // 初始化新架构：ToolRegistry + WebSearchService + ProviderConfigService
+  const toolRegistry = new ToolRegistry()
+  const webSearchService = new WebSearchService(new BingHtmlSearchEngine())
+  const webFetchService = new WebFetchService()
+  toolRegistry.register('web_search', new WebSearchTool(webSearchService))
+  toolRegistry.register('web_fetch', new WebFetchTool(webFetchService))
+  services.toolRegistry = toolRegistry
+  services.webSearchService = webSearchService
+  services.webFetchService = webFetchService
+
+  const providerConfigRepository = new ProviderConfigRepository(storage)
+  services.providerConfigRepository = providerConfigRepository
+  const providerConfigService = new ProviderConfigService(providerConfigRepository, codexClient)
+  services.providerConfigService = providerConfigService
+
   services.chatgptConversationService = new ChatGPTConversationService(
     storage,
     codexClient,
     provider.modelService,
     credentialManager,
-    usageService
+    usageService,
+    toolRegistry,
+    webSearchService,
+    providerConfigService
   )
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
 
-  // 后台异步查询 usage，不阻塞窗口打开
-  void usageService.refresh()
+  // 后台异步查询 usage，仅在已登录时执行（自定义服务场景下无需 Codex usage）
+  const isLoggedIn = await credentialManager.isLoggedIn().catch(() => false)
+  if (isLoggedIn) {
+    void usageService.refresh()
+  }
 }
 
 async function initializeAppServerProvider(): Promise<void> {

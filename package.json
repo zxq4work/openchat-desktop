@@ -17,6 +17,7 @@
     "package:mac": "electron-builder --mac"
   },
   "dependencies": {
+    "cheerio": "1.0.0-rc.12",
     "https-proxy-agent": "^5.0.1",
     "katex": "^0.18.4",
     "react-markdown": "^9.0.1",

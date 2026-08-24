@@ -8,21 +8,38 @@ import type {
   ContextSegment,
   Message,
 } from '../../../shared/types/conversation'
+import type { CanonicalMessage, CanonicalModelRequest, CanonicalToolCall } from '../../../shared/types/provider'
 import { TITLE_MAX_LENGTH } from '../../../shared/constants'
 import type { ChatGPTCodexClient, ProviderInputItem } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
-import { ToolLoopController } from './tools/ToolLoopController'
-import type { ToolLoopCallbacks } from './tools/ToolLoopController'
-import { WebSearchToolExecutor } from './tools/WebSearchToolExecutor'
-import { ChatGPTCodexSearchClient } from './search/ChatGPTCodexSearchClient'
+import { ToolLoopController } from '../../tools/ToolLoopController'
+import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
+import { ToolRegistry } from '../../tools/ToolRegistry'
+import { WebSearchService } from '../../web-search/WebSearchService'
+import { ProviderConfigService } from '../../providers/ProviderConfigService'
+import { ChatGPTCodexAdapter } from '../../providers/ChatGPTCodexAdapter'
+import type { ModelAdapter } from '../../../shared/types/provider'
 import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
-import { SEARCH_COMMANDS_JSON_SCHEMA } from '../../../shared/schema/searchCommandsSchema'
+
+const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
+
+Use web_search when:
+- the user explicitly asks to search, browse, look up, find or verify information;
+- the answer depends on current or potentially changed information;
+- external verification would materially improve accuracy.
+
+Use web_fetch when a search result snippet is insufficient and you need details from a source.
+
+Prefer concise search queries.
+Prefer primary and authoritative sources when possible.
+Never claim that you searched the web unless a web tool was actually executed.
+When using web results, cite relevant source URLs in the final answer.`
 
 export interface StreamEvent {
-  type: 'delta' | 'reasoning-started' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error'
+  type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error'
   conversationId?: string
   turnId?: string
   itemId?: string
@@ -45,7 +62,9 @@ export class ChatGPTConversationService {
   private storage: StorageService
   private codexClient: ChatGPTCodexClient
   private modelService: ChatGPTModelService
-  private toolLoopController: ToolLoopController
+  private toolRegistry: ToolRegistry
+  private webSearchService: WebSearchService
+  private providerConfigService: ProviderConfigService
   private usageService: ChatGPTUsageService
 
   // 全局只允许一个 active generation
@@ -62,7 +81,10 @@ export class ChatGPTConversationService {
     codexClient: ChatGPTCodexClient,
     modelService: ChatGPTModelService,
     credentialManager: OAuthCredentialManager,
-    usageService: ChatGPTUsageService
+    usageService: ChatGPTUsageService,
+    toolRegistry: ToolRegistry,
+    webSearchService: WebSearchService,
+    providerConfigService: ProviderConfigService
   ) {
     this.storage = storage
     this.conversations = new ConversationRepository(storage)
@@ -70,9 +92,9 @@ export class ChatGPTConversationService {
     this.messages = new MessageRepository(storage)
     this.codexClient = codexClient
     this.modelService = modelService
-    const searchClient = new ChatGPTCodexSearchClient(credentialManager)
-    const searchExecutor = new WebSearchToolExecutor(searchClient)
-    this.toolLoopController = new ToolLoopController(codexClient, searchExecutor)
+    this.toolRegistry = toolRegistry
+    this.webSearchService = webSearchService
+    this.providerConfigService = providerConfigService
     this.usageService = usageService
   }
 
@@ -98,6 +120,7 @@ export class ChatGPTConversationService {
       currentSegmentId: '',
       useModelInstructions: true,
       webSearchEnabled: false,
+      providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -132,6 +155,7 @@ export class ChatGPTConversationService {
       currentSegmentId: segmentId,
       useModelInstructions: true,
       webSearchEnabled: false,
+      providerConfigId: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -158,7 +182,6 @@ export class ChatGPTConversationService {
   }
 
   async removeConversation(id: string): Promise<void> {
-    // Direct provider 无远端 thread 需要清理，仅本地删除
     this.conversations.remove(id)
     await this.storage.save()
   }
@@ -235,7 +258,7 @@ export class ChatGPTConversationService {
     return newSegment
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<void> {
+  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message }> {
     if (this.activeGeneration) {
       throw new Error('已有正在进行的生成')
     }
@@ -250,12 +273,10 @@ export class ChatGPTConversationService {
     if (!modelId) throw new Error('未选择模型，请先刷新模型列表')
 
     let effort = conversation.defaultReasoningEffort
-    // 防御性处理：如果 DB 中存储了损坏的 [object Object]
     if (effort && effort.includes('[object Object]')) {
       effort = null
     }
 
-    // 防御性处理：验证 effort 在当前模型支持列表中，过滤掉 API 不支持的值（如 ultra）
     const currentModel = this.modelService.currentModels.find((m) => m.id === modelId)
     if (effort && currentModel) {
       const supported = currentModel.supportedReasoningEfforts.map((s) => s.reasoningEffort)
@@ -266,21 +287,23 @@ export class ChatGPTConversationService {
       }
     }
 
+    // 自定义服务：若 adapter 不支持推理，清除 effort 避免 400
+    const adapter = this.resolveAdapter(conversation.providerConfigId)
+    if (!adapter.supportsReasoning && effort) {
+      effort = null
+    }
+
     const effortValue = effort ?? ''
 
-    // 发送前检查 Codex Usage：仅 exhausted 时阻止，unknown/unavailable 不阻止
     const usageState = this.usageService.getState()
-    if (usageState.state === 'exhausted') {
+    // 使用自定义服务时，跳过 Codex 额度检查
+    if (!conversation.providerConfigId && usageState.state === 'exhausted') {
       const nowMs = Date.now()
       if (usageState.resetAt && usageState.resetAt * 1000 > nowMs) {
         throw new CodexUsageExhaustedError(usageState.resetAt, usageState.usage?.plan_type)
       }
     }
 
-    // 构造请求 input（当前 segment 的历史消息 + 新用户消息 + 可选 web 工具声明）
-    const input = this.buildInput(segment.id, text, conversation.webSearchEnabled)
-
-    // 创建 UserMessage
     const now = Date.now()
     const userMessage: Message = {
       id: randomUUID(),
@@ -303,13 +326,11 @@ export class ChatGPTConversationService {
     }
     this.messages.create(userMessage)
 
-    // 更新会话标题（第一条用户消息）
     if (conversation.title === '新对话') {
       const title = this.deriveTitle(text)
       this.conversations.rename(conversationId, title)
     }
 
-    // 创建 pending AssistantMessage
     const assistantMessage: Message = {
       id: randomUUID(),
       conversationId,
@@ -338,8 +359,27 @@ export class ChatGPTConversationService {
       abortController,
     }
 
-    // 异步驱动流式生成
-    void this.runGeneration(conversationId, segment.systemPromptSnapshot, conversation.useModelInstructions, modelId, effortValue, assistantMessage.id, input, abortController, conversation.webSearchEnabled)
+    void this.runGeneration(
+      conversationId,
+      segment.systemPromptSnapshot,
+      conversation.useModelInstructions,
+      modelId,
+      effortValue,
+      assistantMessage.id,
+      text,
+      conversation.providerConfigId,
+      abortController,
+      conversation.webSearchEnabled
+    )
+
+    return { userMessage, assistantMessage }
+  }
+
+  private resolveAdapter(providerConfigId: string | null): ModelAdapter {
+    if (providerConfigId) {
+      return this.providerConfigService.getAdapter(providerConfigId)
+    }
+    return new ChatGPTCodexAdapter(this.codexClient)
   }
 
   private async runGeneration(
@@ -349,11 +389,14 @@ export class ChatGPTConversationService {
     modelId: string,
     effort: string,
     assistantMessageId: string,
-    input: ProviderInputItem[],
+    userText: string,
+    providerConfigId: string | null,
     abortController: AbortController,
     webSearchEnabled: boolean
   ): Promise<void> {
     try {
+      const adapter = this.resolveAdapter(providerConfigId)
+
       const modelInstructions = useModelInstructions
         ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
         : ''
@@ -375,23 +418,29 @@ export class ChatGPTConversationService {
 
       this.messages.updateStatus(assistantMessageId, 'streaming')
 
+      const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+
       if (webSearchEnabled) {
-        await this.runGenerationWithWebSearch(
-          conversationId, modelId, instructions, effort, assistantMessageId, input, abortController
-        )
+        if (adapter.supportsToolCalling) {
+          await this.runGenerationWithTools(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+          )
+        } else {
+          await this.runGenerationWithPreSearch(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+          )
+        }
       } else {
         await this.runGenerationDirect(
-          conversationId, modelId, instructions, effort, assistantMessageId, input, abortController
+          conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
         )
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       const isAborted = abortController.signal.aborted
 
-      // 收到 usage_limit_reached 429：同步 usage 状态为 exhausted
       if (err instanceof UsageLimitReachedError) {
         this.usageService.markExhaustedFrom429(err.resetsAt)
-        // 后台 refresh 一次 /wham/usage 以获取完整状态
         void this.usageService.refresh()
       }
 
@@ -413,13 +462,16 @@ export class ChatGPTConversationService {
     }
   }
 
-  private async runGenerationWithWebSearch(
+  // Agentic Search：使用 ToolLoopController
+  private async runGenerationWithTools(
     conversationId: string,
+    adapter: ModelAdapter,
     modelId: string,
     instructions: string,
     effort: string,
     assistantMessageId: string,
-    input: ProviderInputItem[],
+    userText: string,
+    segmentId: string,
     abortController: AbortController
   ): Promise<void> {
     let accumulatedContent = ''
@@ -427,17 +479,22 @@ export class ChatGPTConversationService {
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
 
+    const controller = new ToolLoopController(adapter, this.toolRegistry)
+
     const callbacks: ToolLoopCallbacks = {
-      onToolCall: (toolCall) => {
+      onToolCall: (toolCall: CanonicalToolCall) => {
         this.emitStreamEvent({
           type: 'web-search-started',
           conversationId,
-          toolCallId: toolCall.callId,
+          toolCallId: toolCall.id,
           toolCallName: toolCall.name,
           toolCallArgs: toolCall.arguments,
         })
       },
-      onToolResult: (callId, success, rawResults) => {
+      onToolResult: (callId, toolName, success, rawResults, errorOutput) => {
+        // web_fetch 失败不应显示为"搜索失败"，仅 web_search 失败才触发错误提示
+        if (toolName !== 'web_search') return
+
         if (success) {
           this.emitStreamEvent({
             type: 'web-search-completed',
@@ -446,6 +503,11 @@ export class ChatGPTConversationService {
             webSearchResults: rawResults,
           })
         } else {
+          // 超限/重复查询是护栏拦截，不是真正的搜索失败，不提示用户
+          if (errorOutput && (errorOutput.includes('TOOL_LIMIT_EXCEEDED') || errorOutput.includes('DUPLICATE_QUERY'))) {
+            return
+          }
+          console.log('[WebSearch] search failed, callId=', callId, 'error=', errorOutput ?? 'unknown')
           this.emitStreamEvent({
             type: 'web-search-error',
             conversationId,
@@ -462,14 +524,20 @@ export class ChatGPTConversationService {
         reasoningStartedAt = Date.now()
         this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
       },
-      onReasoningCompleted: (itemId) => {
+      onReasoningDelta: (text) => {
+        this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text })
+      },
+      onReasoningCompleted: (itemId, summary) => {
         const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
         totalReasoningDuration += phaseDuration
+        // 多阶段推理：累积 summary，不覆盖之前阶段的摘要
+        const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
+        const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(summary ?? [])]
         const meta = {
           duration: totalReasoningDuration,
           effort: effort || '',
-          summary: [] as string[],
-          available: false,
+          summary: accumulatedSummary,
+          available: accumulatedSummary.length > 0,
         }
         this.messages.updateReasoningMeta(assistantMessageId, meta)
         this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId, reasoningMeta: meta })
@@ -481,12 +549,6 @@ export class ChatGPTConversationService {
         }
         this.emitStreamEvent({ type: 'turn-started', conversationId, turnId })
       },
-      onItemStarted: (_itemId, _itemType) => {
-        // 工具循环内部处理
-      },
-      onItemCompleted: (_itemId, _itemType) => {
-        // 工具循环内部处理
-      },
       getProviderTurnId: () => providerTurnId,
       setProviderTurnId: (id) => {
         providerTurnId = id
@@ -494,23 +556,10 @@ export class ChatGPTConversationService {
       },
     }
 
-    const currentUserText = input
-      .filter((item): item is { role: string; content: string } => 'role' in item && item.role === 'user')
-      .map((item) => item.content)
-      .pop() ?? ''
+    const fullInstructions = instructions + '\n\n' + SEARCH_INSTRUCTIONS
+    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
 
-    const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
-
-    const result = await this.toolLoopController.run(
-      modelId,
-      instructions,
-      input,
-      effort,
-      currentUserText,
-      segmentId,
-      abortController.signal,
-      callbacks
-    )
+    const result = await controller.run(request, abortController.signal, callbacks)
 
     this.messages.updateContent(assistantMessageId, result.finalText)
     this.messages.updateStatus(assistantMessageId, 'completed')
@@ -525,7 +574,7 @@ export class ChatGPTConversationService {
             allResults.push({
               title: (typeof obj.title === 'string' ? obj.title : null) ?? (typeof obj.name === 'string' ? obj.name : null),
               url: (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null),
-              snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null) ?? (typeof obj.text === 'string' ? obj.text : null),
+              snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
             })
           }
         }
@@ -535,88 +584,144 @@ export class ChatGPTConversationService {
       }
     }
 
+    // 持久化工具调用历史，使模型在后续 turn 能感知已执行的搜索工具
+    if (result.toolCallHistory.length > 0) {
+      this.messages.updateProviderPayload(assistantMessageId, {
+        toolCalls: result.toolCallHistory.map((entry) => ({
+          id: entry.callId,
+          name: entry.name,
+          arguments: entry.arguments,
+          output: entry.output,
+          isError: entry.isError,
+        })),
+      })
+    }
+
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
   }
 
-  private async runGenerationDirect(
+  // PreSearch Mode：不支持 tool calling 时，预搜索并注入上下文
+  private async runGenerationWithPreSearch(
     conversationId: string,
+    adapter: ModelAdapter,
     modelId: string,
     instructions: string,
     effort: string,
     assistantMessageId: string,
-    input: ProviderInputItem[],
+    userText: string,
     abortController: AbortController
   ): Promise<void> {
-    const request = {
-      model: modelId,
-      instructions,
-      input,
-      store: false,
-      stream: true,
-      ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
+    this.emitStreamEvent({
+      type: 'web-search-started',
+      conversationId,
+      toolCallId: 'pre-search',
+      toolCallName: 'web_search',
+      toolCallArgs: JSON.stringify({ query: userText.slice(0, 500) }),
+    })
+
+    let searchContext = ''
+    try {
+      const results = await this.webSearchService.search(userText.slice(0, 500), abortController.signal)
+      if (results.length > 0) {
+        const lines = ['Web search results retrieved by OpenChat:', '']
+        for (const r of results) {
+          lines.push(`[${r.index}]`)
+          lines.push(`Title: ${r.title}`)
+          lines.push(`URL: ${r.url}`)
+          lines.push(`Snippet: ${r.snippet}`)
+          lines.push('')
+        }
+        lines.push('Use these results only when relevant.')
+        lines.push('Cite the source URL when relying on a result.')
+        lines.push('Do not claim access to information beyond the supplied search results.')
+        searchContext = lines.join('\n')
+      }
+      this.emitStreamEvent({
+        type: 'web-search-completed',
+        conversationId,
+        toolCallId: 'pre-search',
+        webSearchResults: results,
+      })
+    } catch (err) {
+      console.error('[PreSearch] Search failed:', err instanceof Error ? err.message : String(err))
+      this.emitStreamEvent({
+        type: 'web-search-error',
+        conversationId,
+        toolCallId: 'pre-search',
+      })
     }
 
-    console.log('[ChatGPTConversationService] Request reasoning:', JSON.stringify({ effort, summary: effort ? 'auto' : null }))
+    const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+    const fullInstructions = searchContext
+      ? instructions + '\n\n' + SEARCH_INSTRUCTIONS + '\n\n' + searchContext
+      : instructions
+
+    await this.runGenerationDirect(
+      conversationId, adapter, modelId, fullInstructions, effort, assistantMessageId, segmentId, abortController
+    )
+  }
+
+  // 直接调用模型（无工具）
+  private async runGenerationDirect(
+    conversationId: string,
+    adapter: ModelAdapter,
+    modelId: string,
+    instructions: string,
+    effort: string,
+    assistantMessageId: string,
+    segmentId: string,
+    abortController: AbortController
+  ): Promise<void> {
+    const request = this.buildCanonicalRequest(modelId, instructions, segmentId, '', effort)
 
     let accumulatedContent = ''
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
 
-    for await (const event of this.codexClient.sendResponses(request, abortController.signal)) {
+    for await (const event of adapter.stream(request, abortController.signal)) {
       switch (event.type) {
-        case 'response.created':
-          providerTurnId = this.extractResponseId(event.response)
+        case 'delta':
+          accumulatedContent += event.text
+          this.messages.updateContent(assistantMessageId, accumulatedContent)
+          this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.text })
+          break
+
+        case 'turn_started':
+          providerTurnId = event.turnId ?? null
           if (providerTurnId) {
             this.messages.updateProviderIds(assistantMessageId, providerTurnId, '')
           }
           this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: providerTurnId ?? '' })
           break
 
-        case 'response.output_item.added':
-          if (event.item.type === 'reasoning') {
-            reasoningStartedAt = Date.now()
-            this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id })
+        case 'reasoning_started':
+          reasoningStartedAt = Date.now()
+          this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId })
+          break
+
+        case 'reasoning_delta':
+          this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text: event.text })
+          break
+
+        case 'reasoning_completed': {
+          const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+          totalReasoningDuration += phaseDuration
+          // 多阶段推理：累积 summary，不覆盖之前阶段的摘要
+          const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
+          const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(event.summary ?? [])]
+          const meta = {
+            duration: totalReasoningDuration,
+            effort: effort || '',
+            summary: accumulatedSummary,
+            available: accumulatedSummary.length > 0,
           }
+          this.messages.updateReasoningMeta(assistantMessageId, meta)
+          this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId, reasoningMeta: meta })
           break
+        }
 
-        case 'response.output_item.done':
-          if (event.item.type === 'reasoning') {
-            const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
-            totalReasoningDuration += phaseDuration
-            const summary = (event.item.summary ?? [])
-              .filter((s) => s.type === 'summary_text' && typeof s.text === 'string')
-              .map((s) => s.text)
-            const meta = {
-              duration: totalReasoningDuration,
-              effort: effort || '',
-              summary,
-              available: summary.length > 0,
-            }
-            console.log('[ChatGPTConversationService] Reasoning phase done, phaseDuration:', phaseDuration, 'totalDuration:', totalReasoningDuration, 'summary.length:', summary.length)
-            if (summary.length === 0) {
-              console.log('[ChatGPTConversationService] provider did not return reasoning summary')
-            }
-            this.messages.updateReasoningMeta(assistantMessageId, meta)
-            this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.item.id, reasoningMeta: meta })
-          }
-          break
-
-        case 'response.output_text.delta':
-          accumulatedContent += event.delta
-          this.messages.updateContent(assistantMessageId, accumulatedContent)
-          this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.delta })
-          break
-
-        case 'response.output_text.done':
-          if (event.text) {
-            accumulatedContent = event.text
-            this.messages.updateContent(assistantMessageId, accumulatedContent)
-          }
-          this.emitStreamEvent({ type: 'item-completed', conversationId, turnId: providerTurnId ?? '' })
-          break
-
-        case 'response.completed':
+        case 'turn_completed':
           this.messages.updateContent(assistantMessageId, accumulatedContent)
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
@@ -629,12 +734,91 @@ export class ChatGPTConversationService {
       }
     }
 
-    // 流结束但未收到 response.completed（被中断或异常结束）
+    // 流结束但未收到 turn_completed（被中断或异常结束）
     if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
       if (abortController.signal.aborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
       }
+    }
+  }
+
+  private buildCanonicalRequest(
+    modelId: string,
+    instructions: string,
+    segmentId: string,
+    userText: string,
+    effort: string
+  ): CanonicalModelRequest {
+    const segmentMessages = this.messages.getBySegmentId(segmentId)
+    const messages: CanonicalMessage[] = []
+
+    for (const msg of segmentMessages) {
+      if (msg.status !== 'completed') continue
+
+      if (msg.role === 'user') {
+        if (msg.content) {
+          messages.push({ role: 'user', content: msg.content })
+        }
+        continue
+      }
+
+      if (msg.role === 'assistant') {
+        const assistantMsg: CanonicalMessage = { role: 'assistant' }
+        if (msg.content) {
+          assistantMsg.content = msg.content
+        }
+
+        // 重建历史工具调用：让模型在后续 turn 感知已执行的 web 搜索
+        let toolCallsFromPayload: Array<{ id: string; name: string; arguments: string; output: string; isError: boolean }> = []
+        if (msg.providerPayloadJson) {
+          try {
+            const payload = JSON.parse(msg.providerPayloadJson) as {
+              toolCalls?: Array<{ id: string; name: string; arguments: string; output: string; isError: boolean }>
+            }
+            if (payload.toolCalls && payload.toolCalls.length > 0) {
+              assistantMsg.toolCalls = payload.toolCalls.map((tc) => ({
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+              }))
+              toolCallsFromPayload = payload.toolCalls
+            }
+          } catch {
+            // 忽略无法解析的 payload
+          }
+        }
+
+        if (assistantMsg.content || assistantMsg.toolCalls) {
+          messages.push(assistantMsg)
+        }
+
+        // 追加工具结果消息
+        for (const tc of toolCallsFromPayload) {
+          messages.push({
+            role: 'tool',
+            content: tc.output,
+            toolResult: {
+              callId: tc.id,
+              name: tc.name,
+              output: tc.output,
+              isError: tc.isError,
+            },
+          })
+        }
+      }
+    }
+
+    // 如果 userText 不在 messages 中，追加
+    if (userText && !messages.some((m) => m.role === 'user' && m.content === userText)) {
+      messages.push({ role: 'user', content: userText })
+    }
+
+    return {
+      model: modelId,
+      systemPrompt: instructions,
+      messages,
+      ...(effort ? { reasoningEffort: effort } : {}),
     }
   }
 
@@ -648,45 +832,6 @@ export class ChatGPTConversationService {
     if (assistantMessageId) {
       this.messages.updateStatus(assistantMessageId, 'stopped')
     }
-  }
-
-  private buildInput(segmentId: string, newUserText: string, webSearchEnabled: boolean): ProviderInputItem[] {
-    const segmentMessages = this.messages.getBySegmentId(segmentId)
-    const input: ProviderInputItem[] = []
-
-    for (const msg of segmentMessages) {
-      if (msg.status === 'completed' && msg.content) {
-        input.push({ role: msg.role, content: msg.content })
-      }
-    }
-
-    // 新用户消息已在 sendMessage 中先入库，循环可能已包含，去重
-    if (!input.some((item) => 'role' in item && item.role === 'user' && 'content' in item && item.content === newUserText)) {
-      input.push({ role: 'user', content: newUserText })
-    }
-
-    // 开启网页搜索时，注入 web.run 工具声明
-    if (webSearchEnabled) {
-      input.unshift({
-        type: 'additional_tools',
-        role: 'developer',
-        tools: [{
-          type: 'function',
-          name: 'run',
-          description: 'Search the web for real-time information. Use this when the user asks about current events, recent data, or anything requiring up-to-date knowledge.',
-          parameters: SEARCH_COMMANDS_JSON_SCHEMA,
-        }],
-      })
-    }
-
-    return input
-  }
-
-  private extractResponseId(response: unknown): string {
-    if (response && typeof response === 'object' && 'id' in response) {
-      return String((response as { id: unknown }).id)
-    }
-    return ''
   }
 
   private deriveTitle(text: string): string {
@@ -709,6 +854,18 @@ export class ChatGPTConversationService {
 
   async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
     this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
+    await this.storage.save()
+  }
+
+  async updateProviderConfig(id: string, providerConfigId: string | null): Promise<void> {
+    this.conversations.updateProviderConfigId(id, providerConfigId)
+    // 切换到自定义服务时，清除可能残留的 Codex 推理等级，避免 400
+    if (providerConfigId) {
+      const adapter = this.providerConfigService.getAdapter(providerConfigId)
+      if (!adapter.supportsReasoning) {
+        this.conversations.updateEffort(id, '')
+      }
+    }
     await this.storage.save()
   }
 }

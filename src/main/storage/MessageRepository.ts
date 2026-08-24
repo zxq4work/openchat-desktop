@@ -137,6 +137,14 @@ export class MessageRepository {
     )
   }
 
+  updateProviderPayload(id: string, payload: Record<string, unknown>): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE messages SET provider_payload_json = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify(payload), Date.now(), id]
+    )
+  }
+
   updateError(id: string, code: string, message: string): void {
     const db = this.storage.database
     db.run(

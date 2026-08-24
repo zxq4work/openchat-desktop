@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import type { Message } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { ModelSelector } from './ModelSelector'
+import { ProviderSelector } from './ProviderSelector'
 import { ReasoningSelector } from './ReasoningSelector'
 import { WebSearchToggle } from './WebSearchToggle'
 import { MessageInput } from './MessageInput'
@@ -27,6 +27,9 @@ export function Composer() {
   const error = useChatStreamStore((s) => s.error)
   const usage = useCodexUsageStore((s) => s.usage)
   const exhausted = isCodexExhausted(usage)
+  // 使用自定义服务时，忽略 Codex 额度限制
+  const isCustomProvider = !!activeConversation?.providerConfigId
+  const isExhausted = exhausted && !isCustomProvider
 
   // 错误提示自动消失
   useEffect(() => {
@@ -37,7 +40,7 @@ export function Composer() {
 
   const handleSend = async () => {
     if (!activeConversation || !text.trim()) return
-    if (exhausted) return
+    if (isExhausted) return
 
     const conversationId = activeConversation.id
     const messageText = text.trim()
@@ -46,26 +49,22 @@ export function Composer() {
     useChatStreamStore.getState().setStreamingConversationId(conversationId)
 
     try {
-      await window.openchat.chat.send(conversationId, messageText)
+      const result = await window.openchat.chat.send(conversationId, messageText)
       setStatus('streaming')
-
-      // 刷新会话数据
-      const data = await window.openchat.conversations.get(conversationId)
-      if (data) {
-        useConversationStore.getState().setActiveConversation(data.conversation)
-        useConversationStore.getState().setActiveMessages(data.messages)
-        useConversationStore.getState().setActiveSegments(data.segments)
-
-        // 找到正在流式生成的 assistant 消息，设为 active 以便渲染增量文本
-        const streamingMsg = data.messages.find(
-          (m: Message) => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
-        )
-        if (streamingMsg) {
-          setActiveAssistantMessage(streamingMsg.id)
-        }
+      // 立即把 user/assistant 消息追加到 activeMessages，并设置 activeAssistantMessageId，
+      // 保证旧会话（消息多、get 慢）下流式事件到达时组件已就绪，无需等 conversations.get 返回
+      if (result) {
+        useConversationStore.getState().setActiveMessages([
+          ...useConversationStore.getState().activeMessages,
+          result.userMessage,
+          result.assistantMessage,
+        ])
+        setActiveAssistantMessage(result.assistantMessage.id)
       }
 
-      // 刷新侧边栏列表（会话标题可能已更新）
+      // 只刷新侧边栏列表（会话标题可能已更新）
+      // 注意：流式期间不再 conversations.get 全量刷新，避免旧会话大消息列表
+      // 触发 activeMessages 整体替换导致文字抖动与增量内容重复
       const list = await window.openchat.conversations.list()
       useConversationStore.getState().setSummaries(list)
     } catch (err) {
@@ -103,7 +102,7 @@ export function Composer() {
   return (
     <div className="composer">
       <div className="composer-inner">
-        {exhausted && (
+        {isExhausted && (
           <div className="composer-usage-exhausted">
             Codex 额度已用尽
             {usage.resetAt ? `，将于 ${formatResetTime(usage.resetAt)} 恢复。` : '。'}
@@ -114,11 +113,12 @@ export function Composer() {
         )}
         <MessageInput text={text} onChange={setText} onSend={handleSend} onStop={handleStop} />
         <div className="composer-controls">
+          <ProviderSelector />
           <ModelSelector />
           <ReasoningSelector />
           <WebSearchToggle />
           <div className="composer-spacer" />
-          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0 && !exhausted} />
+          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0 && !isExhausted} />
         </div>
       </div>
     </div>

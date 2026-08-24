@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import type { Message } from '../../../shared/types/conversation'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { MarkdownRenderer } from '../MarkdownRenderer'
@@ -12,6 +12,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   const isStreaming = streamState.activeAssistantMessageId === message.id && streamState.status === 'streaming'
   const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [searchExpanded, setSearchExpanded] = useState(false)
+  const liveTextRef = useRef<HTMLDivElement>(null)
 
   const webSearch = streamState.webSearchStatus
   const showWebSearch = isStreaming && webSearch.active && webSearch.callId !== null
@@ -33,6 +34,14 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   const hasReasoning = !!reasoningMeta
   const hasSummary = hasReasoning && reasoningMeta.available && reasoningMeta.summary.length > 0
   const displaySeconds = thinkingActive ? streamState.reasoningElapsedSeconds : (hasReasoning ? Math.round(reasoningMeta.duration / 1000) : 0)
+  const reasoningLiveText = thinkingActive ? streamState.reasoningText : ''
+
+  // 思考中：实时内容增长时自动滚动到最新一行
+  useEffect(() => {
+    if (thinkingActive && liveTextRef.current) {
+      liveTextRef.current.scrollTop = liveTextRef.current.scrollHeight
+    }
+  }, [reasoningLiveText, thinkingActive])
 
   const statusBadge = message.status === 'streaming' ? '生成中...' :
     message.status === 'stopped' ? '已停止' :
@@ -74,7 +83,14 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
               </span>
             )}
           </div>
-          {hasSummary && summaryExpanded && (
+          {/* 思考中：实时展示思考内容（始终展开） */}
+          {thinkingActive && reasoningLiveText && (
+            <div className="message-thinking-content">
+              <div className="message-thinking-live-text" ref={liveTextRef}>{reasoningLiveText}</div>
+            </div>
+          )}
+          {/* 思考结束：折叠为推理摘要，点击展开 */}
+          {!thinkingActive && hasSummary && summaryExpanded && (
             <div className="message-thinking-content">
               <div className="message-thinking-summary-title">推理摘要</div>
               <ul className="message-thinking-summary-list">
@@ -97,7 +113,10 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
           </svg>
           <span className="message-web-search-query">
-            {webSearch.query ? `正在搜索：${webSearch.query}` : '正在搜索网页...'}
+            {webSearch.toolName === 'web_fetch'
+              ? (webSearch.query ? `正在读取：${webSearch.query}` : '正在读取网页...')
+              : (webSearch.query ? `正在搜索：${webSearch.query}` : '正在搜索网页...')
+            }
           </span>
         </div>
       )}
