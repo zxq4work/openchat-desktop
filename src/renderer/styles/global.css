@@ -2283,3 +2283,152 @@ textarea {
 .markdown-body .katex .mathnormal {
   color: var(--text-primary);
 }
+
+/* ========================================
+   Search Bar
+   ======================================== */
+
+.search-bar {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-color);
+  transition: var(--theme-transition);
+}
+
+.search-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  width: 100%;
+  max-width: 800px;
+}
+
+.search-bar-inner:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-ring);
+}
+
+.search-bar-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 4px 4px;
+  min-width: 0;
+}
+
+.search-bar-input::placeholder {
+  color: var(--text-muted);
+}
+
+.search-bar-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 32px;
+  text-align: center;
+}
+
+.search-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.search-bar-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.search-bar-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.search-bar-close:hover {
+  color: var(--text-primary);
+}
+
+/* ========================================
+   Search Highlight
+   ======================================== */
+
+mark.search-highlight {
+  background: #fde047;
+  color: #1a1a1a;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+mark.search-highlight-current {
+  background: #f97316;
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+html[data-theme="dark"] mark.search-highlight {
+  background: #eab308;
+  color: #1a1a1a;
+}
+
+html[data-theme="dark"] mark.search-highlight-current {
+  background: #f97316;
+  color: #fff;
+}
+
+/* ========================================
+   Context Menu
+   ======================================== */
+
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: var(--theme-transition);
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.context-menu-item:hover {
+  background: var(--bg-hover);
+}

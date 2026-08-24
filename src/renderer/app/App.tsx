@@ -356,18 +356,49 @@ export function App() {
 
   // 拦截 Ctrl/Cmd+A：仅在焦点位于可编辑输入框时允许全选，
   // 避免原生应用里出现「整页文字被选中」的 HTML 页感
+  // 拦截 Ctrl/Cmd+F：在聊天区域打开搜索栏，输入框内跳过
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isSelectAll = (e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')
-      if (!isSelectAll) return
+      const isMod = e.ctrlKey || e.metaKey
+
+      const isSelectAll = isMod && (e.key === 'a' || e.key === 'A')
+      const isFind = isMod && (e.key === 'f' || e.key === 'F')
+
+      if (!isSelectAll && !isFind) return
 
       const target = e.target as HTMLElement | null
       const editable =
         target &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
 
-      if (!editable) {
+      if (isSelectAll && !editable) {
         e.preventDefault()
+      }
+
+      if (isFind) {
+        if (editable) return
+
+        // 聊天区里的消息列表不是可聚焦元素，点击后焦点仍在 body 上，
+        // 因此这里结合 activeElement 与是否存在活跃对话来判断是否在聊天界面
+        const active = document.activeElement
+        const hasActiveConversation = !!useConversationStore.getState().activeConversationId
+        const inChatView =
+          active && active !== document.body && active !== document.documentElement
+            ? !!active.closest('.chat-view')
+            : hasActiveConversation
+
+        if (inChatView) {
+          e.preventDefault()
+          const state = useUiStore.getState()
+          if (state.searchVisible) {
+            // 搜索框已存在时：聚焦并选中已有内容
+            const input = document.querySelector<HTMLInputElement>('.search-bar-input')
+            input?.focus()
+            input?.select()
+          } else {
+            state.openSearch()
+          }
+        }
       }
     }
 

@@ -1,8 +1,9 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { MessageItem } from './MessageItem'
 import { ContextBoundary } from './ContextBoundary'
+import { MessageListContextMenu } from './MessageListContextMenu'
 
 export function MessageList() {
   const messages = useConversationStore((s) => s.activeMessages)
@@ -11,6 +12,21 @@ export function MessageList() {
   const streamStatus = useChatStreamStore((s) => s.status)
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number }>({
+    visible: false, x: 0, y: 0,
+  })
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed) return
+    e.preventDefault()
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY })
+  }, [])
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu({ visible: false, x: 0, y: 0 })
+  }, [])
 
   // 用户是否处于“贴底”状态：只有在底部附近才自动跟随滚动，否则尊重用户向上滚动阅读
   const pinnedRef = useRef(true)
@@ -74,7 +90,7 @@ export function MessageList() {
     (messages.length === 0 || messages[messages.length - 1].segmentId !== currentSegment.id)
 
   return (
-    <div className="message-list" ref={listRef}>
+    <div className="message-list" ref={listRef} onContextMenu={handleContextMenu}>
       <div ref={contentRef}>
         {messages.length === 0 && !showTrailingBoundary ? (
           <div className="messages-empty">
@@ -104,6 +120,12 @@ export function MessageList() {
           </>
         )}
       </div>
+      <MessageListContextMenu
+        visible={contextMenu.visible}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        onClose={closeContextMenu}
+      />
     </div>
   )
 }

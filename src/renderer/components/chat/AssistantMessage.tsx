@@ -54,7 +54,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   ) : null
 
   return (
-    <div className="message assistant-message">
+    <div className="message assistant-message" data-message-id={message.id}>
       <div className="message-role">
         Assistant
         {modelInfo}
