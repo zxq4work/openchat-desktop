@@ -50,11 +50,13 @@ export class ProviderConfigService {
   }
 
   private createAdapterFromConfig(config: CustomProviderConfig): ModelAdapter {
+    const toolCalling = config.toolCalling !== 'disabled'
+
     if (config.protocol === 'chat_completions') {
       return new ChatCompletionsAdapter({
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
-        toolCalling: config.toolCalling !== 'disabled',
+        toolCalling,
         chatCompletionsPath: config.chatCompletionsPath,
         extraHeaders: config.extraHeaders,
         supportsReasoning: true,
@@ -64,7 +66,7 @@ export class ProviderConfigService {
     return new ResponsesAdapter({
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
-      toolCalling: config.toolCalling !== 'disabled',
+      toolCalling,
       responsesPath: config.responsesPath,
       extraHeaders: config.extraHeaders,
       supportsReasoning: true,

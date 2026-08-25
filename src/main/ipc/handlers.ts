@@ -348,6 +348,9 @@ export function registerIpcHandlers(services: Services): void {
       case 'web-search-error':
         win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, event)
         break
+      case 'stream-reset':
+        win.webContents.send(IPC_CHANNELS.CHAT_STREAM_RESET, event)
+        break
     }
   })
 }

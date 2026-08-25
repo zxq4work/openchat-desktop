@@ -36,6 +36,7 @@ const IPC_CHANNELS = {
   CHAT_WEB_SEARCH_STARTED: 'chat:web-search-started',
   CHAT_WEB_SEARCH_COMPLETED: 'chat:web-search-completed',
   CHAT_WEB_SEARCH_ERROR: 'chat:web-search-error',
+  CHAT_STREAM_RESET: 'chat:stream-reset',
   SETTINGS_GET_PROXY: 'settings:get-proxy',
   SETTINGS_SET_PROXY: 'settings:set-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
@@ -170,6 +171,11 @@ const openchat = {
       const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
       ipcRenderer.on(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, handler)
+    },
+    onStreamReset: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.CHAT_STREAM_RESET, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.CHAT_STREAM_RESET, handler)
     },
     onNewConversation: (cb: () => void) => {
       const handler = () => cb()

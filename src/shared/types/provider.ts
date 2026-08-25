@@ -64,8 +64,7 @@ export type CanonicalModelEvent =
 
 export interface ModelAdapter {
   readonly protocol: ProviderProtocol
-  readonly supportsToolCalling: boolean
-  readonly supportsReasoning: boolean
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
   stream(
     request: CanonicalModelRequest,
     signal?: AbortSignal

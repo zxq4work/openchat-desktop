@@ -39,7 +39,7 @@ Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.`
 
 export interface StreamEvent {
-  type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error'
+  type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'stream-reset'
   conversationId?: string
   turnId?: string
   itemId?: string
@@ -73,6 +73,10 @@ export class ChatGPTConversationService {
     assistantMessageId: string | null
     abortController: AbortController | null
   } | null = null
+
+  // 缓存每个 provider 是否支持 function tools（key = providerConfigId）
+  // 首次检测到不支持后，后续请求直接走 PreSearch，不再重试
+  private providerToolsCapability = new Map<string, boolean>()
 
   private streamHandlers: Array<(event: StreamEvent) => void> = []
 
@@ -289,7 +293,7 @@ export class ChatGPTConversationService {
 
     // 自定义服务：若 adapter 不支持推理，清除 effort 避免 400
     const adapter = this.resolveAdapter(conversation.providerConfigId)
-    if (!adapter.supportsReasoning && effort) {
+    if (!adapter.capabilities.reasoning && effort) {
       effort = null
     }
 
@@ -382,6 +386,22 @@ export class ChatGPTConversationService {
     return new ChatGPTCodexAdapter(this.codexClient)
   }
 
+  // 检测 API 返回的错误是否表示不支持 tools
+  private isToolsUnsupportedError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
+    return (
+      msg.includes('unsupported tool') ||
+      msg.includes('unsupported_tools') ||
+      msg.includes('invalid parameter tools') ||
+      msg.includes('tools is not supported') ||
+      msg.includes('tools not supported') ||
+      msg.includes('unknown parameter: tools') ||
+      msg.includes('unknown parameter : tools') ||
+      msg.includes('built-in web_search_call') ||
+      msg.includes('400') && (msg.includes('tool') || msg.includes('tools'))
+    )
+  }
+
   private async runGeneration(
     conversationId: string,
     systemPrompt: string,
@@ -421,15 +441,37 @@ export class ChatGPTConversationService {
       const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
 
       if (webSearchEnabled) {
-        if (adapter.supportsToolCalling) {
-          await this.runGenerationWithTools(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
-          )
-        } else {
-          await this.runGenerationWithPreSearch(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
-          )
+        const cacheKey = providerConfigId ?? 'codex-default'
+        const cachedCapability = this.providerToolsCapability.get(cacheKey)
+        console.log('[Tool Capability] protocol=', adapter.protocol, 'toolCalling=', adapter.capabilities.toolCalling, 'cached=', cachedCapability)
+
+        // 已缓存为不支持 tools 的 provider，直接走 PreSearch
+        if (cachedCapability !== false && adapter.capabilities.toolCalling) {
+          console.log('[Tool Decision] mode=tools')
+          try {
+            await this.runGenerationWithTools(
+              conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+            )
+            return
+          } catch (err) {
+            if (this.isToolsUnsupportedError(err)) {
+              console.log('[Tool Fallback] reason=unsupported_tools cacheKey=', cacheKey)
+              this.providerToolsCapability.set(cacheKey, false)
+              adapter.capabilities.toolCalling = false
+              // 清除已累积的错误文本（模型输出 <tool_call> 原始文本），让 PreSearch 重新流式
+              this.messages.updateContent(assistantMessageId, '')
+              this.emitStreamEvent({ type: 'stream-reset', conversationId })
+              // 重新设置 streaming 状态（runGenerationWithTools 可能已改为 completed/error）
+              this.messages.updateStatus(assistantMessageId, 'streaming')
+            } else {
+              throw err
+            }
+          }
         }
+        console.log('[Tool Decision] mode=presearch')
+        await this.runGenerationWithPreSearch(
+          conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+        )
       } else {
         await this.runGenerationDirect(
           conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
@@ -561,6 +603,12 @@ export class ChatGPTConversationService {
 
     const result = await controller.run(request, abortController.signal, callbacks)
 
+    // 检测模型是否以原始文本输出 <tool_call>（部分 Responses API 不支持 function calling）
+    const rawToolCallPattern = /<tool_call>\s*\{[\s\S]*?\}\s*<\/tool_call>/i
+    if (result.totalToolCalls === 0 && rawToolCallPattern.test(result.finalText)) {
+      throw new Error('unsupported_tools: model outputs raw <tool_call> text instead of function_call events')
+    }
+
     this.messages.updateContent(assistantMessageId, result.finalText)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
@@ -600,7 +648,7 @@ export class ChatGPTConversationService {
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
   }
 
-  // PreSearch Mode：不支持 tool calling 时，预搜索并注入上下文
+  // PreSearch Mode：不支持 tool calling 时，先让模型提取搜索 query，再搜索并注入上下文
   private async runGenerationWithPreSearch(
     conversationId: string,
     adapter: ModelAdapter,
@@ -611,19 +659,47 @@ export class ChatGPTConversationService {
     userText: string,
     abortController: AbortController
   ): Promise<void> {
+    // Step 1: 让模型提取搜索 query（此时已显示搜索中状态）
     this.emitStreamEvent({
       type: 'web-search-started',
       conversationId,
       toolCallId: 'pre-search',
       toolCallName: 'web_search',
-      toolCallArgs: JSON.stringify({ query: userText.slice(0, 500) }),
+      toolCallArgs: JSON.stringify({ query: '正在分析搜索词...' }),
+    })
+
+    const searchQuery = await this.extractSearchQuery(adapter, modelId, userText, abortController)
+    console.log('[PreSearch] extracted query=', searchQuery)
+
+    // 更新搜索 query 为实际值
+    this.emitStreamEvent({
+      type: 'web-search-started',
+      conversationId,
+      toolCallId: 'pre-search',
+      toolCallName: 'web_search',
+      toolCallArgs: JSON.stringify({ query: searchQuery }),
     })
 
     let searchContext = ''
     try {
-      const results = await this.webSearchService.search(userText.slice(0, 500), abortController.signal)
+      const results = await this.webSearchService.search(searchQuery, abortController.signal)
+      console.log('[PreSearch] query=', searchQuery)
+      console.log('[PreSearch] results count=', results.length)
+      for (const r of results) {
+        console.log(`[PreSearch]   [${r.index}] ${r.title}`)
+        console.log(`[PreSearch]        url: ${r.url}`)
+        console.log(`[PreSearch]        snippet: ${r.snippet}`)
+      }
       if (results.length > 0) {
-        const lines = ['Web search results retrieved by OpenChat:', '']
+        const lines = [
+          `You searched the web for: "${searchQuery}"`,
+          'The search results are below. Present them as your own findings.',
+          'Do NOT say "you provided" or "you searched" — you performed the search yourself.',
+          'Do NOT output any function calling syntax (e.g., <tool_call>, <function>, <openchat_web_search>).',
+          '',
+          'Web search results:',
+          '',
+        ]
         for (const r of results) {
           lines.push(`[${r.index}]`)
           lines.push(`Title: ${r.title}`)
@@ -633,7 +709,6 @@ export class ChatGPTConversationService {
         }
         lines.push('Use these results only when relevant.')
         lines.push('Cite the source URL when relying on a result.')
-        lines.push('Do not claim access to information beyond the supplied search results.')
         searchContext = lines.join('\n')
       }
       this.emitStreamEvent({
@@ -652,13 +727,59 @@ export class ChatGPTConversationService {
     }
 
     const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+
+    // Responses 协议优先使用 developer message 注入搜索上下文
+    if (searchContext && adapter.protocol === 'responses') {
+      const request = this.buildCanonicalRequestWithDeveloper(
+        modelId, instructions, searchContext, segmentId, effort
+      )
+      await this.runGenerationDirectStream(
+        conversationId, adapter, request, assistantMessageId, abortController
+      )
+      return
+    }
+
     const fullInstructions = searchContext
-      ? instructions + '\n\n' + SEARCH_INSTRUCTIONS + '\n\n' + searchContext
+      ? instructions + '\n\n' + searchContext
       : instructions
 
     await this.runGenerationDirect(
       conversationId, adapter, modelId, fullInstructions, effort, assistantMessageId, segmentId, abortController
     )
+  }
+
+  // 让模型从用户消息中提取搜索 query（简短调用，非流式采集）
+  private async extractSearchQuery(
+    adapter: ModelAdapter,
+    modelId: string,
+    userText: string,
+    abortController: AbortController
+  ): Promise<string> {
+    const prompt = `Extract the best web search query from the following user message. Output ONLY the search query, nothing else. Do NOT think, reason, or explain — just output the query directly.
+User message: ${userText}`
+    const request: CanonicalModelRequest = {
+      model: modelId,
+      systemPrompt: 'You are a search query extractor. Output only the search query. No thinking, no reasoning, no explanation.',
+      messages: [{ role: 'user', content: prompt }],
+      reasoningEffort: 'none',
+    }
+    console.log('[PreSearch] extractQuery request:', JSON.stringify(request))
+    let query = ''
+    try {
+      for await (const event of adapter.stream(request, abortController.signal)) {
+        if (event.type === 'delta') {
+          query += event.text
+        }
+        if (event.type === 'turn_completed' || event.type === 'error') {
+          break
+        }
+      }
+    } catch {
+      // 模型提取失败，fallback 到用户原文
+    }
+    console.log('[PreSearch] extractQuery response:', query)
+    const cleaned = query.trim().slice(0, 500)
+    return cleaned || userText.slice(0, 500)
   }
 
   // 直接调用模型（无工具）
@@ -673,19 +794,74 @@ export class ChatGPTConversationService {
     abortController: AbortController
   ): Promise<void> {
     const request = this.buildCanonicalRequest(modelId, instructions, segmentId, '', effort)
+    await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
+  }
 
+  // 使用已构造好的 request 执行流式生成（复用 runGenerationDirect 的流处理逻辑）
+  private async runGenerationDirectStream(
+    conversationId: string,
+    adapter: ModelAdapter,
+    request: CanonicalModelRequest,
+    assistantMessageId: string,
+    abortController: AbortController
+  ): Promise<void> {
     let accumulatedContent = ''
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
+    // 部分 Responses API 不支持 function calling，会以原始文本输出 <tool_call>，流式阶段需剥离
+    let toolCallTextActive = false
+    let toolCallTextBuffer = ''
+
+    const sanitizeDelta = (rawText: string): string => {
+      let out = ''
+      let buf = toolCallTextBuffer
+      let active = toolCallTextActive
+      let i = 0
+      const lower = rawText.toLowerCase()
+      const startTag = '<tool_call>'
+      const endTag = '</tool_call>'
+
+      while (i < rawText.length) {
+        if (!active) {
+          const startIdx = lower.indexOf(startTag, i)
+          if (startIdx === -1) {
+            out += rawText.slice(i)
+            break
+          }
+          out += rawText.slice(i, startIdx)
+          active = true
+          buf = ''
+          i = startIdx + startTag.length
+        } else {
+          const endIdx = lower.indexOf(endTag, i)
+          if (endIdx === -1) {
+            buf += rawText.slice(i)
+            i = rawText.length
+            break
+          }
+          // 找到结束标签，丢弃整个 <tool_call> 块
+          active = false
+          buf = ''
+          i = endIdx + endTag.length
+        }
+      }
+      toolCallTextBuffer = buf
+      toolCallTextActive = active
+      return out
+    }
 
     for await (const event of adapter.stream(request, abortController.signal)) {
       switch (event.type) {
-        case 'delta':
-          accumulatedContent += event.text
-          this.messages.updateContent(assistantMessageId, accumulatedContent)
-          this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.text })
+        case 'delta': {
+          const cleanText = sanitizeDelta(event.text)
+          if (cleanText) {
+            accumulatedContent += cleanText
+            this.messages.updateContent(assistantMessageId, accumulatedContent)
+            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
+          }
           break
+        }
 
         case 'turn_started':
           providerTurnId = event.turnId ?? null
@@ -712,7 +888,7 @@ export class ChatGPTConversationService {
           const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(event.summary ?? [])]
           const meta = {
             duration: totalReasoningDuration,
-            effort: effort || '',
+            effort: request.reasoningEffort || '',
             summary: accumulatedSummary,
             available: accumulatedSummary.length > 0,
           }
@@ -822,6 +998,41 @@ export class ChatGPTConversationService {
     }
   }
 
+  // 为 Responses 协议构建带 developer message 的请求（搜索上下文注入为 developer role）
+  private buildCanonicalRequestWithDeveloper(
+    modelId: string,
+    instructions: string,
+    searchContext: string,
+    segmentId: string,
+    effort: string
+  ): CanonicalModelRequest {
+    const segmentMessages = this.messages.getBySegmentId(segmentId)
+    const messages: CanonicalMessage[] = []
+
+    // 搜索上下文作为 developer message 注入（Responses API 优先级高于 system）
+    messages.push({ role: 'developer', content: searchContext })
+
+    for (const msg of segmentMessages) {
+      if (msg.status !== 'completed') continue
+      if (msg.role === 'user') {
+        if (msg.content) messages.push({ role: 'user', content: msg.content })
+        continue
+      }
+      if (msg.role === 'assistant') {
+        const assistantMsg: CanonicalMessage = { role: 'assistant' }
+        if (msg.content) assistantMsg.content = msg.content
+        if (assistantMsg.content) messages.push(assistantMsg)
+      }
+    }
+
+    return {
+      model: modelId,
+      systemPrompt: instructions,
+      messages,
+      ...(effort ? { reasoningEffort: effort } : {}),
+    }
+  }
+
   async interrupt(): Promise<void> {
     if (!this.activeGeneration) return
 
@@ -862,7 +1073,7 @@ export class ChatGPTConversationService {
     // 切换到自定义服务时，清除可能残留的 Codex 推理等级，避免 400
     if (providerConfigId) {
       const adapter = this.providerConfigService.getAdapter(providerConfigId)
-      if (!adapter.supportsReasoning) {
+      if (!adapter.capabilities.reasoning) {
         this.conversations.updateEffort(id, '')
       }
     }

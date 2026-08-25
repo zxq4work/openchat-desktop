@@ -13,8 +13,7 @@ import type {
 
 export class ChatGPTCodexAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chatgpt_codex'
-  readonly supportsToolCalling = true
-  readonly supportsReasoning = true
+  readonly capabilities = { toolCalling: true, reasoning: true }
 
   private codexClient: ChatGPTCodexClient
 

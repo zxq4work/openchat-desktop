@@ -38,8 +38,7 @@ interface ResponsesRequest {
 
 export class ResponsesAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'responses'
-  readonly supportsToolCalling: boolean
-  readonly supportsReasoning: boolean
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
 
   private baseUrl: string
   private apiKey: string
@@ -56,8 +55,7 @@ export class ResponsesAdapter implements ModelAdapter {
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '')
     this.apiKey = config.apiKey
-    this.supportsToolCalling = config.toolCalling
-    this.supportsReasoning = config.supportsReasoning ?? false
+    this.capabilities = { toolCalling: config.toolCalling, reasoning: config.supportsReasoning ?? false }
     // 如果 baseUrl 已以 /v1 结尾，则使用短路径，否则用完整路径
     if (config.responsesPath) {
       this.responsesPath = config.responsesPath
@@ -84,6 +82,10 @@ export class ResponsesAdapter implements ModelAdapter {
     const functionCallArgs = new Map<string, { name: string; arguments: string }>()
     // 记录 output_item.done 中的完整 function_call（以最终完整 item 为准）
     const completedCalls = new Map<string, CanonicalToolCall>()
+    // 推理阶段追踪
+    let reasoningActive = false
+    let reasoningAccum = ''
+    const completedReasoningItems = new Set<string>()
 
     for await (const event of this.streamRequest(url, body, signal)) {
       if (event === '[DONE]') return
@@ -106,7 +108,40 @@ export class ResponsesAdapter implements ModelAdapter {
 
           case 'response.reasoning_text.delta': {
             const delta = parsed.delta as string
-            if (delta) yield { type: 'reasoning_started', itemId: parsed.item_id as string }
+            if (!delta) break
+            if (!reasoningActive) {
+              reasoningActive = true
+              yield { type: 'reasoning_started', itemId: parsed.item_id as string }
+            }
+            reasoningAccum += delta
+            yield { type: 'reasoning_delta', text: delta }
+            break
+          }
+
+          case 'response.reasoning_summary_text.delta': {
+            const delta = parsed.delta as string
+            if (!delta) break
+            if (!reasoningActive) {
+              reasoningActive = true
+              yield { type: 'reasoning_started', itemId: parsed.item_id as string }
+            }
+            reasoningAccum += delta
+            yield { type: 'reasoning_delta', text: delta }
+            break
+          }
+
+          case 'response.reasoning_text.done':
+          case 'response.reasoning_summary_text.done': {
+            const itemId = parsed.item_id as string
+            if (completedReasoningItems.has(itemId)) break
+            completedReasoningItems.add(itemId)
+            reasoningActive = false
+            const summary = reasoningAccum
+              .split('\n')
+              .map((l) => l.trim())
+              .filter((l) => l.length > 0)
+            yield { type: 'reasoning_completed', itemId, summary: summary.length > 0 ? summary : (reasoningAccum.trim() ? [reasoningAccum.trim()] : []) }
+            reasoningAccum = ''
             break
           }
 
@@ -127,8 +162,41 @@ export class ResponsesAdapter implements ModelAdapter {
             break
           }
 
+          case 'response.output_item.added': {
+            const item = parsed.item as { type?: string; call_id?: string; name?: string; id?: string }
+            // 千问等模型可能忽略 function tools 改用内置 web_search_call
+            // 此时发出错误以触发上层 fallback 到 PreSearch
+            if (item?.type === 'web_search_call') {
+              yield {
+                type: 'error',
+                code: 'UNSUPPORTED_TOOLS',
+                message: 'Model uses built-in web_search_call instead of function tools',
+              }
+              break
+            }
+            if (item?.type === 'function_call' && item.id && item.name) {
+              // 预登记 function_call 名称，delta 阶段只有 arguments 没有 name
+              const existing = functionCallArgs.get(item.id) ?? { name: '', arguments: '' }
+              existing.name = item.name
+              functionCallArgs.set(item.id, existing)
+            }
+            break
+          }
+
           case 'response.output_item.done': {
-            const item = parsed.item as { type?: string; call_id?: string; name?: string; arguments?: string }
+            const item = parsed.item as { type?: string; call_id?: string; name?: string; arguments?: string; id?: string }
+            if (item?.type === 'reasoning' && item.id) {
+              if (!completedReasoningItems.has(item.id)) {
+                completedReasoningItems.add(item.id)
+                reasoningActive = false
+                const summary = reasoningAccum
+                  .split('\n')
+                  .map((l) => l.trim())
+                  .filter((l) => l.length > 0)
+                yield { type: 'reasoning_completed', itemId: item.id, summary: summary.length > 0 ? summary : (reasoningAccum.trim() ? [reasoningAccum.trim()] : []) }
+                reasoningAccum = ''
+              }
+            }
             if (item?.type === 'function_call' && item.call_id) {
               completedCalls.set(item.call_id, {
                 id: item.call_id,
@@ -140,6 +208,16 @@ export class ResponsesAdapter implements ModelAdapter {
           }
 
           case 'response.completed': {
+            // 若推理阶段仍在进行（未收到 done 事件），补发 reasoning_completed
+            if (reasoningActive) {
+              reasoningActive = false
+              const summary = reasoningAccum
+                .split('\n')
+                .map((l) => l.trim())
+                .filter((l) => l.length > 0)
+              yield { type: 'reasoning_completed', summary: summary.length > 0 ? summary : (reasoningAccum.trim() ? [reasoningAccum.trim()] : []) }
+              reasoningAccum = ''
+            }
             // 发出所有已完成的 function calls
             for (const [, tc] of completedCalls) {
               if (tc.id && tc.name) {

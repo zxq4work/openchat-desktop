@@ -223,6 +223,17 @@ export function App() {
       })
     })
 
+    window.openchat.events.onStreamReset((event: unknown) => {
+      const e = event as { conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      // 清除 ToolLoop 错误文本，准备 PreSearch 重新流式
+      accumulatedText = ''
+      pendingDeltas.length = 0
+      useChatStreamStore.getState().setBufferedText('')
+    })
+
     window.openchat.events.onChatError((event: unknown) => {
       const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
       const streamingId = useChatStreamStore.getState().streamingConversationId

@@ -47,6 +47,10 @@ export class WebSearchTool implements OpenChatTool {
     try {
       const results = await this.searchService.search(query, context.signal)
       console.log('[Web Search Result] count=', results.length)
+      for (const r of results) {
+        console.log(`[Web Search]   [${r.index}] ${r.title}`)
+        console.log(`[Web Search]        url: ${r.url}`)
+      }
 
       const output: { query: string; results: SearchResultItem[] } = {
         query,

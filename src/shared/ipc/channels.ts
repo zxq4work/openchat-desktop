@@ -41,6 +41,7 @@ export const IPC_CHANNELS = {
   CHAT_WEB_SEARCH_STARTED: 'chat:web-search-started',
   CHAT_WEB_SEARCH_COMPLETED: 'chat:web-search-completed',
   CHAT_WEB_SEARCH_ERROR: 'chat:web-search-error',
+  CHAT_STREAM_RESET: 'chat:stream-reset',
 
   // Settings
   SETTINGS_GET_PROXY: 'settings:get-proxy',

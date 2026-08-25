@@ -50,8 +50,7 @@ interface ChatCompletionRequest {
 
 export class ChatCompletionsAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chat_completions'
-  readonly supportsToolCalling: boolean
-  readonly supportsReasoning: boolean
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
 
   private baseUrl: string
   private apiKey: string
@@ -68,8 +67,7 @@ export class ChatCompletionsAdapter implements ModelAdapter {
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '')
     this.apiKey = config.apiKey
-    this.supportsToolCalling = config.toolCalling
-    this.supportsReasoning = config.supportsReasoning ?? false
+    this.capabilities = { toolCalling: config.toolCalling, reasoning: config.supportsReasoning ?? false }
     // 如果 baseUrl 已以 /v1 结尾，则使用短路径，否则用完整路径
     if (config.chatCompletionsPath) {
       this.chatCompletionsPath = config.chatCompletionsPath

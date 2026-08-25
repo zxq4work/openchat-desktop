@@ -11,6 +11,7 @@ const MAX_RESULTS = 10
 export class BingHtmlSearchEngine implements SearchEngine {
   async search(query: string, signal?: AbortSignal): Promise<SearchResultItem[]> {
     const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}`
+    console.log('[BingSearch] request url=', url)
     const html = await this.fetchHtml(url, signal)
     return this.parseResults(html)
   }
