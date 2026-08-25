@@ -31,14 +31,22 @@ export function Sidebar() {
   }, [setSummaries])
 
   const handleNewConversation = useCallback(async () => {
-    const defaultModel = models.length > 0 ? models[0].id : null
-    const defaultEffort = models.length > 0 && models[0].defaultReasoningEffort
-      ? models[0].defaultReasoningEffort
-      : models.length > 0 && models[0].supportedReasoningEfforts.length > 0
-        ? models[0].supportedReasoningEfforts[0].reasoningEffort
-        : null
+    const saved = await window.openchat.settings.getDefaultModel()
 
-    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort)
+    let defaultModel = saved.modelId
+    let defaultEffort = saved.effort
+
+    if (!defaultModel && models.length > 0) {
+      defaultModel = models[0].id
+    }
+    if (!defaultEffort && models.length > 0) {
+      defaultEffort = models[0].defaultReasoningEffort
+        ?? (models[0].supportedReasoningEfforts.length > 0
+          ? models[0].supportedReasoningEfforts[0].reasoningEffort
+          : null)
+    }
+
+    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
     if (conv) {
       const list = await window.openchat.conversations.list()
       setSummaries(list)

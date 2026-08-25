@@ -376,6 +376,13 @@ export function App() {
       }
 
       if (isFind) {
+        // 焦点已在搜索输入框内：全选内容，阻止浏览器默认行为
+        if (target?.classList.contains('search-bar-input')) {
+          e.preventDefault()
+          target.select()
+          return
+        }
+
         if (editable) return
 
         // 聊天区里的消息列表不是可聚焦元素，点击后焦点仍在 body 上，
@@ -407,15 +414,23 @@ export function App() {
   }, [])
 
   const handleNewConversation = useCallback(async () => {
+    const saved = await window.openchat.settings.getDefaultModel()
     const models = useModelStore.getState().models
-    const defaultModel = models.length > 0 ? models[0].id : null
-    const defaultEffort = models.length > 0 && models[0].defaultReasoningEffort
-      ? models[0].defaultReasoningEffort
-      : models.length > 0 && models[0].supportedReasoningEfforts.length > 0
-        ? models[0].supportedReasoningEfforts[0].reasoningEffort
-        : null
 
-    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort)
+    let defaultModel = saved.modelId
+    let defaultEffort = saved.effort
+
+    if (!defaultModel && models.length > 0) {
+      defaultModel = models[0].id
+    }
+    if (!defaultEffort && models.length > 0) {
+      defaultEffort = models[0].defaultReasoningEffort
+        ?? (models[0].supportedReasoningEfforts.length > 0
+          ? models[0].supportedReasoningEfforts[0].reasoningEffort
+          : null)
+    }
+
+    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
     if (conv) {
       const summaries = await window.openchat.conversations.list()
       useConversationStore.getState().setSummaries(summaries)

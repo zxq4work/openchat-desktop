@@ -43,7 +43,7 @@ interface Services {
   conversationService: {
     listConversations: () => Conversation[]
     getConversation: (id: string) => { conversation: Conversation; segments: ContextSegment[]; messages: Message[] } | null
-    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string) => Conversation
+    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null) => Conversation
     renameConversation: (id: string, title: string) => void
     removeConversation: (id: string) => Promise<void>
     updateRole: (id: string, prompt: string) => void
@@ -129,9 +129,31 @@ export function registerIpcHandlers(services: Services): void {
     }
   })
 
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_PROXY, (_event, config: ProxyConfig): void => {
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_PROXY, async (_event, config: ProxyConfig): Promise<void> => {
     services.settingsRepository?.set('proxy_config', JSON.stringify(config))
     setProxyConfig(config)
+
+    // 开启代理且 ChatGPT 已登录时，主动执行一次 codex 额度查询
+    if (config.enabled) {
+      const auth = await services.authService?.checkAuth()
+      if (auth?.loggedIn) {
+        void services.usageService?.refresh()
+      }
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_DEFAULT_MODEL, (): { providerId: string | null; modelId: string | null; effort: string | null } => {
+    const raw = services.settingsRepository?.get('default_model') ?? null
+    if (!raw) return { providerId: null, modelId: null, effort: null }
+    try {
+      return JSON.parse(raw) as { providerId: string | null; modelId: string | null; effort: string | null }
+    } catch {
+      return { providerId: null, modelId: null, effort: null }
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, (_event, providerId: string | null, modelId: string | null, effort: string | null): void => {
+    services.settingsRepository?.set('default_model', JSON.stringify({ providerId, modelId, effort }))
   })
 
   // ===== Auth =====
@@ -177,8 +199,8 @@ export function registerIpcHandlers(services: Services): void {
     return services.conversationService?.getConversation(id) ?? null
   })
 
-  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string): Conversation | null => {
-    return services.conversationService?.createConversation(modelId, effort, systemPrompt) ?? null
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null): Conversation | null => {
+    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId) ?? null
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_RENAME, (_event, id: string, title: string): void => {

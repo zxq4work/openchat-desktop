@@ -1311,6 +1311,7 @@ textarea {
 
 .settings-dialog {
   position: relative;
+  width: 560px;
   max-height: calc(100vh - 80px);
   display: flex;
   flex-direction: column;
@@ -1695,6 +1696,45 @@ textarea {
 .proxy-settings {
   font-size: 13px;
 }
+
+/* ========================================
+   Default Model Settings
+   ======================================== */
+
+.default-model-settings {
+  font-size: 13px;
+}
+
+.default-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.default-model-label {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.default-model-dropdown {
+  max-width: 240px;
+}
+
+.default-model-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+/* ========================================
+   Proxy
+   ======================================== */
 
 .proxy-form {
   margin-top: 12px;
@@ -2375,14 +2415,16 @@ mark.search-highlight {
   background: #fde047;
   color: #1a1a1a;
   border-radius: 2px;
-  padding: 0 1px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 mark.search-highlight-current {
   background: #f97316;
   color: #fff;
   border-radius: 2px;
-  padding: 0 1px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 html[data-theme="dark"] mark.search-highlight {

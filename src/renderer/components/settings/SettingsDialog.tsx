@@ -4,6 +4,7 @@ import { useThemeStore, type ThemeMode } from '../../stores/themeStore'
 import { AccountPanel } from './AccountPanel'
 import { ProxySettings } from './ProxySettings'
 import { ProviderSettings } from './ProviderSettings'
+import { DefaultModelSettings } from './DefaultModelSettings'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -50,6 +51,13 @@ export function SettingsDialog() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-section">
+            <h4>默认模型</h4>
+            <DefaultModelSettings />
           </div>
 
           <div className="settings-section-divider" />

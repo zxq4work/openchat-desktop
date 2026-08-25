@@ -140,7 +140,7 @@ export class ChatGPTConversationService {
     return { conversation, segments, messages }
   }
 
-  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = ''): Conversation {
+  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
     const segmentId = randomUUID()
@@ -155,7 +155,7 @@ export class ChatGPTConversationService {
       currentSegmentId: segmentId,
       useModelInstructions: true,
       webSearchEnabled: false,
-      providerConfigId: null,
+      providerConfigId,
       createdAt: now,
       updatedAt: now,
     }

@@ -38,6 +38,8 @@ const IPC_CHANNELS = {
   CHAT_WEB_SEARCH_ERROR: 'chat:web-search-error',
   SETTINGS_GET_PROXY: 'settings:get-proxy',
   SETTINGS_SET_PROXY: 'settings:set-proxy',
+  SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
+  SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -70,8 +72,8 @@ const openchat = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_GET, id),
-    create: (modelId: string | null, effort: string | null, systemPrompt?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt),
+    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId),
     rename: (id: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_RENAME, id, title),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE, id),
@@ -99,6 +101,9 @@ const openchat = {
     getProxy: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_PROXY),
     setProxy: (config: { enabled: boolean; protocol: string; host: string; port: string; username: string; password: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_PROXY, config),
+    getDefaultModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_DEFAULT_MODEL) as Promise<{ providerId: string | null; modelId: string | null; effort: string | null }>,
+    setDefaultModel: (providerId: string | null, modelId: string | null, effort: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, providerId, modelId, effort),
   },
 
   providers: {

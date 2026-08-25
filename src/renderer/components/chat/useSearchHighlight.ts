@@ -2,6 +2,10 @@ import { useEffect, useRef } from 'react'
 import { useUiStore, type SearchMatch } from '../../stores/uiStore'
 
 let isApplying = false
+let isSelecting = false
+
+document.addEventListener('mousedown', () => { isSelecting = true })
+document.addEventListener('mouseup', () => { isSelecting = false })
 
 function clearHighlights(root: HTMLElement): void {
   const marks = root.querySelectorAll('mark.search-highlight')
@@ -118,7 +122,7 @@ export function useSearchHighlight(): void {
     let pending = false
 
     observerRef.current = new MutationObserver(() => {
-      if (isApplying) return
+      if (isApplying || isSelecting) return
       const state = useUiStore.getState()
       if (!state.searchQuery || pending) return
       pending = true
