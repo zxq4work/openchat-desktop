@@ -7,7 +7,7 @@ interface Props {
 
 export function UserMessage({ message }: Props) {
   return (
-    <div className="message user-message">
+    <div className="message user-message" data-message-id={message.id}>
       <div className="message-role">用户</div>
       <div className="message-content">{message.content}</div>
     </div>

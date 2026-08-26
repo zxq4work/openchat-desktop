@@ -83,6 +83,8 @@ export class ConversationService {
       defaultReasoningEffort: null,
       currentSegmentId: '',
       useModelInstructions: true,
+      webSearchEnabled: false,
+      providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
     }))
@@ -102,7 +104,12 @@ export class ConversationService {
     return { conversation, segments, messages }
   }
 
-  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = ''): Conversation {
+  createConversation(
+    defaultModelId: string | null,
+    defaultReasoningEffort: string | null,
+    systemPrompt = '',
+    providerConfigId: string | null = null
+  ): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
     const segmentId = randomUUID()
@@ -116,6 +123,8 @@ export class ConversationService {
       defaultReasoningEffort,
       currentSegmentId: segmentId,
       useModelInstructions: true,
+      webSearchEnabled: false,
+      providerConfigId,
       createdAt: now,
       updatedAt: now,
     }
@@ -214,6 +223,16 @@ export class ConversationService {
     await this.storage.save()
   }
 
+  async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
+    this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
+    await this.storage.save()
+  }
+
+  async updateProviderConfig(id: string, providerConfigId: string | null): Promise<void> {
+    this.conversations.updateProviderConfigId(id, providerConfigId)
+    await this.storage.save()
+  }
+
   newTopic(id: string): ContextSegment | null {
     const conversation = this.conversations.getById(id)
     if (!conversation) return null
@@ -238,7 +257,7 @@ export class ConversationService {
     return newSegment
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<void> {
+  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message } | null> {
     if (this.activeGeneration) {
       throw new Error('已有正在进行的生成')
     }
@@ -266,7 +285,7 @@ export class ConversationService {
           errorCode: 'ThreadStartFailed',
           errorMessage: err instanceof Error ? err.message : String(err),
         })
-        return
+        return null
       }
     }
 
@@ -279,6 +298,7 @@ export class ConversationService {
       role: 'user',
       content: text,
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -306,6 +326,7 @@ export class ConversationService {
       role: 'assistant',
       content: '',
       reasoningMeta: null,
+      webSearchResults: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -338,6 +359,7 @@ export class ConversationService {
       this.activeGeneration.turnId = turnId
       this.messages.updateProviderIds(assistantMessage.id, turnId, '')
       this.messages.updateStatus(assistantMessage.id, 'streaming')
+      return { userMessage, assistantMessage }
     } catch (err) {
       this.messages.updateError(
         assistantMessage.id,
@@ -351,6 +373,7 @@ export class ConversationService {
         errorCode: 'TurnStartFailed',
         errorMessage: err instanceof Error ? err.message : String(err),
       })
+      return null
     }
   }
 

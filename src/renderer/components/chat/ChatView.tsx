@@ -1,10 +1,20 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
+import { useUiStore } from '../../stores/uiStore'
 import { MessageList } from './MessageList'
 import { Composer } from '../composer/Composer'
+import { SearchBar } from './SearchBar'
 
 export function ChatView() {
   const activeConversation = useConversationStore((s) => s.activeConversation)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const searchVisible = useUiStore((s) => s.searchVisible)
+  const closeSearch = useUiStore((s) => s.closeSearch)
+
+  // 切换对话时关闭搜索栏
+  useEffect(() => {
+    closeSearch()
+  }, [activeConversationId, closeSearch])
 
   if (!activeConversation) {
     return (
@@ -22,6 +32,7 @@ export function ChatView() {
       <div className="chat-header">
         <span className="chat-title">{activeConversation.title}</span>
       </div>
+      {searchVisible && <SearchBar />}
       <MessageList />
       <Composer />
     </div>
