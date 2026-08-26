@@ -7,6 +7,8 @@ export interface Conversation {
   defaultReasoningEffort: string | null
   currentSegmentId: string
   useModelInstructions: boolean
+  webSearchEnabled: boolean
+  providerConfigId: string | null
   createdAt: number
   updatedAt: number
 }
@@ -49,6 +51,12 @@ export interface ReasoningMeta {
   available: boolean
 }
 
+export interface WebSearchResultItem {
+  title: string | null
+  url: string | null
+  snippet: string | null
+}
+
 export interface Message {
   id: string
   conversationId: string
@@ -56,6 +64,7 @@ export interface Message {
   role: 'user' | 'assistant'
   content: string
   reasoningMeta: ReasoningMeta | null
+  webSearchResults: WebSearchResultItem[] | null
   status: MessageStatus
   modelId: string | null
   reasoningEffort: string | null

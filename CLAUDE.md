@@ -62,7 +62,23 @@ src/
 │   │   ├── ContextSegmentRepository.ts
 │   │   ├── MessageRepository.ts
 │   │   ├── SettingsRepository.ts
-│   │   └── ModelCacheRepository.ts
+│   │   ├── ModelCacheRepository.ts
+│   │   └── ProviderConfigRepository.ts  # 自定义 Provider 配置持久化
+│   ├── providers/              # 协议适配层（Chat Completions / Responses / Codex）
+│   │   ├── ModelAdapter.ts     # 接口定义在 shared/types/provider.ts
+│   │   ├── ChatCompletionsAdapter.ts  # /v1/chat/completions SSE
+│   │   ├── ResponsesAdapter.ts        # /v1/responses SSE
+│   │   ├── ChatGPTCodexAdapter.ts     # ChatGPT Codex 原生协议
+│   │   ├── ProviderConfigService.ts   # Provider CRUD + Adapter 工厂
+│   │   └── SSEParser.ts
+│   ├── tools/                  # 工具系统（Agentic Tool Calling）
+│   │   ├── ToolRegistry.ts     # 工具注册表
+│   │   ├── ToolLoopController.ts  # 多轮 Tool Calling 循环
+│   │   ├── WebSearchTool.ts    # web_search 工具定义 + 执行
+│   │   └── WebFetchTool.ts     # web_fetch 工具定义 + 执行
+│   ├── web-search/             # 搜索引擎
+│   │   ├── WebSearchService.ts # 搜索缓存 + 结果清洗
+│   │   └── BingHtmlSearchEngine.ts  # Bing HTML 爬取解析
 │   ├── conversation/
 │   │   └── ConversationService.ts  # AppServer 模式下的会话服务
 │   └── openai/
@@ -167,6 +183,78 @@ src/
 ## 待完成任务
 - 实现 Markdown 流式渲染优化
 - 验证 typecheck/build/test 全量通过
+- Bing 搜索结果相关性排查：当前无 User-Agent 请求可能被 Bing 返回泛化/兜底结果，需验证实际返回的标题与查询关键词关联度
+
+## Web Search 架构
+
+### 三种搜索路径
+
+```
+用户消息 → webSearchEnabled?
+  ├─ false → runGenerationDirect (无工具，直接流式生成)
+  └─ true  → 检查 provider 能力缓存
+       ├─ 已缓存为不支持 tools → PreSearch 模式
+       └─ 未缓存/支持 tools → ToolLoop 模式
+            ├─ 成功 → 模型自主决定是否调用 web_search
+            └─ 抛出 unsupported_tools 错误 → 缓存 provider → PreSearch 回退
+```
+
+### ToolLoop 模式（Chat Completions + 支持 tools 的 Responses）
+
+1. 在 system prompt 末尾追加 `SEARCH_INSTRUCTIONS`（`ChatGPTConversationService.ts:27-39`）
+2. 请求携带 `tools: [web_search, web_fetch]` + `tool_choice: 'auto'`
+3. `ToolLoopController` 多轮循环（最多 4 轮），每轮：
+   - 流式消费模型输出，收集 `tool_call` 事件
+   - 无 tool_call → 模型直接回答，退出循环
+   - 有 tool_call → 执行工具，结果追加到 messages，下一轮
+4. 模型**自主决定**是否调用 `web_search`，"刚刚搜索结果有什么" 不会触发搜索，"OpenAI最新新闻" 会触发
+
+### PreSearch 模式（不支持 tools 的第三方 Responses API）
+
+仅作为 **runtime capability detection 后的 fallback**，不是默认路径：
+
+1. 模型提取搜索 query（`extractSearchQuery`，无 reasoning 的简短调用）
+2. `BingHtmlSearchEngine` 执行搜索
+3. 搜索结果注入上下文：
+   - Responses 协议：作为 `developer` role message 注入
+   - 其他协议：拼接到 system prompt 末尾
+4. 注入语言强制模型声明搜索是它自己执行的，避免 "you provided the results"
+
+### Runtime Capability Detection
+
+- `providerToolsCapability` Map（`ChatGPTConversationService.ts:79`）缓存每个 provider 是否支持 function tools
+- 首次请求带 tools，若返回不支持（`isToolsUnsupportedError` 检测），缓存为 `false`，后续直接走 PreSearch
+- 检测条件：`unsupported_tools` 错误码、`<tool_call>` 原始文本输出、`web_search_call` 内置事件等
+
+### 搜索结果处理
+
+- 引擎：Bing HTML 爬取（`BingHtmlSearchEngine`），无 User-Agent
+- 选择器：`#b_results > li.b_algo`，标题取 `h2 > a[aria-label]` 否则 `text()`
+- 缓存：5 分钟 TTL（空结果 30 秒），key 为标准化后的 query
+- 护栏：每轮最多 10 次 `web_search` + 10 次 `web_fetch`，相同 query 去重
+
+### 流式阶段 `<tool_call>` 剥离
+
+`runGenerationDirectStream` 内置状态机 sanitizer，跨 chunk 剥离 `<tool_call>...</tool_call>` 原始文本块。部分 Responses API 不支持 function calling，模型会输出 `<tool_call>` 原始 XML 而非 SSE 事件，剥离后避免显示给用户。
+
+### 新增 IPC 事件
+
+- `CHAT_WEB_SEARCH_STARTED` — 搜索开始（含 toolCallId/query）
+- `CHAT_WEB_SEARCH_COMPLETED` — 搜索完成（含结果列表）
+- `CHAT_WEB_SEARCH_ERROR` — 搜索失败
+- `CHAT_STREAM_RESET` — ToolLoop 回退到 PreSearch 时清除渲染器缓冲文本
+
+### 新增文件
+
+| 文件 | 用途 |
+|------|------|
+| `src/main/providers/` | 协议适配层（ChatCompletions / Responses / ChatGPTCodex） |
+| `src/main/tools/` | ToolLoopController + 工具注册/执行 |
+| `src/main/web-search/` | WebSearchService + BingHtmlSearchEngine |
+| `src/shared/types/provider.ts` | ModelAdapter / CanonicalModelRequest / CanonicalModelEvent 等通用类型 |
+| `src/renderer/stores/providerStore.ts` | Provider 前端状态 |
+| `src/renderer/components/composer/ProviderSelector.tsx` | 模型提供商标识 |
+| `src/renderer/components/settings/ProviderSettings.tsx` | Provider 配置 UI |
 
 ## 移除 Codex App Server 遗留代码（暂不执行）
 当前 `chatgpt` 提供商是默认且唯一实际使用的路径。以下内容仅 `OPENCHAT_PROVIDER=appserver` 时才会被引用，属于遗留死代码，**在最终版本发布前提醒用户是否移除**（不要主动删除）：

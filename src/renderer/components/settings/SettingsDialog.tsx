@@ -3,6 +3,9 @@ import { useUiStore } from '../../stores/uiStore'
 import { useThemeStore, type ThemeMode } from '../../stores/themeStore'
 import { AccountPanel } from './AccountPanel'
 import { ProxySettings } from './ProxySettings'
+import { ProviderSettings } from './ProviderSettings'
+import { DefaultModelSettings } from './DefaultModelSettings'
+import { WebSearchEngineSettings } from './WebSearchEngineSettings'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -54,8 +57,28 @@ export function SettingsDialog() {
           <div className="settings-section-divider" />
 
           <div className="settings-section">
+            <h4>默认模型</h4>
+            <DefaultModelSettings />
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-section">
+            <h4>网页搜索</h4>
+            <WebSearchEngineSettings />
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-section">
             <h4>代理</h4>
             <ProxySettings />
+          </div>
+
+          <div className="settings-section-divider" />
+
+          <div className="settings-section">
+            <ProviderSettings />
           </div>
 
           <div className="settings-section-divider" />

@@ -8,88 +8,117 @@
 import { spawn } from 'child_process'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { createServer } from 'vite'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const root = resolve(__dirname, '..')
+const root = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..'
+)
 
-function log(label, text) {
-  console.log(`\x1b[36m[${label}]\x1b[0m ${text}`)
-}
+let vite
+let electron
 
-async function waitForPort(port, timeoutMs = 30000) {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await fetch(`http://localhost:${port}`)
-      return true
-    } catch {
-      // not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 300))
-  }
-  return false
-}
 
-function runVite() {
-  const vite = spawn('npx', ['vite', '--port', '5173'], {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    shell: true,
-    env: { ...process.env },
-  })
-  vite.stdout.on('data', (d) => process.stdout.write(d))
-  vite.stderr.on('data', (d) => process.stderr.write(d))
-  vite.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      process.exit(code)
-    }
-  })
-  return vite
-}
+const bin = name =>
+  resolve(
+    root,
+    'node_modules/.bin',
+    process.platform === 'win32'
+      ? `${name}.cmd`
+      : name
+  )
 
-function runElectron() {
-  const electron = spawn('npx', ['electron', '.'], {
-    cwd: root,
-    stdio: 'inherit',
-    shell: true,
-    env: { ...process.env, VITE_DEV_SERVER_URL: 'http://localhost:5173' },
-  })
-  electron.on('exit', (code) => {
-    process.exit(code ?? 0)
-  })
-}
 
-async function main() {
-  log('dev', '编译主进程 TypeScript...')
-  await new Promise((resolve, reject) => {
-    const tsc = spawn('npx', ['tsc', '-p', 'tsconfig.main.json'], {
-      cwd: root,
-      stdio: 'inherit',
-      shell: true,
+const run = (cmd,args)=>
+  new Promise((ok,fail)=>{
+    const p = spawn(cmd,args,{
+      cwd:root,
+      stdio:'inherit'
     })
-    tsc.on('exit', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`tsc exited with code ${code}`))
-    })
+
+    p.on('exit',c=>
+      c===0 ? ok() : fail(c)
+    )
   })
-  log('dev', '主进程编译完成')
 
-  log('dev', '启动 Vite 开发服务器...')
-  const vite = runVite()
 
-  log('dev', '等待 Vite 就绪 (http://localhost:5173)...')
-  const ready = await waitForPort(5173)
-  if (!ready) {
-    log('dev', 'Vite 启动超时，退出')
-    vite.kill()
-    process.exit(1)
-  }
+async function stop(){
 
-  log('dev', '启动 Electron...')
-  runElectron()
+  console.log('\n[dev] stopping...')
+
+  electron?.kill('SIGTERM')
+
+  await vite?.close()
+
+  process.exit()
+
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
+
+process.on('SIGINT',stop)
+process.on('SIGTERM',stop)
+
+
+
+async function main(){
+
+  console.log('[dev] build main')
+
+  await run(
+    bin('tsc'),
+    [
+      '-p',
+      'tsconfig.main.json'
+    ]
+  )
+
+
+  console.log('[dev] start vite')
+
+  vite = await createServer({
+    configFile:
+      resolve(root,'vite.config.ts'),
+
+    server:{
+      port:5173,
+      strictPort:false
+    }
+  })
+
+
+  await vite.listen()
+
+
+  const url =
+    vite.resolvedUrls.local[0]
+
+
+  console.log(
+    `[dev] vite ${url}`
+  )
+
+
+  console.log('[dev] start electron')
+
+
+  electron = spawn(
+    bin('electron'),
+    ['.'],
+    {
+      cwd:root,
+      stdio:'inherit',
+      env:{
+        ...process.env,
+        VITE_DEV_SERVER_URL:url
+      }
+    }
+  )
+  electron.on('exit',stop)
+
+}
+
+
+main().catch(async e=>{
+  console.error(e)
+  await stop()
 })

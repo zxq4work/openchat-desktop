@@ -15,6 +15,10 @@ export interface ModelInfo {
   inputModalities?: string[]
   supportsPersonality?: boolean
   isDefault?: boolean
+
+  // Web search 能力（来自模型 metadata）
+  useResponsesLite?: boolean
+  webSearchToolType?: string | null
 }
 
 // 推理等级是模型能力，客户端不静态枚举限制

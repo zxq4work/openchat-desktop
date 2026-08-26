@@ -5,10 +5,14 @@ import { useConversationStore } from '../stores/conversationStore'
 import { useChatStreamStore } from '../stores/chatStreamStore'
 import { useUiStore } from '../stores/uiStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useCodexUsageStore } from '../stores/codexUsageStore'
+import { useProviderStore, type SafeProviderConfig } from '../stores/providerStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
+import { presentSearchResults } from '../packages/SearchResultPresenter'
+import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 
 export function App() {
@@ -33,6 +37,20 @@ export function App() {
     }
     init()
 
+    // 初始化 Provider 列表
+    window.openchat.providers.list().then((list) => {
+      useProviderStore.getState().setProviders(list as SafeProviderConfig[])
+    })
+
+    // 初始化 Codex Usage 状态
+    window.openchat.codexUsage.get().then((view) => {
+      useCodexUsageStore.getState().setUsage(view)
+    })
+
+    const cleanupUsage = window.openchat.codexUsage.onChanged((view) => {
+      useCodexUsageStore.getState().setUsage(view)
+    })
+
     const cleanupAuth = window.openchat.events.onAuthChanged((status: string) => {
       setAuthStatus(status as 'logged-in' | 'logged-out' | 'logging-in')
       if (status === 'logged-in') {
@@ -52,6 +70,7 @@ export function App() {
 
     return () => {
       cleanupAuth()
+      cleanupUsage()
     }
   }, [setAuthStatus, setAccount, setModels])
 
@@ -61,6 +80,7 @@ export function App() {
     let accumulatedText = ''
     let flushTimer: ReturnType<typeof setInterval> | null = null
     let reasoningElapsedTimer: ReturnType<typeof setInterval> | null = null
+    let reasoningTextAccum = ''
 
     const startFlush = () => {
       if (flushTimer) return
@@ -75,6 +95,7 @@ export function App() {
 
     window.openchat.events.onChatDelta((event: unknown) => {
       const e = event as { text?: string; conversationId?: string }
+      console.log('[App RAW] delta conversationId=%s textLen=%d', e.conversationId ?? '?', e.text?.length ?? 0)
       if (e.text) {
         const streamingId = useChatStreamStore.getState().streamingConversationId
         if (!streamingId) {
@@ -89,11 +110,17 @@ export function App() {
 
     window.openchat.events.onChatReasoningStarted((event: unknown) => {
       const e = event as { conversationId?: string }
+      console.log('[App RAW] reasoning-started conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (!streamingId) {
         useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
       }
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      // 多阶段推理：追加分隔符，不清空已有文本
+      if (reasoningTextAccum) {
+        reasoningTextAccum += '\n\n'
+      }
 
       const now = Date.now()
       // 一次 turn 可能有多个 reasoning 阶段，从前一个阶段累加
@@ -110,8 +137,21 @@ export function App() {
       }, 1000)
     })
 
+    window.openchat.events.onChatReasoningDelta((event: unknown) => {
+      const e = event as { text?: string; conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (!streamingId) {
+        useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
+      } else if (e.conversationId && e.conversationId !== streamingId) return
+      if (e.text) {
+        reasoningTextAccum += e.text
+        useChatStreamStore.getState().setReasoningText(reasoningTextAccum)
+      }
+    })
+
     window.openchat.events.onChatReasoningCompleted((event: unknown) => {
       const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta; conversationId?: string }
+      console.log('[App RAW] reasoning-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -125,8 +165,94 @@ export function App() {
       useChatStreamStore.getState().setReasoningStatus('completed')
     })
 
+    window.openchat.events.onWebSearchStarted((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallId?: string; toolCallName?: string; toolCallArgs?: string }
+      console.log('[App RAW] web-search-started conversationId=%s toolCallId=%s toolName=%s', e.conversationId ?? '?', e.toolCallId ?? '?', e.toolCallName ?? '?')
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      let query: string | null = null
+      if (e.toolCallArgs) {
+        try {
+          const args = JSON.parse(e.toolCallArgs) as Record<string, unknown>
+          if (typeof args.query === 'string') {
+            query = args.query
+          } else if (typeof args.url === 'string') {
+            query = args.url
+          }
+        } catch {
+          query = null
+        }
+      }
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: true,
+        callId: e.toolCallId ?? null,
+        toolName: e.toolCallName ?? null,
+        query,
+        error: null,
+      })
+    })
+
+    window.openchat.events.onWebSearchCompleted((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallId?: string; webSearchResults?: unknown[] }
+      console.log('[App RAW] web-search-completed conversationId=%s toolCallId=%s resultsCount=%d', e.conversationId ?? '?', e.toolCallId ?? '?', e.webSearchResults?.length ?? 0)
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      const results: WebSearchResultItem[] = e.webSearchResults
+        ? presentSearchResults(e.webSearchResults).map((card) => ({
+            title: card.title ?? card.name ?? null,
+            url: card.url ?? card.link ?? null,
+            snippet: card.snippet ?? card.description ?? card.text ?? null,
+          }))
+        : []
+
+      const prev = useChatStreamStore.getState().webSearchStatus
+      const merged = [...prev.results, ...results]
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        query: null,
+        error: null,
+        results: merged,
+      })
+    })
+
+    window.openchat.events.onWebSearchError((event: unknown) => {
+      const e = event as { conversationId?: string; toolCallError?: string }
+      console.log('[App RAW] web-search-error conversationId=%s error=%s', e.conversationId ?? '?', e.toolCallError ?? '?')
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        error: e.toolCallError ?? '搜索失败',
+      })
+    })
+
+    window.openchat.events.onStreamReset((event: unknown) => {
+      const e = event as { conversationId?: string }
+      console.log('[App RAW] stream-reset conversationId=%s', e.conversationId ?? '?')
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      // 清除 ToolLoop 错误文本与已积累的搜索结果，准备 PreSearch 重新流式
+      accumulatedText = ''
+      pendingDeltas.length = 0
+      useChatStreamStore.getState().setBufferedText('')
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        query: null,
+        error: null,
+        results: [],
+      })
+    })
+
     window.openchat.events.onChatError((event: unknown) => {
       const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
+      console.log('[App RAW] chat-error conversationId=%s errorCode=%s', e.conversationId ?? '?', e.errorCode ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -141,6 +267,7 @@ export function App() {
       }
       accumulatedText = ''
       pendingDeltas.length = 0
+      reasoningTextAccum = ''
       useChatStreamStore.getState().reset()
 
       const id = useConversationStore.getState().activeConversationId
@@ -157,6 +284,7 @@ export function App() {
 
     window.openchat.events.onTurnCompleted((event: unknown) => {
       const e = event as { conversationId?: string }
+      console.log('[App RAW] turn-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -186,11 +314,13 @@ export function App() {
           }
           accumulatedText = ''
           pendingDeltas.length = 0
+          reasoningTextAccum = ''
           useChatStreamStore.getState().reset()
         })
       } else {
         accumulatedText = ''
         pendingDeltas.length = 0
+        reasoningTextAccum = ''
         useChatStreamStore.getState().reset()
       }
 
@@ -255,18 +385,56 @@ export function App() {
 
   // 拦截 Ctrl/Cmd+A：仅在焦点位于可编辑输入框时允许全选，
   // 避免原生应用里出现「整页文字被选中」的 HTML 页感
+  // 拦截 Ctrl/Cmd+F：在聊天区域打开搜索栏，输入框内跳过
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isSelectAll = (e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')
-      if (!isSelectAll) return
+      const isMod = e.ctrlKey || e.metaKey
+
+      const isSelectAll = isMod && (e.key === 'a' || e.key === 'A')
+      const isFind = isMod && (e.key === 'f' || e.key === 'F')
+
+      if (!isSelectAll && !isFind) return
 
       const target = e.target as HTMLElement | null
       const editable =
         target &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
 
-      if (!editable) {
+      if (isSelectAll && !editable) {
         e.preventDefault()
+      }
+
+      if (isFind) {
+        // 焦点已在搜索输入框内：全选内容，阻止浏览器默认行为
+        if (target?.classList.contains('search-bar-input')) {
+          e.preventDefault();
+          (target as HTMLInputElement).select()
+          return
+        }
+
+        if (editable) return
+
+        // 聊天区里的消息列表不是可聚焦元素，点击后焦点仍在 body 上，
+        // 因此这里结合 activeElement 与是否存在活跃对话来判断是否在聊天界面
+        const active = document.activeElement
+        const hasActiveConversation = !!useConversationStore.getState().activeConversationId
+        const inChatView =
+          active && active !== document.body && active !== document.documentElement
+            ? !!active.closest('.chat-view')
+            : hasActiveConversation
+
+        if (inChatView) {
+          e.preventDefault()
+          const state = useUiStore.getState()
+          if (state.searchVisible) {
+            // 搜索框已存在时：聚焦并选中已有内容
+            const input = document.querySelector<HTMLInputElement>('.search-bar-input')
+            input?.focus()
+            input?.select()
+          } else {
+            state.openSearch()
+          }
+        }
       }
     }
 
@@ -275,15 +443,23 @@ export function App() {
   }, [])
 
   const handleNewConversation = useCallback(async () => {
+    const saved = await window.openchat.settings.getDefaultModel()
     const models = useModelStore.getState().models
-    const defaultModel = models.length > 0 ? models[0].id : null
-    const defaultEffort = models.length > 0 && models[0].defaultReasoningEffort
-      ? models[0].defaultReasoningEffort
-      : models.length > 0 && models[0].supportedReasoningEfforts.length > 0
-        ? models[0].supportedReasoningEfforts[0].reasoningEffort
-        : null
 
-    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort)
+    let defaultModel = saved.modelId
+    let defaultEffort = saved.effort
+
+    if (!defaultModel && models.length > 0) {
+      defaultModel = models[0].id
+    }
+    if (!defaultEffort && models.length > 0) {
+      defaultEffort = models[0].defaultReasoningEffort
+        ?? (models[0].supportedReasoningEfforts.length > 0
+          ? models[0].supportedReasoningEfforts[0].reasoningEffort
+          : null)
+    }
+
+    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
     if (conv) {
       const summaries = await window.openchat.conversations.list()
       useConversationStore.getState().setSummaries(summaries)

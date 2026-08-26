@@ -17,10 +17,12 @@ export class SettingsRepository {
   set(key: string, value: string): void {
     const db = this.storage.database
     db.run(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, [key, value])
+    this.storage.save().catch((err) => console.error('Failed to persist settings:', err))
   }
 
   remove(key: string): void {
     const db = this.storage.database
     db.run(`DELETE FROM settings WHERE key = ?`, [key])
+    this.storage.save().catch((err) => console.error('Failed to persist settings:', err))
   }
 }
