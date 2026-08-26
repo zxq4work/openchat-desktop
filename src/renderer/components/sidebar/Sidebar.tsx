@@ -31,6 +31,12 @@ export function Sidebar() {
   }, [setSummaries])
 
   const handleNewConversation = useCallback(async () => {
+    // 若当前活跃会话是空白的（无消息），直接复用，不新建
+    const store = useConversationStore.getState()
+    if (store.activeConversationId && store.activeMessages.length === 0) {
+      return
+    }
+
     const saved = await window.openchat.settings.getDefaultModel()
 
     let defaultModel = saved.modelId
@@ -48,8 +54,8 @@ export function Sidebar() {
 
     const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
     if (conv) {
-      const list = await window.openchat.conversations.list()
-      setSummaries(list)
+      const newList = await window.openchat.conversations.list()
+      setSummaries(newList)
       setActiveConversationId(conv.id)
       setActiveConversation(conv)
       setActiveMessages([])

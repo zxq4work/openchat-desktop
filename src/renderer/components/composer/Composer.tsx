@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { ModelSelector } from './ModelSelector'
@@ -21,6 +21,7 @@ function formatResetTime(resetAt: number): string {
 export function Composer() {
   const [text, setText] = useState('')
   const activeConversation = useConversationStore((s) => s.activeConversation)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
   const setStatus = useChatStreamStore((s) => s.setStatus)
   const setActiveAssistantMessage = useChatStreamStore((s) => s.setActiveAssistantMessage)
   const setError = useChatStreamStore((s) => s.setError)
@@ -30,6 +31,64 @@ export function Composer() {
   // 使用自定义服务时，忽略 Codex 额度限制
   const isCustomProvider = !!activeConversation?.providerConfigId
   const isExhausted = exhausted && !isCustomProvider
+
+  // 内存缓存当前会话的草稿，避免 IPC 往返延迟
+  const draftRef = useRef<string>('')
+  // 追踪上一次的 activeConversationId，用于切换时持久化旧草稿
+  const prevConversationIdRef = useRef<string | null>(null)
+  // 防抖写库 timer
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 切换会话时，先持久化旧草稿，再加载新草稿
+  useEffect(() => {
+    const prevId = prevConversationIdRef.current
+    const newId = activeConversationId ?? null
+
+    // 持久化旧会话的草稿（立即 flush，不防抖）
+    if (prevId && prevId !== newId) {
+      const oldDraft = draftRef.current
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
+      }
+      if (oldDraft) {
+        window.openchat.settings.setDraft(prevId, oldDraft)
+      }
+    }
+
+    prevConversationIdRef.current = newId
+
+    if (!newId) {
+      setText('')
+      draftRef.current = ''
+      return
+    }
+
+    // 加载新会话的草稿
+    window.openchat.settings.getDraft(newId).then((saved) => {
+      // 防止竞态：确保加载时还是这个会话
+      if (useConversationStore.getState().activeConversationId === newId) {
+        const draft = saved ?? ''
+        setText(draft)
+        draftRef.current = draft
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversationId])
+
+  // 每次 text 变化时同步到 draftRef 并防抖持久化
+  useEffect(() => {
+    draftRef.current = text
+    if (!activeConversationId) return
+
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => {
+      window.openchat.settings.setDraft(activeConversationId, text)
+    }, 500)
+    return () => {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    }
+  }, [text, activeConversationId])
 
   // 错误提示自动消失
   useEffect(() => {
@@ -44,7 +103,13 @@ export function Composer() {
 
     const conversationId = activeConversation.id
     const messageText = text.trim()
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = null
+    }
+    draftRef.current = ''
     setText('')
+    window.openchat.settings.deleteDraft(conversationId)
     setStatus('starting')
     useChatStreamStore.getState().setStreamingConversationId(conversationId)
 

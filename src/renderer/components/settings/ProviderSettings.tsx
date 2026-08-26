@@ -1,16 +1,25 @@
 import React, { useState, useEffect } from 'react'
 import { useProviderStore, type SafeProviderConfig } from '../../stores/providerStore'
+import { Dropdown } from '../Dropdown'
 
-const PROTOCOL_LABELS: Record<string, string> = {
-  chat_completions: 'Chat Completions',
-  responses: 'Responses',
-}
+const PROTOCOL_OPTIONS = [
+  { value: 'chat_completions', label: 'Chat Completions' },
+  { value: 'responses', label: 'Responses' },
+]
 
-const TOOL_CALLING_LABELS: Record<string, string> = {
-  auto: '自动',
-  enabled: '开启',
-  disabled: '关闭',
-}
+const TOOL_CALLING_OPTIONS = [
+  { value: 'auto', label: '自动' },
+  { value: 'enabled', label: '开启' },
+  { value: 'disabled', label: '关闭' },
+]
+
+const PROTOCOL_LABELS: Record<string, string> = Object.fromEntries(
+  PROTOCOL_OPTIONS.map((o) => [o.value, o.label])
+)
+
+const TOOL_CALLING_LABELS: Record<string, string> = Object.fromEntries(
+  TOOL_CALLING_OPTIONS.map((o) => [o.value, o.label])
+)
 
 export function ProviderSettings() {
   const providers = useProviderStore((s) => s.providers)
@@ -177,15 +186,13 @@ export function ProviderSettings() {
 
           <div className="provider-form-field">
             <label className="provider-label">协议</label>
-            <select
-              className="provider-input"
+            <Dropdown
+              className="provider-dropdown"
               value={protocol}
-              onChange={(e) => setProtocol(e.target.value as 'chat_completions' | 'responses')}
-            >
-              {Object.entries(PROTOCOL_LABELS).map(([val, label]) => (
-                <option key={val} value={val}>{label}</option>
-              ))}
-            </select>
+              options={PROTOCOL_OPTIONS}
+              onChange={(value) => setProtocol(value as 'chat_completions' | 'responses')}
+              ariaLabel="选择协议"
+            />
           </div>
 
           <div className="provider-form-field">
@@ -264,15 +271,13 @@ export function ProviderSettings() {
 
           <div className="provider-form-field">
             <label className="provider-label">Tools</label>
-            <select
-              className="provider-input"
+            <Dropdown
+              className="provider-dropdown"
               value={toolCalling}
-              onChange={(e) => setToolCalling(e.target.value as 'auto' | 'enabled' | 'disabled')}
-            >
-              {Object.entries(TOOL_CALLING_LABELS).map(([val, label]) => (
-                <option key={val} value={val}>{label}</option>
-              ))}
-            </select>
+              options={TOOL_CALLING_OPTIONS}
+              onChange={(value) => setToolCalling(value as 'auto' | 'enabled' | 'disabled')}
+              ariaLabel="选择 Tools 模式"
+            />
           </div>
 
           <div className="provider-form-actions">

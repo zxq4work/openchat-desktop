@@ -1814,11 +1814,27 @@ textarea {
   width: 100%;
 }
 
-.proxy-system-info {
-  margin-top: 12px;
+/* Provider dropdown — full-width, matching .provider-input */
+.provider-dropdown {
+  width: 100%;
 }
 
-.proxy-system-hint {
+.provider-dropdown .dropdown-trigger {
+  width: 100%;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.provider-dropdown .dropdown-menu {
+  width: 100%;
+  max-width: calc(100% - 16px);
+}
+
+.proxy-system-info {
+  margin-top: 12px;
+}.proxy-system-hint {
   font-size: 12px;
   color: var(--text-muted);
   line-height: 1.5;
