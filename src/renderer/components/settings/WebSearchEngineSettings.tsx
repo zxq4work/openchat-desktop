@@ -4,6 +4,7 @@ import { Dropdown } from '../Dropdown'
 const ENGINE_OPTIONS = [
   { value: 'bing', label: 'Bing' },
   { value: 'baidu', label: '百度' },
+  { value: 'google', label: 'Google' },
 ]
 
 export function WebSearchEngineSettings() {

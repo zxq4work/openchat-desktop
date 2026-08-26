@@ -9,4 +9,4 @@ export interface ProxyConfig {
   password: string
 }
 
-export type WebSearchEngineType = 'bing' | 'baidu'
+export type WebSearchEngineType = 'bing' | 'baidu' | 'google'

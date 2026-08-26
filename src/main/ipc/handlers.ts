@@ -162,11 +162,11 @@ export function registerIpcHandlers(services: Services): void {
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE, (): string => {
     const raw = services.settingsRepository?.get('web_search_engine') ?? null
-    return raw === 'baidu' || raw === 'bing' ? raw : 'bing'
+    return raw === 'baidu' || raw === 'bing' || raw === 'google' ? raw : 'bing'
   })
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, (_event, engine: string): void => {
-    const normalized: WebSearchEngineType = engine === 'baidu' ? 'baidu' : 'bing'
+    const normalized: WebSearchEngineType = engine === 'baidu' || engine === 'google' ? engine : 'bing'
     services.settingsRepository?.set('web_search_engine', normalized)
     // 切换 WebSearchService 内部的搜索引擎，并清空缓存
     if (services.webSearchService) {
