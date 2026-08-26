@@ -86,6 +86,7 @@ async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]
         res.on('end', () => {
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
+              console.log('[fetchModels] raw response:', data)
               const parsed = JSON.parse(data)
               const models: string[] = []
               if (Array.isArray(parsed)) {
@@ -192,6 +193,30 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     }
   })
 
+  // ===== Composer drafts =====
+  ipcMain.handle(IPC_CHANNELS.DRAFT_GET, (_event, conversationId: string): string | null => {
+    return services.settingsRepository?.get(`draft_${conversationId}`) ?? null
+  })
+
+  const draftDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  ipcMain.handle(IPC_CHANNELS.DRAFT_SET, (_event, conversationId: string, text: string): void => {
+    // 防抖 500ms，避免频繁触发 sql.js 全量导出
+    const key = `draft_${conversationId}`
+    const existing = draftDebounceTimers.get(key)
+    if (existing) clearTimeout(existing)
+    draftDebounceTimers.set(key, setTimeout(() => {
+      draftDebounceTimers.delete(key)
+      services.settingsRepository?.set(key, text)
+    }, 500))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.DRAFT_DELETE, (_event, conversationId: string): void => {
+    const key = `draft_${conversationId}`
+    const existing = draftDebounceTimers.get(key)
+    if (existing) { clearTimeout(existing); draftDebounceTimers.delete(key) }
+    services.settingsRepository?.remove(key)
+  })
+
   // ===== Auth =====
   ipcMain.handle(IPC_CHANNELS.AUTH_GET_STATUS, async (): Promise<PublicAccountInfo> => {
     return services.authService?.checkAuth() ?? { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
@@ -245,6 +270,8 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_REMOVE, async (_event, id: string): Promise<void> => {
     await services.conversationService?.removeConversation(id)
+    // 清理草稿
+    services.settingsRepository?.remove(`draft_${id}`)
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_ROLE, (_event, id: string, prompt: string): void => {

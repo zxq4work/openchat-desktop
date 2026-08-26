@@ -87,7 +87,7 @@ export class ConversationService {
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
-    }))
+      }))
   }
 
   getConversation(id: string): {

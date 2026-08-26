@@ -451,6 +451,13 @@ export class ResponsesAdapter implements ModelAdapter {
       ...this.extraHeaders,
     }
 
+    console.log('========== [Responses] /v1/responses request params BEGIN ==========')
+    console.log('[Responses] url:', url)
+    console.log('[Responses] method: POST')
+    console.log('[Responses] body:', bodyStr)
+    console.log('[Responses] headers:', JSON.stringify(headers, null, 2))
+    console.log('========== [Responses] /v1/responses request params END ==========')
+
     const parser = new SSEParser()
 
     const stream = await new Promise<IncomingMessage>((resolve, reject) => {

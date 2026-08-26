@@ -132,7 +132,7 @@ export class ChatGPTConversationService {
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
-    }))
+      }))
   }
 
   getConversation(id: string): {

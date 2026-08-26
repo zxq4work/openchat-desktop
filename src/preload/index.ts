@@ -45,6 +45,9 @@ const IPC_CHANNELS = {
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
+  DRAFT_GET: 'draft:get',
+  DRAFT_SET: 'draft:set',
+  DRAFT_DELETE: 'draft:delete',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -114,6 +117,9 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, providerId, modelId, effort),
     getWebSearchEngine: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE) as Promise<string>,
     setWebSearchEngine: (engine: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, engine),
+    getDraft: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_GET, conversationId) as Promise<string | null>,
+    setDraft: (conversationId: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_SET, conversationId, text),
+    deleteDraft: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_DELETE, conversationId),
   },
 
   googleSearch: {

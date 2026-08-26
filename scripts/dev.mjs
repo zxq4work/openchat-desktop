@@ -33,7 +33,8 @@ const run = (cmd,args)=>
   new Promise((ok,fail)=>{
     const p = spawn(cmd,args,{
       cwd:root,
-      stdio:'inherit'
+      stdio:'inherit',
+      shell: process.platform === 'win32'
     })
 
     p.on('exit',c=>
@@ -107,6 +108,7 @@ async function main(){
     {
       cwd:root,
       stdio:'inherit',
+      shell: process.platform === 'win32',
       env:{
         ...process.env,
         VITE_DEV_SERVER_URL:url

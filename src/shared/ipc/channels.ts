@@ -53,6 +53,11 @@ export const IPC_CHANNELS = {
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
 
+  // Composer draft (per conversation)
+  DRAFT_GET: 'draft:get',
+  DRAFT_SET: 'draft:set',
+  DRAFT_DELETE: 'draft:delete',
+
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',

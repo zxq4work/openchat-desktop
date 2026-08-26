@@ -443,6 +443,12 @@ export function App() {
   }, [])
 
   const handleNewConversation = useCallback(async () => {
+    // 若当前活跃会话是空白的（无消息），直接复用，不新建
+    const store = useConversationStore.getState()
+    if (store.activeConversationId && store.activeMessages.length === 0) {
+      return
+    }
+
     const saved = await window.openchat.settings.getDefaultModel()
     const models = useModelStore.getState().models
 
@@ -461,8 +467,8 @@ export function App() {
 
     const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
     if (conv) {
-      const summaries = await window.openchat.conversations.list()
-      useConversationStore.getState().setSummaries(summaries)
+      const list = await window.openchat.conversations.list()
+      useConversationStore.getState().setSummaries(list)
       useConversationStore.getState().setActiveConversationId(conv.id)
       useConversationStore.getState().setActiveConversation(conv)
       useConversationStore.getState().setActiveMessages([])

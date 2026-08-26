@@ -347,7 +347,7 @@ export function createRequest(
   const mode = getProxyMode()
 
   if (mode === 'system') {
-    const url = `${options.protocol || 'https:'}//${options.hostname}${options.path}`
+    const url = buildRequestUrl(options)
     console.log('[Proxy] mode=system url=', url)
     // 诊断：打印 Chromium 对目标 URL 的实际代理路由决策（DIRECT / PROXY / SOCKS5）
     session.defaultSession
