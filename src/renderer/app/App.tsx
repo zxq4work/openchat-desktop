@@ -202,12 +202,14 @@ export function App() {
           }))
         : []
 
+      const prev = useChatStreamStore.getState().webSearchStatus
+      const merged = [...prev.results, ...results]
       useChatStreamStore.getState().setWebSearchStatus({
         active: false,
         callId: null,
         query: null,
         error: null,
-        results,
+        results: merged,
       })
     })
 
@@ -228,10 +230,17 @@ export function App() {
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
-      // 清除 ToolLoop 错误文本，准备 PreSearch 重新流式
+      // 清除 ToolLoop 错误文本与已积累的搜索结果，准备 PreSearch 重新流式
       accumulatedText = ''
       pendingDeltas.length = 0
       useChatStreamStore.getState().setBufferedText('')
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        query: null,
+        error: null,
+        results: [],
+      })
     })
 
     window.openchat.events.onChatError((event: unknown) => {

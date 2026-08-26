@@ -26,6 +26,10 @@ function ip4ToInt(ip: string): number {
 }
 
 function isPrivateIPv4(ip: string): boolean {
+  // 仅处理合法 IPv4（四段十进制），IPv6 交给 isPrivateIPv6 判断
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) {
+    return false
+  }
   const num = ip4ToInt(ip)
   return PRIVATE_IPV4_RANGES.some((range) => num >= range.start && num <= range.end)
 }
@@ -47,11 +51,12 @@ function isUnsafeHostname(hostname: string): boolean {
 async function resolveHostname(hostname: string): Promise<string[]> {
   try {
     const addresses = await dns.promises.resolve4(hostname)
-    // 同时尝试 IPv6
     try {
       const ipv6 = await dns.promises.resolve6(hostname)
+      console.log('[WebFetch DNS]', hostname, '→', [...addresses, ...ipv6].join(', '))
       return [...addresses, ...ipv6]
     } catch {
+      console.log('[WebFetch DNS]', hostname, '→', addresses.join(', '))
       return addresses
     }
   } catch {

@@ -236,7 +236,7 @@ export class ToolLoopController {
     const toolResults: CanonicalToolResult[] = []
 
     for (const tc of toolCalls) {
-      if (tc.name === 'web_search') {
+      if (tc.name === 'openchat_web_search') {
         searchCallCount++
         if (searchCallCount > MAX_WEB_SEARCH_CALLS_PER_TURN) {
           console.log('[ToolLoop] Max web_search calls reached')
@@ -252,7 +252,7 @@ export class ToolLoopController {
         }
       }
 
-      if (tc.name === 'web_fetch') {
+      if (tc.name === 'openchat_web_fetch') {
         fetchCallCount++
         if (fetchCallCount > MAX_WEB_FETCH_CALLS_PER_TURN) {
           console.log('[ToolLoop] Max web_fetch calls reached')
@@ -294,7 +294,7 @@ export class ToolLoopController {
       }
 
       const queryStr = args.query ? String(args.query).trim().toLowerCase() : ''
-      if (tc.name === 'web_search' && queryStr) {
+      if (tc.name === 'openchat_web_search' && queryStr) {
         if (executedQueries.has(queryStr)) {
           console.log('[Tool Call] Duplicate query, skipping:', queryStr)
           const skippedResult: CanonicalToolResult = {
@@ -323,6 +323,9 @@ export class ToolLoopController {
           const parsed = JSON.parse(result.output) as Record<string, unknown>
           if (Array.isArray(parsed.results)) {
             rawResults = parsed.results
+          } else if (parsed.url && typeof parsed.url === 'string') {
+            // web_fetch result: fabricate a single-item results array for UI
+            rawResults = [{ url: parsed.url, title: (parsed.title as string) || (parsed.url as string), snippet: ((parsed.content as string) || '').slice(0, 150) }]
           }
         } catch {
           // not JSON

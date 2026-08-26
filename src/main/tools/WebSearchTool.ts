@@ -3,7 +3,7 @@ import type { OpenChatToolDefinition, CanonicalToolResult, SearchResultItem } fr
 import { WebSearchService } from '../web-search/WebSearchService'
 
 export const WEB_SEARCH_TOOL_DEFINITION: OpenChatToolDefinition = {
-  name: 'web_search',
+  name: 'openchat_web_search',
   description:
     'Search the public web for current or externally verifiable information. ' +
     'Use it when the user explicitly asks to search, browse, look up or verify information, ' +
@@ -36,7 +36,7 @@ export class WebSearchTool implements OpenChatTool {
     if (typeof query !== 'string' || !query.trim()) {
       return {
         callId: '',
-        name: 'web_search',
+        name: 'openchat_web_search',
         output: JSON.stringify({ error: 'SEARCH_EMPTY_QUERY', message: 'Search query is empty' }),
         isError: true,
       }
@@ -59,7 +59,7 @@ export class WebSearchTool implements OpenChatTool {
 
       return {
         callId: '',
-        name: 'web_search',
+        name: 'openchat_web_search',
         output: JSON.stringify(output),
       }
     } catch (err) {
@@ -68,7 +68,7 @@ export class WebSearchTool implements OpenChatTool {
 
       return {
         callId: '',
-        name: 'web_search',
+        name: 'openchat_web_search',
         output: JSON.stringify({ error: 'SEARCH_NETWORK_ERROR', message: 'Web search failed' }),
         isError: true,
       }

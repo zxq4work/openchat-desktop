@@ -3,7 +3,7 @@ import type { OpenChatToolDefinition, CanonicalToolResult } from '../../shared/t
 import { WebFetchService } from '../web-search/WebFetchService'
 
 export const WEB_FETCH_TOOL_DEFINITION: OpenChatToolDefinition = {
-  name: 'web_fetch',
+  name: 'openchat_web_fetch',
   description:
     'Fetch readable text from a public HTTP/HTTPS web page. ' +
     'Use this after web_search when a search snippet is insufficient ' +
@@ -35,7 +35,7 @@ export class WebFetchTool implements OpenChatTool {
     if (typeof url !== 'string' || !url.trim()) {
       return {
         callId: '',
-        name: 'web_fetch',
+        name: 'openchat_web_fetch',
         output: JSON.stringify({ error: 'FETCH_EMPTY_URL', message: 'URL is empty' }),
         isError: true,
       }
@@ -49,7 +49,7 @@ export class WebFetchTool implements OpenChatTool {
 
       return {
         callId: '',
-        name: 'web_fetch',
+        name: 'openchat_web_fetch',
         output: JSON.stringify(result),
       }
     } catch (err) {
@@ -64,7 +64,7 @@ export class WebFetchTool implements OpenChatTool {
 
       return {
         callId: '',
-        name: 'web_fetch',
+        name: 'openchat_web_fetch',
         output: JSON.stringify({ error: errorCode, message }),
         isError: true,
       }

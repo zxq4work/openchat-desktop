@@ -24,6 +24,10 @@ export class ProviderConfigService {
     return this.repository.getById(id)?.apiKey ?? null
   }
 
+  getBaseUrl(id: string): string | null {
+    return this.repository.getById(id)?.baseUrl ?? null
+  }
+
   create(config: Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>): SafeProviderConfig {
     const created = this.repository.create(config)
     return this.toSafe(created)

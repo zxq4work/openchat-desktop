@@ -113,7 +113,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
           </svg>
           <span className="message-web-search-query">
-            {webSearch.toolName === 'web_fetch'
+            {webSearch.toolName === 'openchat_web_fetch'
               ? (webSearch.query ? `正在读取：${webSearch.query}` : '正在读取网页...')
               : (webSearch.query ? `正在搜索：${webSearch.query}` : '正在搜索网页...')
             }
@@ -155,6 +155,9 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
                   ) : item.title ? (
                     <span className="message-search-result-title">{item.title}</span>
                   ) : null}
+                  {item.url && (
+                    <div className="message-search-result-url">{item.url}</div>
+                  )}
                   {item.snippet && (
                     <p className="message-search-result-snippet">{item.snippet}</p>
                   )}

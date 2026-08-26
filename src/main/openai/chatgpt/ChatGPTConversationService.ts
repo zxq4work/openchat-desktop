@@ -26,12 +26,15 @@ import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
-Use web_search when:
+When you truly need external or up-to-date information, you may call openchat_web_search.
+If the existing conversation context is sufficient to answer, answer directly without searching again.
+
+Use openchat_web_search when:
 - the user explicitly asks to search, browse, look up, find or verify information;
 - the answer depends on current or potentially changed information;
 - external verification would materially improve accuracy.
 
-Use web_fetch when a search result snippet is insufficient and you need details from a source.
+Use openchat_web_fetch when a search result snippet is insufficient and you need details from a source.
 
 Prefer concise search queries.
 Prefer primary and authoritative sources when possible.
@@ -55,6 +58,8 @@ export interface StreamEvent {
   webSearchResults?: unknown[]
 }
 
+type ToolCapability = 'unknown' | 'supported' | 'unsupported' | 'nonstandard'
+
 export class ChatGPTConversationService {
   private conversations: ConversationRepository
   private segments: ContextSegmentRepository
@@ -74,9 +79,9 @@ export class ChatGPTConversationService {
     abortController: AbortController | null
   } | null = null
 
-  // 缓存每个 provider 是否支持 function tools（key = providerConfigId）
-  // 首次检测到不支持后，后续请求直接走 PreSearch，不再重试
-  private providerToolsCapability = new Map<string, boolean>()
+  // 缓存每个 provider+model+endpoint 的 tool capability（runtime memory only）
+  // key: `${providerId}|${protocol}|${modelId}|${endpoint}`
+  private toolCapabilityCache = new Map<string, ToolCapability>()
 
   private streamHandlers: Array<(event: StreamEvent) => void> = []
 
@@ -386,19 +391,35 @@ export class ChatGPTConversationService {
     return new ChatGPTCodexAdapter(this.codexClient)
   }
 
-  // 检测 API 返回的错误是否表示不支持 tools
+  private buildCapabilityCacheKey(
+    providerConfigId: string | null,
+    adapter: ModelAdapter,
+    modelId: string
+  ): string {
+    // 需要拿到 endpoint，从 ProviderConfigService 取；无则用 providerConfigId 兜底
+    let endpoint = ''
+    if (providerConfigId) {
+      endpoint = this.providerConfigService.getBaseUrl(providerConfigId) ?? ''
+    }
+    return `${providerConfigId ?? 'codex-default'}|${adapter.protocol}|${modelId}|${endpoint}`
+  }
+
+  // 检测 API 返回的错误是否表示不支持 tools（仅明确的 HTTP/API 错误）
+  // 以下情况不能标记 unsupported：tool_choice required 不支持、timeout、HTTP 500、SSE 异常、模型本轮没调用工具
   private isToolsUnsupportedError(err: unknown): boolean {
     const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase()
     return (
       msg.includes('unsupported tool') ||
       msg.includes('unsupported_tools') ||
-      msg.includes('invalid parameter tools') ||
       msg.includes('tools is not supported') ||
       msg.includes('tools not supported') ||
+      msg.includes('tools parameter is not supported') ||
       msg.includes('unknown parameter: tools') ||
       msg.includes('unknown parameter : tools') ||
-      msg.includes('built-in web_search_call') ||
-      msg.includes('400') && (msg.includes('tool') || msg.includes('tools'))
+      msg.includes('invalid parameter: tools') ||
+      msg.includes('invalid parameter : tools') ||
+      msg.includes('invalid tool type') ||
+      (msg.includes('400') || msg.includes('422')) && (msg.includes('tool') || msg.includes('tools'))
     )
   }
 
@@ -441,12 +462,18 @@ export class ChatGPTConversationService {
       const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
 
       if (webSearchEnabled) {
-        const cacheKey = providerConfigId ?? 'codex-default'
-        const cachedCapability = this.providerToolsCapability.get(cacheKey)
-        console.log('[Tool Capability] protocol=', adapter.protocol, 'toolCalling=', adapter.capabilities.toolCalling, 'cached=', cachedCapability)
+        const cacheKey = this.buildCapabilityCacheKey(providerConfigId, adapter, modelId)
+        const capability = this.toolCapabilityCache.get(cacheKey) ?? 'unknown'
+        console.log('[Tool Capability] protocol=', adapter.protocol, 'model=', modelId, 'capability=', capability)
 
-        // 已缓存为不支持 tools 的 provider，直接走 PreSearch
-        if (cachedCapability !== false && adapter.capabilities.toolCalling) {
+        // unsupported → 直接走 PreSearch
+        if (capability === 'unsupported') {
+          console.log('[Tool Decision] mode=presearch capability=', capability)
+          await this.runGenerationWithPreSearch(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+          )
+        } else {
+          // unknown / supported / nonstandard → 尝试 ToolLoop
           console.log('[Tool Decision] mode=tools')
           try {
             await this.runGenerationWithTools(
@@ -456,22 +483,20 @@ export class ChatGPTConversationService {
           } catch (err) {
             if (this.isToolsUnsupportedError(err)) {
               console.log('[Tool Fallback] reason=unsupported_tools cacheKey=', cacheKey)
-              this.providerToolsCapability.set(cacheKey, false)
-              adapter.capabilities.toolCalling = false
-              // 清除已累积的错误文本（模型输出 <tool_call> 原始文本），让 PreSearch 重新流式
+              this.toolCapabilityCache.set(cacheKey, 'unsupported')
               this.messages.updateContent(assistantMessageId, '')
               this.emitStreamEvent({ type: 'stream-reset', conversationId })
-              // 重新设置 streaming 状态（runGenerationWithTools 可能已改为 completed/error）
               this.messages.updateStatus(assistantMessageId, 'streaming')
+              // 回退到 PreSearch
+              await this.runGenerationWithPreSearch(
+                conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+              )
+              return
             } else {
               throw err
             }
           }
         }
-        console.log('[Tool Decision] mode=presearch')
-        await this.runGenerationWithPreSearch(
-          conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
-        )
       } else {
         await this.runGenerationDirect(
           conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
@@ -534,8 +559,19 @@ export class ChatGPTConversationService {
         })
       },
       onToolResult: (callId, toolName, success, rawResults, errorOutput) => {
+        if (toolName === 'openchat_web_fetch') {
+          if (success) {
+            this.emitStreamEvent({
+              type: 'web-search-completed',
+              conversationId,
+              toolCallId: callId,
+              webSearchResults: rawResults,
+            })
+          }
+          return
+        }
         // web_fetch 失败不应显示为"搜索失败"，仅 web_search 失败才触发错误提示
-        if (toolName !== 'web_search') return
+        if (toolName !== 'openchat_web_search') return
 
         if (success) {
           this.emitStreamEvent({
@@ -603,11 +639,16 @@ export class ChatGPTConversationService {
 
     const result = await controller.run(request, abortController.signal, callbacks)
 
-    // 检测模型是否以原始文本输出 <tool_call>（部分 Responses API 不支持 function calling）
-    const rawToolCallPattern = /<tool_call>\s*\{[\s\S]*?\}\s*<\/tool_call>/i
-    if (result.totalToolCalls === 0 && rawToolCallPattern.test(result.finalText)) {
-      throw new Error('unsupported_tools: model outputs raw <tool_call> text instead of function_call events')
+    // 收到过 structured function_call → 确认 supported
+    if (result.totalToolCalls > 0) {
+      const cacheKey = this.buildCapabilityCacheKey(
+        this.conversations.getById(conversationId)?.providerConfigId ?? null,
+        adapter,
+        modelId
+      )
+      this.toolCapabilityCache.set(cacheKey, 'supported')
     }
+    // totalToolCalls === 0 → 模型直接回答，不改变 capability
 
     this.messages.updateContent(assistantMessageId, result.finalText)
     this.messages.updateStatus(assistantMessageId, 'completed')
@@ -664,19 +705,35 @@ export class ChatGPTConversationService {
       type: 'web-search-started',
       conversationId,
       toolCallId: 'pre-search',
-      toolCallName: 'web_search',
+      toolCallName: 'openchat_web_search',
       toolCallArgs: JSON.stringify({ query: '正在分析搜索词...' }),
     })
 
     const searchQuery = await this.extractSearchQuery(adapter, modelId, userText, abortController)
     console.log('[PreSearch] extracted query=', searchQuery)
 
+    // 模型判定无需搜索（追问/澄清/已讨论内容），直接生成，跳过搜索
+    if (!searchQuery) {
+      // 清除之前发出的 "正在分析搜索词" 状态
+      this.emitStreamEvent({
+        type: 'web-search-completed',
+        conversationId,
+        toolCallId: 'pre-search',
+        webSearchResults: [],
+      })
+      const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+      await this.runGenerationDirect(
+        conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
+      )
+      return
+    }
+
     // 更新搜索 query 为实际值
     this.emitStreamEvent({
       type: 'web-search-started',
       conversationId,
       toolCallId: 'pre-search',
-      toolCallName: 'web_search',
+      toolCallName: 'openchat_web_search',
       toolCallArgs: JSON.stringify({ query: searchQuery }),
     })
 
@@ -748,38 +805,74 @@ export class ChatGPTConversationService {
     )
   }
 
-  // 让模型从用户消息中提取搜索 query（简短调用，非流式采集）
+  // 判断是否需要搜索，是则提取 query；否则返回空字符串跳过搜索
   private async extractSearchQuery(
     adapter: ModelAdapter,
     modelId: string,
     userText: string,
     abortController: AbortController
   ): Promise<string> {
-    const prompt = `Extract the best web search query from the following user message. Output ONLY the search query, nothing else. Do NOT think, reason, or explain — just output the query directly.
+    const prompt = `Decide whether the following user message needs a web search.
+
+If a web search IS needed, output the best search query on a single line.
+
+If a web search is NOT needed, output only the word: NO_SEARCH
+
+Do NOT think, reason, or explain. Output exactly one of:
+- A search query (one line)
+- NO_SEARCH
+
 User message: ${userText}`
     const request: CanonicalModelRequest = {
       model: modelId,
-      systemPrompt: 'You are a search query extractor. Output only the search query. No thinking, no reasoning, no explanation.',
+      systemPrompt: 'You are a search decision assistant. Output only a search query or NO_SEARCH. No thinking, no reasoning, no explanation.',
       messages: [{ role: 'user', content: prompt }],
-      reasoningEffort: 'none',
     }
     console.log('[PreSearch] extractQuery request:', JSON.stringify(request))
     let query = ''
+    let lastError = ''
     try {
       for await (const event of adapter.stream(request, abortController.signal)) {
+        // 只收集正式 output_text delta，不收集 reasoning
         if (event.type === 'delta') {
           query += event.text
         }
-        if (event.type === 'turn_completed' || event.type === 'error') {
+        if (event.type === 'error') {
+          lastError = event.message
+          break
+        }
+        if (event.type === 'turn_completed') {
           break
         }
       }
-    } catch {
-      // 模型提取失败，fallback 到用户原文
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err)
     }
     console.log('[PreSearch] extractQuery response:', query)
-    const cleaned = query.trim().slice(0, 500)
-    return cleaned || userText.slice(0, 500)
+    if (lastError) console.error('[PreSearch] extractQuery error:', lastError)
+
+    // 剥离 qwen 等模型的  thinking... response  XML 包装
+    let cleaned = query.trim()
+    const respStart = cleaned.lastIndexOf('<response>')
+    if (respStart !== -1) {
+      cleaned = cleaned.slice(respStart + '<response>'.length)
+    }
+    const respEnd = cleaned.indexOf('</response>')
+    if (respEnd !== -1) {
+      cleaned = cleaned.slice(0, respEnd)
+    }
+    cleaned = cleaned
+      .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+      .replace(/^[Tt]hinking:.*$/gm, '')
+      .replace(/^[Dd]ecision:.*$/gm, '')
+      .trim()
+
+    if (!cleaned || /^NO_SEARCH$/i.test(cleaned)) {
+      console.log('[PreSearch] extractQuery decision: NO_SEARCH')
+      return ''
+    }
+    console.log('[PreSearch] extracted query=', cleaned.slice(0, 500))
+    return cleaned.slice(0, 500)
   }
 
   // 直接调用模型（无工具）

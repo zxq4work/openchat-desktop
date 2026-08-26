@@ -164,8 +164,8 @@ async function initializeChatGPTProvider(): Promise<void> {
   const toolRegistry = new ToolRegistry()
   const webSearchService = new WebSearchService(new BingHtmlSearchEngine())
   const webFetchService = new WebFetchService()
-  toolRegistry.register('web_search', new WebSearchTool(webSearchService))
-  toolRegistry.register('web_fetch', new WebFetchTool(webFetchService))
+  toolRegistry.register('openchat_web_search', new WebSearchTool(webSearchService))
+  toolRegistry.register('openchat_web_fetch', new WebFetchTool(webFetchService))
   services.toolRegistry = toolRegistry
   services.webSearchService = webSearchService
   services.webFetchService = webFetchService

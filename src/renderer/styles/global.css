@@ -964,6 +964,15 @@ textarea {
   text-decoration: underline;
 }
 
+.message-search-result-url {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-search-result-snippet {
   font-size: 12px;
   color: var(--text-secondary);
