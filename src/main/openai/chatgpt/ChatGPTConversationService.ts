@@ -637,7 +637,9 @@ export class ChatGPTConversationService {
     const fullInstructions = instructions + '\n\n' + SEARCH_INSTRUCTIONS
     const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
 
+    console.log('[Generation] before ToolLoop.run')
     const result = await controller.run(request, abortController.signal, callbacks)
+    console.log('[Generation] after ToolLoop.run finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
 
     // 收到过 structured function_call → 确认 supported
     if (result.totalToolCalls > 0) {
@@ -650,8 +652,13 @@ export class ChatGPTConversationService {
     }
     // totalToolCalls === 0 → 模型直接回答，不改变 capability
 
+    console.log('[Generation] before updateContent, textLength=%d', result.finalText.length)
     this.messages.updateContent(assistantMessageId, result.finalText)
+    console.log('[Generation] after updateContent')
+
+    console.log('[Generation] before updateStatus')
     this.messages.updateStatus(assistantMessageId, 'completed')
+    console.log('[Generation] after updateStatus')
 
     // 持久化搜索结果
     if (result.toolCallHistory.length > 0) {
@@ -686,7 +693,9 @@ export class ChatGPTConversationService {
       })
     }
 
+    console.log('[Generation] before turn-completed emit')
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+    console.log('[Generation] after turn-completed emit')
   }
 
   // PreSearch Mode：不支持 tool calling 时，先让模型提取搜索 query，再搜索并注入上下文

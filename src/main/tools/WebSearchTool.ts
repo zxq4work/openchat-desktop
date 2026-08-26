@@ -66,10 +66,19 @@ export class WebSearchTool implements OpenChatTool {
       const message = err instanceof Error ? err.message : String(err)
       console.error('[Web Search Error]', message)
 
+      // 提取错误码前缀，让模型能向用户解释具体原因
+      let errorCode = 'SEARCH_ERROR'
+      let userMessage = 'Web search failed'
+      if (message.startsWith('SEARCH_')) {
+        const colonIdx = message.indexOf(':')
+        errorCode = colonIdx > 0 ? message.slice(0, colonIdx) : message
+        userMessage = colonIdx > 0 ? message.slice(colonIdx + 2) : message
+      }
+
       return {
         callId: '',
         name: 'openchat_web_search',
-        output: JSON.stringify({ error: 'SEARCH_NETWORK_ERROR', message: 'Web search failed' }),
+        output: JSON.stringify({ error: errorCode, message: userMessage }),
         isError: true,
       }
     }

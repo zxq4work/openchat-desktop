@@ -1,9 +1,8 @@
-import * as https from 'https'
 import type { IncomingMessage } from 'http'
 import * as cheerio from 'cheerio'
 import type { SearchEngine } from './WebSearchService'
 import type { SearchResultItem } from '../../shared/types/provider'
-import { getProxyAgent } from '../openai/chatgpt/httpsClient'
+import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const BING_SEARCH_URL = 'https://www.bing.com/search'
 const MAX_RESULTS = 10
@@ -24,14 +23,14 @@ export class BingHtmlSearchEngine implements SearchEngine {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       }
 
-      const req = https.request(
+      const req = createRequest(
         {
           hostname: parsed.hostname,
           port: 443,
           path: parsed.pathname + parsed.search,
           method: 'GET',
           headers,
-          agent: getProxyAgent(),
+          protocol: 'https:',
         },
         (res: IncomingMessage) => {
           if (res.statusCode != null && res.statusCode >= 300 && res.statusCode < 400) {

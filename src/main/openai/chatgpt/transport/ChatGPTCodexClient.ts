@@ -1,8 +1,7 @@
-import * as https from 'https'
 import type { IncomingMessage } from 'http'
 import { ResponsesStreamParser } from './ResponsesStreamParser'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
-import { getProxyAgent } from '../httpsClient'
+import { createRequest } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
 
 // ---- Error Types ----
@@ -168,24 +167,27 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
         headers['ChatGPT-Account-Id'] = accountId
       }
 
-      const req = https.request({
-        hostname: parsedUrl.hostname,
-        port: 443,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'GET',
-        headers,
-        agent: getProxyAgent(),
-      }, (res) => {
-        let data = ''
-        res.on('data', (chunk) => { data += chunk })
-        res.on('end', () => {
-          resolve({
-            ok: res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300,
-            status: res.statusCode ?? 0,
-            json: async () => JSON.parse(data),
+      const req = createRequest(
+        {
+          hostname: parsedUrl.hostname,
+          port: 443,
+          path: parsedUrl.pathname + parsedUrl.search,
+          method: 'GET',
+          headers,
+          protocol: 'https:',
+        },
+        (res) => {
+          let data = ''
+          res.on('data', (chunk) => { data += chunk })
+          res.on('end', () => {
+            resolve({
+              ok: res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300,
+              status: res.statusCode ?? 0,
+              json: async () => JSON.parse(data),
+            })
           })
-        })
-      })
+        }
+      )
 
       req.on('error', reject)
       req.end()
@@ -214,14 +216,16 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
 
     try {
       const stream = await new Promise<IncomingMessage>((resolve, reject) => {
-        const req = https.request({
-          hostname: url.hostname,
-          port: 443,
-          path: url.pathname + url.search,
-          method: 'POST',
-          headers,
-          agent: getProxyAgent(),
-        }, (res) => {
+        const req = createRequest(
+          {
+            hostname: url.hostname,
+            port: 443,
+            path: url.pathname + url.search,
+            method: 'POST',
+            headers,
+            protocol: 'https:',
+          },
+          (res) => {
           if (statusRef) statusRef.status = res.statusCode ?? 0
           console.log('[ChatGPT Request] status=', res.statusCode)
           const endpoint = `POST ${url.hostname}${url.pathname}${url.search}`

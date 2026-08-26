@@ -1,5 +1,3 @@
-import * as https from 'https'
-import * as http from 'http'
 import type { IncomingMessage } from 'http'
 import { SSEParser } from './SSEParser'
 import type {
@@ -11,7 +9,7 @@ import type {
   CanonicalToolCall,
   ProviderProtocol,
 } from '../../shared/types/provider'
-import { getProxyAgentForHost } from '../openai/chatgpt/httpsClient'
+import { createRequest } from '../openai/chatgpt/httpsClient'
 
 interface ChatCompletionMessage {
   role: string
@@ -296,16 +294,16 @@ export class ChatCompletionsAdapter implements ModelAdapter {
 
     const stream = await new Promise<IncomingMessage>((resolve, reject) => {
       const isHttps = parsed.protocol === 'https:'
-      const lib = isHttps ? https : http
       const defaultPort = isHttps ? 443 : 80
-      const req = lib.request(
+      const req = createRequest(
         {
           hostname: parsed.hostname,
           port: parsed.port ? parseInt(parsed.port, 10) : defaultPort,
           path: parsed.pathname + parsed.search,
           method: 'POST',
           headers,
-          agent: getProxyAgentForHost(parsed.hostname),
+          protocol: isHttps ? 'https:' : 'http:',
+          bypassLocal: true,
         },
         (res) => {
           if (res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300) {

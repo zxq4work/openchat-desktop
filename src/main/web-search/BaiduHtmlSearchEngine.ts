@@ -1,9 +1,8 @@
-import * as https from 'https'
 import type { IncomingMessage } from 'http'
 import * as cheerio from 'cheerio'
 import type { SearchEngine } from './WebSearchService'
 import type { SearchResultItem } from '../../shared/types/provider'
-import { getProxyAgent } from '../openai/chatgpt/httpsClient'
+import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const BAIDU_SEARCH_URL = 'https://www.baidu.com/s'
 const MAX_RESULTS = 10
@@ -29,14 +28,14 @@ export class BaiduHtmlSearchEngine implements SearchEngine {
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
       }
 
-      const req = https.request(
+      const req = createRequest(
         {
           hostname: parsed.hostname,
           port: 443,
           path: parsed.pathname + parsed.search,
           method: 'GET',
           headers,
-          agent: getProxyAgent(),
+          protocol: 'https:',
         },
         (res: IncomingMessage) => {
           if (res.statusCode != null && res.statusCode >= 300 && res.statusCode < 400) {

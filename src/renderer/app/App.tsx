@@ -95,6 +95,7 @@ export function App() {
 
     window.openchat.events.onChatDelta((event: unknown) => {
       const e = event as { text?: string; conversationId?: string }
+      console.log('[App RAW] delta conversationId=%s textLen=%d', e.conversationId ?? '?', e.text?.length ?? 0)
       if (e.text) {
         const streamingId = useChatStreamStore.getState().streamingConversationId
         if (!streamingId) {
@@ -109,6 +110,7 @@ export function App() {
 
     window.openchat.events.onChatReasoningStarted((event: unknown) => {
       const e = event as { conversationId?: string }
+      console.log('[App RAW] reasoning-started conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (!streamingId) {
         useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
@@ -149,6 +151,7 @@ export function App() {
 
     window.openchat.events.onChatReasoningCompleted((event: unknown) => {
       const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta; conversationId?: string }
+      console.log('[App RAW] reasoning-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -164,6 +167,7 @@ export function App() {
 
     window.openchat.events.onWebSearchStarted((event: unknown) => {
       const e = event as { conversationId?: string; toolCallId?: string; toolCallName?: string; toolCallArgs?: string }
+      console.log('[App RAW] web-search-started conversationId=%s toolCallId=%s toolName=%s', e.conversationId ?? '?', e.toolCallId ?? '?', e.toolCallName ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -191,6 +195,7 @@ export function App() {
 
     window.openchat.events.onWebSearchCompleted((event: unknown) => {
       const e = event as { conversationId?: string; toolCallId?: string; webSearchResults?: unknown[] }
+      console.log('[App RAW] web-search-completed conversationId=%s toolCallId=%s resultsCount=%d', e.conversationId ?? '?', e.toolCallId ?? '?', e.webSearchResults?.length ?? 0)
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -215,6 +220,7 @@ export function App() {
 
     window.openchat.events.onWebSearchError((event: unknown) => {
       const e = event as { conversationId?: string; toolCallError?: string }
+      console.log('[App RAW] web-search-error conversationId=%s error=%s', e.conversationId ?? '?', e.toolCallError ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -227,6 +233,7 @@ export function App() {
 
     window.openchat.events.onStreamReset((event: unknown) => {
       const e = event as { conversationId?: string }
+      console.log('[App RAW] stream-reset conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -245,6 +252,7 @@ export function App() {
 
     window.openchat.events.onChatError((event: unknown) => {
       const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
+      console.log('[App RAW] chat-error conversationId=%s errorCode=%s', e.conversationId ?? '?', e.errorCode ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -276,6 +284,7 @@ export function App() {
 
     window.openchat.events.onTurnCompleted((event: unknown) => {
       const e = event as { conversationId?: string }
+      console.log('[App RAW] turn-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
@@ -398,8 +407,8 @@ export function App() {
       if (isFind) {
         // 焦点已在搜索输入框内：全选内容，阻止浏览器默认行为
         if (target?.classList.contains('search-bar-input')) {
-          e.preventDefault()
-          target.select()
+          e.preventDefault();
+          (target as HTMLInputElement).select()
           return
         }
 

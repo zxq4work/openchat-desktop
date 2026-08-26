@@ -1,10 +1,8 @@
-import * as https from 'https'
-import * as http from 'http'
 import * as dns from 'dns'
 import type { IncomingMessage } from 'http'
 import * as cheerio from 'cheerio'
 import type { WebFetchResult } from '../../shared/types/provider'
-import { getProxyAgent } from '../openai/chatgpt/httpsClient'
+import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const MAX_REDIRECTS = 5
 const TIMEOUT_MS = 15000
@@ -182,19 +180,18 @@ export class WebFetchService {
   ): Promise<{ status: number; headers: Record<string, string>; body: string }> {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url)
-      const lib = isHttps ? https : http
 
-      const req = lib.request(
+      const req = createRequest(
         {
           hostname: parsed.hostname,
-          port: parsed.port || (isHttps ? 443 : 80),
+          port: parsed.port ? parseInt(parsed.port, 10) : undefined,
           path: parsed.pathname + parsed.search,
           method: 'GET',
           timeout: TIMEOUT_MS,
           headers: {
             'Accept': 'text/html,application/xhtml+xml,text/plain;q=0.9',
           },
-          agent: getProxyAgent(),
+          protocol: isHttps ? 'https:' : 'http:',
         },
         (res: IncomingMessage) => {
           const chunks: Buffer[] = []

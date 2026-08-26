@@ -1,7 +1,6 @@
-import * as https from 'https'
 import type { IncomingMessage } from 'http'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
-import { getProxyAgent } from '../httpsClient'
+import { createRequest } from '../httpsClient'
 import type { ChatGPTUsageResponse } from '../../../../shared/types/usage'
 
 const BASE_URL = 'https://chatgpt.com'
@@ -82,14 +81,14 @@ export class ChatGPTUsageClient {
         headers['ChatGPT-Account-Id'] = accountId
       }
 
-      const request = https.request(
+      const request = createRequest(
         {
           hostname: parsedUrl.hostname,
           port: 443,
           path: parsedUrl.pathname + parsedUrl.search,
           method: 'GET',
           headers,
-          agent: getProxyAgent(),
+          protocol: 'https:',
         },
         (res: IncomingMessage) => {
           let data = ''

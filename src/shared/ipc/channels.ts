@@ -46,6 +46,8 @@ export const IPC_CHANNELS = {
   // Settings
   SETTINGS_GET_PROXY: 'settings:get-proxy',
   SETTINGS_SET_PROXY: 'settings:set-proxy',
+  SETTINGS_RESOLVE_SYSTEM_PROXY: 'settings:resolve-system-proxy',
+  SETTINGS_REFRESH_SYSTEM_PROXY: 'settings:refresh-system-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
@@ -74,4 +76,7 @@ export const IPC_CHANNELS = {
   PROVIDERS_UPDATE: 'providers:update',
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
+
+  // Google Search Session
+  GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
 } as const

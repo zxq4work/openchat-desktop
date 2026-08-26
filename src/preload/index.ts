@@ -39,6 +39,8 @@ const IPC_CHANNELS = {
   CHAT_STREAM_RESET: 'chat:stream-reset',
   SETTINGS_GET_PROXY: 'settings:get-proxy',
   SETTINGS_SET_PROXY: 'settings:set-proxy',
+  SETTINGS_RESOLVE_SYSTEM_PROXY: 'settings:resolve-system-proxy',
+  SETTINGS_REFRESH_SYSTEM_PROXY: 'settings:refresh-system-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
@@ -56,6 +58,7 @@ const IPC_CHANNELS = {
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_UPDATE: 'providers:update',
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
+  GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
 } as const
 
 const openchat = {
@@ -102,13 +105,19 @@ const openchat = {
 
   settings: {
     getProxy: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_PROXY),
-    setProxy: (config: { enabled: boolean; protocol: string; host: string; port: string; username: string; password: string }) =>
+    setProxy: (config: { enabled: boolean; protocol: string; host: string; port: string; username: string; password: string; mode?: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_PROXY, config),
+    resolveSystemProxy: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_RESOLVE_SYSTEM_PROXY, url) as Promise<string>,
+    refreshSystemProxy: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_REFRESH_SYSTEM_PROXY),
     getDefaultModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_DEFAULT_MODEL) as Promise<{ providerId: string | null; modelId: string | null; effort: string | null }>,
     setDefaultModel: (providerId: string | null, modelId: string | null, effort: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, providerId, modelId, effort),
     getWebSearchEngine: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE) as Promise<string>,
     setWebSearchEngine: (engine: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, engine),
+  },
+
+  googleSearch: {
+    openSession: () => ipcRenderer.invoke(IPC_CHANNELS.GOOGLE_SEARCH_OPEN_SESSION),
   },
 
   providers: {

@@ -1,12 +1,10 @@
 import { ipcMain, BrowserWindow, shell } from 'electron'
-import * as https from 'https'
-import * as http from 'http'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
 import type { Conversation, ContextSegment, Message } from '../../shared/types/conversation'
 import type { ProxyConfig } from '../../shared/types/settings'
-import { setProxyConfig, getProxyAgent } from '../openai/chatgpt/httpsClient'
+import { setProxyConfig, createRequest, applyProxyMode, forceReloadProxyConfig, closeAllConnections, resolveSystemProxy } from '../openai/chatgpt/httpsClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
@@ -15,6 +13,7 @@ import type { CustomProviderConfig } from '../../shared/types/provider'
 import type { WebSearchEngineType } from '../../shared/types/settings'
 import { getSearchEngine } from '../web-search/SearchEngineFactory'
 import type { SearchEngine } from '../web-search/WebSearchService'
+import { googleSearchBrowser } from '../web-search/GoogleSearchBrowserService'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -68,11 +67,10 @@ interface Services {
 async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url)
-    const lib = parsed.protocol === 'https:' ? https : http
-    const req = lib.request(
+    const req = createRequest(
       {
         hostname: parsed.hostname,
-        port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+        port: parsed.port ? parseInt(parsed.port, 10) : undefined,
         path: parsed.pathname + parsed.search,
         method: 'GET',
         headers: {
@@ -80,7 +78,7 @@ async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]
           Accept: 'application/json',
         },
         timeout: 15000,
-        agent: getProxyAgent(),
+        protocol: parsed.protocol === 'https:' ? 'https:' : 'http:',
       },
       (res) => {
         let data = ''
@@ -121,7 +119,7 @@ async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]
   })
 }
 
-export function registerIpcHandlers(services: Services): void {
+export function registerIpcHandlers(services: Services, getMainWindow: () => BrowserWindow | null): void {
   // ===== Settings =====
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_PROXY, (): ProxyConfig | null => {
     const raw = services.settingsRepository?.get('proxy_config') ?? null
@@ -137,6 +135,13 @@ export function registerIpcHandlers(services: Services): void {
     services.settingsRepository?.set('proxy_config', JSON.stringify(config))
     setProxyConfig(config)
 
+    // 将代理模式应用到 Electron session（system/direct 走 Chromium，http/socks5 由 Node agent 处理）
+    await applyProxyMode()
+    await closeAllConnections()
+
+    // 同步代理到 Google 搜索 BrowserWindow session
+    await googleSearchBrowser.syncProxyToSession()
+
     // 开启代理且 ChatGPT 已登录时，主动执行一次 codex 额度查询
     if (config.enabled) {
       const auth = await services.authService?.checkAuth()
@@ -144,6 +149,19 @@ export function registerIpcHandlers(services: Services): void {
         void services.usageService?.refresh()
       }
     }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_RESOLVE_SYSTEM_PROXY, async (_event, url: string): Promise<string> => {
+    try {
+      return await resolveSystemProxy(url)
+    } catch {
+      return 'DIRECT'
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_REFRESH_SYSTEM_PROXY, async (): Promise<void> => {
+    await forceReloadProxyConfig()
+    await closeAllConnections()
   })
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_DEFAULT_MODEL, (): { providerId: string | null; modelId: string | null; effort: string | null } => {
@@ -317,10 +335,15 @@ export function registerIpcHandlers(services: Services): void {
     shell.openExternal(url)
   })
 
+  // ===== Google Search Session =====
+  ipcMain.handle(IPC_CHANNELS.GOOGLE_SEARCH_OPEN_SESSION, (): void => {
+    googleSearchBrowser.openSession()
+  })
+
   // ===== Auth Events (Main -> Renderer) =====
   if (services.authService?.onStatusChange) {
     services.authService.onStatusChange((status: string) => {
-      const win = BrowserWindow.getAllWindows()[0]
+      const win = getMainWindow()
       if (!win) return
       win.webContents.send(IPC_CHANNELS.AUTH_CHANGED, status)
     })
@@ -328,16 +351,18 @@ export function registerIpcHandlers(services: Services): void {
 
   // ===== Events (Main -> Renderer) =====
   services.usageService?.onChange((view) => {
-    const win = BrowserWindow.getAllWindows()[0]
+    const win = getMainWindow()
     if (!win) return
     win.webContents.send(IPC_CHANNELS.CODEX_USAGE_CHANGED, view)
   })
 
   services.conversationService?.onStreamEvent((event) => {
-    const win = BrowserWindow.getAllWindows()[0]
+    const win = getMainWindow()
     if (!win) return
 
-    const e = event as { type: string }
+    const e = event as { type: string; conversationId?: string }
+    console.log('[Chat IPC Send] event=%s conversationId=%s targetWebContentsId=%d', e.type, e.conversationId ?? '?', win.webContents.id)
+
     switch (e.type) {
       case 'delta':
         win.webContents.send(IPC_CHANNELS.CHAT_DELTA, event)

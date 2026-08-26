@@ -28,6 +28,10 @@ export function WebSearchEngineSettings() {
     window.openchat.settings.setWebSearchEngine(value)
   }
 
+  const handleOpenGoogleSession = () => {
+    window.openchat.googleSearch.openSession()
+  }
+
   if (!loaded) return null
 
   return (
@@ -41,6 +45,19 @@ export function WebSearchEngineSettings() {
         onChange={handleChange}
         ariaLabel="选择搜索引擎"
       />
+      {engine === 'google' && (
+        <div className="proxy-system-info" style={{ marginTop: 8 }}>
+          <p className="proxy-system-hint">
+            Google 使用内置 Chromium 加载搜索页面，需要 JavaScript 执行。首次使用可能需要完成 Google 验证。
+          </p>
+          <button
+            className="proxy-system-test-btn"
+            onClick={handleOpenGoogleSession}
+          >
+            打开 Google 搜索会话
+          </button>
+        </div>
+      )}
     </div>
   )
 }

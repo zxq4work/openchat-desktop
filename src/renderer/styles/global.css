@@ -1814,6 +1814,65 @@ textarea {
   width: 100%;
 }
 
+.proxy-system-info {
+  margin-top: 12px;
+}
+
+.proxy-system-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+.proxy-system-test-btn {
+  padding: 6px 14px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.proxy-system-test-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.proxy-system-test-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.proxy-system-test-results {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.proxy-system-test-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.proxy-system-test-url {
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.proxy-system-test-route {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
 .proxy-form-actions {
   display: flex;
   justify-content: flex-end;

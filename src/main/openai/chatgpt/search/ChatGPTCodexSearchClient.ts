@@ -1,7 +1,6 @@
-import * as https from 'https'
 import type { IncomingMessage } from 'http'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
-import { getProxyAgent } from '../httpsClient'
+import { createRequest } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
 import type { SearchRequest, SearchResponse } from '../../../../shared/types/webSearch'
 
@@ -129,14 +128,14 @@ export class ChatGPTCodexSearchClient {
         headers['ChatGPT-Account-Id'] = accountId
       }
 
-      const req = https.request(
+      const req = createRequest(
         {
           hostname: parsedUrl.hostname,
           port: 443,
           path: parsedUrl.pathname + parsedUrl.search,
           method: 'POST',
           headers,
-          agent: getProxyAgent(),
+          protocol: 'https:',
         },
         (res) => {
           let data = ''

@@ -24,7 +24,7 @@ import { FileOAuthCredentialStore } from '../openai/chatgpt/auth/OAuthCredential
 import type { ChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { RealChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import type { OAuthClient } from '../openai/chatgpt/auth/OAuthClient'
-import { setProxyConfig } from '../openai/chatgpt/httpsClient'
+import { setProxyConfig, applyProxyMode } from '../openai/chatgpt/httpsClient'
 
 // Mock Provider (dev/test)
 import { MockAuthServer } from '../openai/chatgpt/auth/MockAuthServer'
@@ -141,6 +141,9 @@ async function initializeChatGPTProvider(): Promise<void> {
       // 忽略损坏的配置
     }
   }
+
+  // 启动时应用代理模式到 Electron session（system/direct 走 Chromium）
+  await applyProxyMode()
 
   const useMock = process.env.OPENCHAT_PROVIDER_MOCK === 'true'
 
@@ -342,7 +345,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   await initializeServices()
-  registerIpcHandlers(services)
+  registerIpcHandlers(services, () => mainWindow)
   Menu.setApplicationMenu(null)
   createWindow()
 

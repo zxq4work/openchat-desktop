@@ -136,6 +136,7 @@ export class ToolLoopController {
 
       // 没有工具调用，模型已输出最终回答，退出循环
       if (toolCalls.length === 0) {
+        console.log('[ToolLoop] round=%d decision=final-answer returning=true', round)
         break
       }
 
@@ -216,6 +217,7 @@ export class ToolLoopController {
       }
     }
 
+    console.log('[ToolLoop] returning final result, finalTextLength=%d totalToolCalls=%d', accumulatedContent.length, totalToolCalls)
     return {
       finalText: accumulatedContent,
       providerTurnId,
