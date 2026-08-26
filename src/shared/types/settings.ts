@@ -8,3 +8,5 @@ export interface ProxyConfig {
   username: string
   password: string
 }
+
+export type WebSearchEngineType = 'bing' | 'baidu'

@@ -26,6 +26,11 @@ export class WebSearchService {
     this.engine = engine
   }
 
+  setEngine(engine: SearchEngine): void {
+    this.engine = engine
+    this.cache.clear()
+  }
+
   async search(query: string, signal?: AbortSignal): Promise<SearchResultItem[]> {
     const key = normalizeQuery(query)
     const cached = this.cache.get(key)

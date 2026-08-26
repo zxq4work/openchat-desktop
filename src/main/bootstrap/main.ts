@@ -36,7 +36,8 @@ import { ToolRegistry } from '../tools/ToolRegistry'
 import { WebSearchTool } from '../tools/WebSearchTool'
 import { WebFetchTool } from '../tools/WebFetchTool'
 import { WebSearchService } from '../web-search/WebSearchService'
-import { BingHtmlSearchEngine } from '../web-search/BingHtmlSearchEngine'
+import { getSearchEngine } from '../web-search/SearchEngineFactory'
+import type { WebSearchEngineType } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
@@ -162,7 +163,11 @@ async function initializeChatGPTProvider(): Promise<void> {
 
   // 初始化新架构：ToolRegistry + WebSearchService + ProviderConfigService
   const toolRegistry = new ToolRegistry()
-  const webSearchService = new WebSearchService(new BingHtmlSearchEngine())
+
+  // 读取持久化的搜索引擎设置，默认 bing
+  const rawEngine = settingsRepo.get('web_search_engine')
+  const engineType: WebSearchEngineType = rawEngine === 'baidu' || rawEngine === 'bing' ? rawEngine : 'bing'
+  const webSearchService = new WebSearchService(getSearchEngine(engineType))
   const webFetchService = new WebFetchService()
   toolRegistry.register('openchat_web_search', new WebSearchTool(webSearchService))
   toolRegistry.register('openchat_web_fetch', new WebFetchTool(webFetchService))

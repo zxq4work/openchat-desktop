@@ -12,6 +12,9 @@ import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredent
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
 import type { CodexUsageView } from '../../shared/types/usage'
 import type { CustomProviderConfig } from '../../shared/types/provider'
+import type { WebSearchEngineType } from '../../shared/types/settings'
+import { getSearchEngine } from '../web-search/SearchEngineFactory'
+import type { SearchEngine } from '../web-search/WebSearchService'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -59,6 +62,7 @@ interface Services {
   } | null
   credentialManager: OAuthCredentialManager | null
   usageService: ChatGPTUsageService | null
+  webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine) => void } | null
 }
 
 async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
@@ -154,6 +158,20 @@ export function registerIpcHandlers(services: Services): void {
 
   ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, (_event, providerId: string | null, modelId: string | null, effort: string | null): void => {
     services.settingsRepository?.set('default_model', JSON.stringify({ providerId, modelId, effort }))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE, (): string => {
+    const raw = services.settingsRepository?.get('web_search_engine') ?? null
+    return raw === 'baidu' || raw === 'bing' ? raw : 'bing'
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, (_event, engine: string): void => {
+    const normalized: WebSearchEngineType = engine === 'baidu' ? 'baidu' : 'bing'
+    services.settingsRepository?.set('web_search_engine', normalized)
+    // 切换 WebSearchService 内部的搜索引擎，并清空缓存
+    if (services.webSearchService) {
+      services.webSearchService.setEngine(getSearchEngine(normalized))
+    }
   })
 
   // ===== Auth =====

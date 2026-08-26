@@ -48,6 +48,8 @@ export const IPC_CHANNELS = {
   SETTINGS_SET_PROXY: 'settings:set-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
+  SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
+  SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
 
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
