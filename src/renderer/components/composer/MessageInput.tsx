@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useConversationStore } from '../../stores/conversationStore'
+import { useUiStore } from '../../stores/uiStore'
 
 interface Props {
   text: string
@@ -16,13 +17,14 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
   const isCurrentConversationStreaming = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // 会话切换或新建时聚焦输入框
+  const focusRequestId = useUiStore((s) => s.focusRequestId)
+
+  // 会话切换、新建或复用空白会话时聚焦输入框
   useEffect(() => {
-    // 延迟一帧，确保 textarea 已渲染（切换会话时可能伴随 state 更新）
     requestAnimationFrame(() => {
       textareaRef.current?.focus()
     })
-  }, [activeConversationId])
+  }, [activeConversationId, focusRequestId])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // IME 组合输入中不处理（如中文输入法按回车确认英文）
