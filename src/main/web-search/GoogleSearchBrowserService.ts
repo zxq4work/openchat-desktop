@@ -200,6 +200,8 @@ export class GoogleSearchBrowserService {
     let pollTimer: ReturnType<typeof setTimeout> | null = null
     let settled = false
     let abortHandler: (() => void) | null = null
+    let consecutiveJsErrors = 0
+    const MAX_CONSECUTIVE_JS_ERRORS = 5
 
     return new Promise<SearchResultItem[]>((resolve, reject) => {
       const cleanup = () => {
@@ -210,10 +212,32 @@ export class GoogleSearchBrowserService {
         }
       }
 
-      const settle = (fn: () => void) => {
+      // 监听页面加载失败，立即终止轮询
+      const failLoadHandler = (_event: Electron.Event, errorCode: number, _errorDescription: string, validatedURL: string, _isMainFrame: boolean) => {
+        console.log('[GoogleBrowser] did-fail-load errorCode=%d url=%s', errorCode, validatedURL)
+        settleWithCleanup(() => reject(new Error(`SEARCH_PAGE_LOAD_FAILED: 页面加载失败 (${errorCode})`)))
+      }
+      win.webContents.on('did-fail-load', failLoadHandler)
+
+      // 监听 renderer 崩溃，避免 executeJavaScript 在已崩溃的进程上继续执行
+      const crashedHandler = () => {
+        console.log('[GoogleBrowser] renderer-crashed')
+        settleWithCleanup(() => reject(new Error('SEARCH_RENDERER_CRASHED: 搜索页面渲染进程崩溃')))
+      }
+      win.webContents.on('render-process-gone', crashedHandler)
+
+      // 扩展 cleanup 以移除事件监听器
+      const origCleanup = cleanup
+      const fullCleanup = () => {
+        origCleanup()
+        win.webContents.removeListener('did-fail-load', failLoadHandler)
+        win.webContents.removeListener('render-process-gone', crashedHandler)
+      }
+
+      const settleWithCleanup = (fn: () => void) => {
         if (settled) return
         settled = true
-        cleanup()
+        fullCleanup()
         fn()
       }
 
@@ -223,7 +247,7 @@ export class GoogleSearchBrowserService {
           return
         }
         abortHandler = () => {
-          settle(() => {
+          settleWithCleanup(() => {
             win.webContents.stop()
             reject(new Error('Aborted'))
           })
@@ -233,6 +257,10 @@ export class GoogleSearchBrowserService {
 
       const poll = async () => {
         if (settled) return
+        if (win.isDestroyed()) {
+          settleWithCleanup(() => reject(new Error('SEARCH_WINDOW_DESTROYED: 搜索窗口已销毁')))
+          return
+        }
 
         try {
           const state = await win.webContents.executeJavaScript(`
@@ -245,6 +273,7 @@ export class GoogleSearchBrowserService {
           `) as string
 
           if (settled) return
+          consecutiveJsErrors = 0
 
           const pageState: PageState = JSON.parse(state)
 
@@ -273,7 +302,7 @@ export class GoogleSearchBrowserService {
             )
 
             if (results.length > 0) {
-              settle(() => resolve(results))
+              settleWithCleanup(() => resolve(results))
               return
             }
           }
@@ -282,13 +311,13 @@ export class GoogleSearchBrowserService {
 
           if (pageType === 'challenge') {
             console.log('[GoogleBrowser] state=challenge elapsed=%dms', elapsed)
-            settle(() => reject(new Error('SEARCH_PROVIDER_CHALLENGE: Google 要求验证当前网络请求，请更换网络/代理出口或切换其他搜索引擎。')))
+            settleWithCleanup(() => reject(new Error('SEARCH_PROVIDER_CHALLENGE: Google 要求验证当前网络请求，请更换网络/代理出口或切换其他搜索引擎。')))
             return
           }
 
           if (pageType === 'consent') {
             console.log('[GoogleBrowser] state=consent elapsed=%dms', elapsed)
-            settle(() => reject(new Error('SEARCH_PROVIDER_CONSENT_REQUIRED: Google 需要同意隐私条款，请在设置中打开 Google 搜索会话完成同意。')))
+            settleWithCleanup(() => reject(new Error('SEARCH_PROVIDER_CONSENT_REQUIRED: Google 需要同意隐私条款，请在设置中打开 Google 搜索会话完成同意。')))
             return
           }
 
@@ -298,15 +327,21 @@ export class GoogleSearchBrowserService {
               pageType === 'loading'
                 ? new Error('SEARCH_JAVASCRIPT_FLOW_FAILED: Google 搜索 JavaScript 流程未在超时内完成')
                 : new Error('SEARCH_TIMEOUT: Google search timed out')
-            settle(() => reject(timeoutErr))
+            settleWithCleanup(() => reject(timeoutErr))
             return
           }
         } catch (err) {
           if (err instanceof Error && err.message.startsWith('SEARCH_')) {
-            settle(() => reject(err))
+            settleWithCleanup(() => reject(err))
             return
           }
-          // executeJavaScript 可能因页面导航而失败，继续轮询
+          // executeJavaScript 可能因页面导航而失败，但连续失败超过阈值则终止
+          consecutiveJsErrors++
+          if (consecutiveJsErrors >= MAX_CONSECUTIVE_JS_ERRORS) {
+            console.log('[GoogleBrowser] too many JS errors, stopping poll')
+            settleWithCleanup(() => reject(new Error('SEARCH_JS_ERROR: 搜索页面脚本执行持续失败')))
+            return
+          }
         }
 
         // 串行化下一次轮询（等待上一次完成后再调度），避免重叠

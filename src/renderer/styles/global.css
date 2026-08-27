@@ -1921,7 +1921,18 @@ textarea {
   background: var(--accent-hover);
 }
 
-/* Provider Form */
+/* Provider dialog — wider than default for the form content */
+.provider-dialog {
+  width: 560px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.provider-dialog .provider-form-field {
+  margin-bottom: 12px;
+}
+
+/* Provider Form (kept for backward compat, no longer used in dialog mode) */
 .provider-form {
   margin-top: 4px;
   margin-bottom: 16px;
@@ -2162,6 +2173,16 @@ textarea {
   background: var(--bg-hover);
   color: var(--text-secondary);
   font-weight: 500;
+}
+
+.provider-card-badge--chat_completions {
+  background: #e8f4fd;
+  color: #1a73e8;
+}
+
+.provider-card-badge--responses {
+  background: #e6f4ea;
+  color: #137333;
 }
 
 .provider-card-meta {

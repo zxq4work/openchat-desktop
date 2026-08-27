@@ -98,8 +98,12 @@ export function Composer() {
   }, [error, setError])
 
   const handleSend = async () => {
-    if (!activeConversation || !text.trim()) return
-    if (isExhausted) return
+    console.log('[Composer] handleSend entry activeConversationId=%s text=%s streamingStatus=%s currentError=%s', activeConversation?.id ?? 'null', text.trim() ? `"${text.trim().slice(0, 30)}"` : '(empty)', useChatStreamStore.getState().status, useChatStreamStore.getState().error)
+    if (!activeConversation || !text.trim()) { console.log('[Composer] handleSend SKIP: no conversation or empty text'); return }
+    if (isExhausted) { console.log('[Composer] handleSend SKIP: exhausted'); return }
+
+    // 清除上一个请求的残留错误
+    setError(null)
 
     const conversationId = activeConversation.id
     const messageText = text.trim()
@@ -115,6 +119,7 @@ export function Composer() {
 
     try {
       const result = await window.openchat.chat.send(conversationId, messageText)
+      console.log('[Composer] chat.send resolved, before setStatus=streaming, current status=%s streamingId=%s', useChatStreamStore.getState().status, useChatStreamStore.getState().streamingConversationId)
       setStatus('streaming')
       // 立即把 user/assistant 消息追加到 activeMessages，并设置 activeAssistantMessageId，
       // 保证旧会话（消息多、get 慢）下流式事件到达时组件已就绪，无需等 conversations.get 返回
@@ -135,9 +140,11 @@ export function Composer() {
     } catch (err) {
       console.error('[Composer] Send failed:', err)
       const message = err instanceof Error ? err.message : String(err)
+      console.log('[Composer] catch block: setting error, status=%s streamingId=%s', useChatStreamStore.getState().status, useChatStreamStore.getState().streamingConversationId)
       setError(message)
       setStatus('idle')
       setActiveAssistantMessage(null)
+      useChatStreamStore.getState().setStreamingConversationId(null)
     }
   }
 
