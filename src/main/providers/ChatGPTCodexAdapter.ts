@@ -202,15 +202,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
           // 最终 assistant message 完成：打印 citation annotations 诊断（不打印完整回答）
           const annotations = event.item.annotations
           if (Array.isArray(annotations) && annotations.length > 0) {
-            console.log('[Codex Adapter] output_item.done message annotations count=', annotations.length)
-            annotations.forEach((a, i) => {
-              const ann = a as Record<string, unknown>
-              const annType = ann.type ?? '(no type)'
-              const keys = Object.keys(ann)
-              console.log(`[Codex Adapter]   annotation[${i}] type=${annType} keys=${keys.join(',')} url=${ann.url ?? '(none)'} title=${ann.title ?? '(none)'}`)
-            })
-          } else {
-            console.log('[Codex Adapter] output_item.done message annotations count=0 (none)')
+            console.log('[Codex Adapter] annotations count=', annotations.length)
           }
         }
         if (event.item.type === 'reasoning') {
@@ -232,12 +224,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
         if (event.item.type === 'web_search_call') {
           const item = event.item as { type: string; id: string; action?: { sources?: Array<{ url?: string; title?: string; type?: string }> } }
           const sources = item.action?.sources ?? []
-          console.log('[Codex Adapter] output_item.done web_search_call sourcesCount=', sources.length)
-          if (sources.length > 0) {
-            const firstSource = sources[0]
-            const keys = Object.keys(firstSource as Record<string, unknown>)
-            console.log('[Codex Adapter] output_item.done firstSource keys=', keys.join(','), 'title=', (firstSource as Record<string, unknown>).title ?? '(none)', 'url=', (firstSource as Record<string, unknown>).url ?? '(none)')
-          }
+          console.log('[Codex Adapter] web_search_call sourcesCount=', sources.length)
           return {
             type: 'web_search_call',
             phase: 'completed',
@@ -249,36 +236,21 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       case 'response.web_search_call.started':
       case 'response.web_search_call.in_progress':
       case 'response.web_search_call.searching':
-        console.log('[Codex Adapter] web_search_call phase=started eventType=', event.type)
         return { type: 'web_search_call', phase: 'started' }
 
       case 'response.web_search_call.completed':
-        {
-          const responseResults = (event.response as { results?: unknown[] } | undefined)?.results
-          if (responseResults && responseResults.length > 0) {
-            console.log('[Codex Adapter] web_search_call phase=completed resultsCount=', responseResults.length)
-            const first = responseResults[0]
-            if (first && typeof first === 'object') {
-              const keys = Object.keys(first as Record<string, unknown>)
-              console.log('[Codex Adapter] web_search_call firstResult keys=', keys.join(','))
-            }
-          } else {
-            console.log('[Codex Adapter] web_search_call phase=completed resultsCount=0 (results may come via output_item.done)')
-          }
-        }
         // 不在此处发射 completed，避免与 output_item.done (web_search_call) 重复
         // 此事件仅作为搜索完成的信号，实际 sources 由 output_item.done 提供
         return { type: 'web_search_call', phase: 'searching' }
 
       case 'response.web_search_call.failed':
-        console.log('[Codex Adapter] web_search_call phase=failed')
         return { type: 'web_search_call', phase: 'failed' }
 
       case 'response.completed':
         return { type: 'turn_completed' }
 
       case 'error':
-        return { type: 'error', code: event.code, message: event.message }
+        return { type: 'error', code: event.error.code, message: event.error.message }
 
       default:
         return null

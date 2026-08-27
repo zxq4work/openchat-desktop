@@ -1,4 +1,4 @@
-// Best-effort presenter for /alpha/search results
+// Best-effort presenter for search results
 // results 为 unknown[]，任何字段缺失/未知结构不抛异常
 
 export interface SearchResultCard {
@@ -32,17 +32,4 @@ export function presentSearchResults(rawResults: unknown[]): SearchResultCard[] 
 
     return card
   })
-}
-
-export function extractSearchQuery(commandsJson: string): string | null {
-  try {
-    const commands = JSON.parse(commandsJson) as Record<string, unknown>
-    if (Array.isArray(commands.search_query) && commands.search_query.length > 0) {
-      const first = commands.search_query[0] as Record<string, unknown>
-      if (typeof first.q === 'string') return first.q
-    }
-  } catch {
-    // ignore
-  }
-  return null
 }

@@ -23,6 +23,7 @@ import type { ModelAdapter } from '../../../shared/types/provider'
 import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
+import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
@@ -691,9 +692,8 @@ export class ChatGPTConversationService {
     const fullInstructions = instructions + '\n\n' + SEARCH_INSTRUCTIONS
     const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
 
-    console.log('[Generation] before ToolLoop.run')
     const result = await controller.run(request, abortController.signal, callbacks)
-    console.log('[Generation] after ToolLoop.run finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
+    console.log('[Generation] ToolLoop done finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
 
     // 收到过 structured function_call → 确认 supported
     if (result.totalToolCalls > 0) {
@@ -706,13 +706,9 @@ export class ChatGPTConversationService {
     }
     // totalToolCalls === 0 → 模型直接回答，不改变 capability
 
-    console.log('[Generation] before updateContent, textLength=%d', result.finalText.length)
     this.messages.updateContent(assistantMessageId, result.finalText)
-    console.log('[Generation] after updateContent')
 
-    console.log('[Generation] before updateStatus')
     this.messages.updateStatus(assistantMessageId, 'completed')
-    console.log('[Generation] after updateStatus')
 
     // 持久化搜索结果
     if (result.toolCallHistory.length > 0) {
@@ -748,9 +744,7 @@ export class ChatGPTConversationService {
       })
     }
 
-    console.log('[Generation] before turn-completed emit')
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
-    console.log('[Generation] after turn-completed emit')
   }
 
   // Codex Hosted Search：使用官方 web_search 工具，服务端执行搜索，单次 SSE 流
@@ -834,7 +828,6 @@ export class ChatGPTConversationService {
                 this.emitStreamEvent({ type: 'web-search-call-started', conversationId })
                 break
               case 'searching':
-                console.log('[Codex] web_search_call phase=searching (search done, sources pending)')
                 break
               case 'completed':
                 console.log('[Codex] web_search_call phase=completed resultsCount=', event.results?.length ?? 0)
@@ -844,9 +837,8 @@ export class ChatGPTConversationService {
                       const obj = item as Record<string, unknown>
                       const rawUrl = (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null) ?? (typeof obj.uri === 'string' ? obj.uri : null)
                       const rawTitle = typeof obj.title === 'string' ? obj.title : null
-                      console.log('[Codex] web_search_call result keys=', Object.keys(obj).join(','), 'title=', rawTitle ?? '(none)', 'url=', rawUrl ?? '(none)')
                       webSearchResults.push({
-                        title: rawTitle ?? this.hostnameFromUrl(rawUrl),
+                        title: rawTitle ?? hostnameFromUrl(rawUrl),
                         url: rawUrl,
                         snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
                       })
@@ -939,13 +931,7 @@ export class ChatGPTConversationService {
     let searchContext = ''
     try {
       const results = await this.webSearchService.search(searchQuery, abortController.signal)
-      console.log('[PreSearch] query=', searchQuery)
-      console.log('[PreSearch] results count=', results.length)
-      for (const r of results) {
-        console.log(`[PreSearch]   [${r.index}] ${r.title}`)
-        console.log(`[PreSearch]        url: ${r.url}`)
-        console.log(`[PreSearch]        snippet: ${r.snippet}`)
-      }
+      console.log('[PreSearch] query=', searchQuery, 'results count=', results.length)
       if (results.length > 0) {
         const lines = [
           `You searched the web for: "${searchQuery}"`,
@@ -1027,7 +1013,6 @@ User message: ${userText}`
       systemPrompt: 'You are a search decision assistant. Output only a search query or NO_SEARCH. No thinking, no reasoning, no explanation.',
       messages: [{ role: 'user', content: prompt }],
     }
-    console.log('[PreSearch] extractQuery request:', JSON.stringify(request))
     let query = ''
     let lastError = ''
     try {
@@ -1047,7 +1032,6 @@ User message: ${userText}`
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)
     }
-    console.log('[PreSearch] extractQuery response:', query)
     if (lastError) console.error('[PreSearch] extractQuery error:', lastError)
 
     // 剥离 qwen 等模型的  thinking... response  XML 包装
@@ -1067,10 +1051,8 @@ User message: ${userText}`
       .trim()
 
     if (!cleaned || /^NO_SEARCH$/i.test(cleaned)) {
-      console.log('[PreSearch] extractQuery decision: NO_SEARCH')
       return ''
     }
-    console.log('[PreSearch] extracted query=', cleaned.slice(0, 500))
     return cleaned.slice(0, 500)
   }
 
@@ -1341,16 +1323,6 @@ User message: ${userText}`
   private deriveTitle(text: string): string {
     const trimmed = text.trim().replace(/\n/g, ' ')
     return trimmed.slice(0, TITLE_MAX_LENGTH) || '新对话'
-  }
-
-  // 从 URL 提取 hostname 作为来源标题兜底，例如 https://openai.com/index/... → openai.com
-  private hostnameFromUrl(url: string | null): string | null {
-    if (!url) return null
-    try {
-      return new URL(url).hostname
-    } catch {
-      return null
-    }
   }
 
   private getLocalDate(): string {

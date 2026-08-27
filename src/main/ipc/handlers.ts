@@ -391,7 +391,6 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     if (!win) return
 
     const e = event as { type: string; conversationId?: string }
-    console.log('[Chat IPC Send] event=%s conversationId=%s targetWebContentsId=%d', e.type, e.conversationId ?? '?', win.webContents.id)
 
     switch (e.type) {
       case 'delta':
