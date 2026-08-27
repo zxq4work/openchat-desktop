@@ -10,7 +10,7 @@ import type {
 } from '../../../shared/types/conversation'
 import type { CanonicalMessage, CanonicalModelRequest, CanonicalToolCall } from '../../../shared/types/provider'
 import { TITLE_MAX_LENGTH } from '../../../shared/constants'
-import type { ChatGPTCodexClient, ProviderInputItem } from './transport/ChatGPTCodexClient'
+import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { ToolLoopController } from '../../tools/ToolLoopController'
@@ -41,8 +41,25 @@ Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.`
 
+const CODEX_SEARCH_INSTRUCTIONS = `You have access to web search via the web_search tool.
+
+When you truly need external or up-to-date information, you may call web_search.
+If the existing conversation context is sufficient to answer, answer directly without searching again.
+
+Use web_search when:
+- the user explicitly asks to search, browse, look up, find or verify information;
+- the answer depends on current or potentially changed information;
+- external verification would materially improve accuracy.
+
+Use openchat_web_fetch when a search result snippet is insufficient and you need details from a source.
+
+Prefer concise search queries.
+Prefer primary and authoritative sources when possible.
+Never claim that you searched the web unless a web tool was actually executed.
+When using web results, cite relevant source URLs in the final answer.`
+
 export interface StreamEvent {
-  type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'stream-reset'
+  type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'web-search-call-started' | 'web-search-call-completed' | 'web-search-call-failed' | 'stream-reset'
   conversationId?: string
   turnId?: string
   itemId?: string
@@ -394,6 +411,17 @@ export class ChatGPTConversationService {
     return new ChatGPTCodexAdapter(this.codexClient)
   }
 
+  // Codex 路径：根据模型元数据决定是否启用 Responses Lite
+  // 根据当前 Provider 决定搜索后端：Codex 使用原生搜索，自定义 Provider 使用 OpenChat 自定义搜索
+  private resolveSearchStrategy(
+    providerConfigId: string | null,
+    webSearchEnabled: boolean
+  ): 'none' | 'codex-native' | 'openchat-custom' {
+    if (!webSearchEnabled) return 'none'
+    if (providerConfigId === null) return 'codex-native'
+    return 'openchat-custom'
+  }
+
   private buildCapabilityCacheKey(
     providerConfigId: string | null,
     adapter: ModelAdapter,
@@ -465,46 +493,62 @@ export class ChatGPTConversationService {
 
       const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
 
-      if (webSearchEnabled) {
-        const cacheKey = this.buildCapabilityCacheKey(providerConfigId, adapter, modelId)
-        const capability = this.toolCapabilityCache.get(cacheKey) ?? 'unknown'
-        console.log('[Tool Capability] protocol=', adapter.protocol, 'model=', modelId, 'capability=', capability)
+      const searchStrategy = this.resolveSearchStrategy(providerConfigId, webSearchEnabled)
+      const engineLabel = searchStrategy === 'codex-native'
+        ? 'codex-native'
+        : searchStrategy === 'openchat-custom'
+          ? (this.webSearchService.getEngineName())
+          : 'none'
+      console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', searchStrategy, engineLabel)
 
-        // unsupported → 直接走 PreSearch
-        if (capability === 'unsupported') {
-          console.log('[Tool Decision] mode=presearch capability=', capability)
-          await this.runGenerationWithPreSearch(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+      switch (searchStrategy) {
+        case 'codex-native':
+          await this.runGenerationWithCodexHostedSearch(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
           )
-        } else {
-          // unknown / supported / nonstandard → 尝试 ToolLoop
-          console.log('[Tool Decision] mode=tools')
-          try {
-            await this.runGenerationWithTools(
-              conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+          break
+
+        case 'openchat-custom': {
+          const cacheKey = this.buildCapabilityCacheKey(providerConfigId, adapter, modelId)
+          const capability = this.toolCapabilityCache.get(cacheKey) ?? 'unknown'
+          console.log('[Tool Capability] protocol=', adapter.protocol, 'model=', modelId, 'capability=', capability)
+
+          if (capability === 'unsupported') {
+            console.log('[Tool Decision] mode=presearch capability=', capability)
+            await this.runGenerationWithPreSearch(
+              conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
             )
-            return
-          } catch (err) {
-            if (this.isToolsUnsupportedError(err)) {
-              console.log('[Tool Fallback] reason=unsupported_tools cacheKey=', cacheKey)
-              this.toolCapabilityCache.set(cacheKey, 'unsupported')
-              this.messages.updateContent(assistantMessageId, '')
-              this.emitStreamEvent({ type: 'stream-reset', conversationId })
-              this.messages.updateStatus(assistantMessageId, 'streaming')
-              // 回退到 PreSearch
-              await this.runGenerationWithPreSearch(
-                conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+          } else {
+            console.log('[Tool Decision] mode=tools')
+            try {
+              await this.runGenerationWithTools(
+                conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
               )
               return
-            } else {
-              throw err
+            } catch (err) {
+              if (this.isToolsUnsupportedError(err)) {
+                console.log('[Tool Fallback] reason=unsupported_tools cacheKey=', cacheKey)
+                this.toolCapabilityCache.set(cacheKey, 'unsupported')
+                this.messages.updateContent(assistantMessageId, '')
+                this.emitStreamEvent({ type: 'stream-reset', conversationId })
+                this.messages.updateStatus(assistantMessageId, 'streaming')
+                await this.runGenerationWithPreSearch(
+                  conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, abortController
+                )
+                return
+              } else {
+                throw err
+              }
             }
           }
+          break
         }
-      } else {
-        await this.runGenerationDirect(
-          conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
-        )
+
+        case 'none':
+          await this.runGenerationDirect(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
+          )
+          break
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -696,6 +740,7 @@ export class ChatGPTConversationService {
         toolCalls: result.toolCallHistory.map((entry) => ({
           id: entry.callId,
           name: entry.name,
+          ...(entry.namespace ? { namespace: entry.namespace } : {}),
           arguments: entry.arguments,
           output: entry.output,
           isError: entry.isError,
@@ -706,6 +751,141 @@ export class ChatGPTConversationService {
     console.log('[Generation] before turn-completed emit')
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
     console.log('[Generation] after turn-completed emit')
+  }
+
+  // Codex Hosted Search：使用官方 web_search 工具，服务端执行搜索，单次 SSE 流
+  private async runGenerationWithCodexHostedSearch(
+    conversationId: string,
+    adapter: ModelAdapter,
+    modelId: string,
+    instructions: string,
+    effort: string,
+    assistantMessageId: string,
+    userText: string,
+    segmentId: string,
+    abortController: AbortController
+  ): Promise<void> {
+    let accumulatedContent = ''
+    let providerTurnId: string | null = null
+    let reasoningStartedAt: number | null = null
+    let totalReasoningDuration = 0
+    const webSearchResults: Array<{ title: string | null; url: string | null; snippet: string | null }> = []
+
+    const fullInstructions = instructions + '\n\n' + CODEX_SEARCH_INSTRUCTIONS
+    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
+    request.tools = [{
+      name: 'web_search',
+      description: '',
+      parameters: {},
+      toolType: 'web_search',
+    }]
+    request.toolChoice = 'auto'
+
+    console.log('[Codex] runGenerationWithCodexHostedSearch model=%s conversationId=%s', modelId, conversationId)
+
+    try {
+      for await (const event of adapter.stream(request, abortController.signal)) {
+        if (abortController.signal.aborted) break
+
+        switch (event.type) {
+          case 'delta':
+            accumulatedContent += event.text
+            this.messages.updateContent(assistantMessageId, accumulatedContent)
+            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.text })
+            break
+
+          case 'turn_started':
+            if (event.turnId && !providerTurnId) {
+              providerTurnId = event.turnId
+              this.messages.updateProviderIds(assistantMessageId, event.turnId, '')
+            }
+            this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: event.turnId ?? '' })
+            break
+
+          case 'reasoning_started':
+            reasoningStartedAt = Date.now()
+            this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId })
+            break
+
+          case 'reasoning_delta':
+            this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text: event.text })
+            break
+
+          case 'reasoning_completed': {
+            const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+            totalReasoningDuration += phaseDuration
+            const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
+            const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(event.summary ?? [])]
+            const meta = {
+              duration: totalReasoningDuration,
+              effort: effort || '',
+              summary: accumulatedSummary,
+              available: accumulatedSummary.length > 0,
+            }
+            this.messages.updateReasoningMeta(assistantMessageId, meta)
+            this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId, reasoningMeta: meta })
+            break
+          }
+
+          case 'web_search_call':
+            switch (event.phase) {
+              case 'started':
+                console.log('[Codex] web_search_call phase=started')
+                this.emitStreamEvent({ type: 'web-search-call-started', conversationId })
+                break
+              case 'searching':
+                console.log('[Codex] web_search_call phase=searching (search done, sources pending)')
+                break
+              case 'completed':
+                console.log('[Codex] web_search_call phase=completed resultsCount=', event.results?.length ?? 0)
+                if (event.results) {
+                  for (const item of event.results) {
+                    if (item && typeof item === 'object') {
+                      const obj = item as Record<string, unknown>
+                      const rawUrl = (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null) ?? (typeof obj.uri === 'string' ? obj.uri : null)
+                      const rawTitle = typeof obj.title === 'string' ? obj.title : null
+                      console.log('[Codex] web_search_call result keys=', Object.keys(obj).join(','), 'title=', rawTitle ?? '(none)', 'url=', rawUrl ?? '(none)')
+                      webSearchResults.push({
+                        title: rawTitle ?? this.hostnameFromUrl(rawUrl),
+                        url: rawUrl,
+                        snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
+                      })
+                    }
+                  }
+                }
+                this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults: webSearchResults })
+                break
+              case 'failed':
+                console.log('[Codex] web_search_call phase=failed')
+                this.emitStreamEvent({ type: 'web-search-call-failed', conversationId })
+                break
+            }
+            break
+
+          case 'turn_completed':
+            break
+
+          case 'error':
+            this.messages.updateError(assistantMessageId, event.code, event.message)
+            this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
+            return
+        }
+      }
+    } catch (err) {
+      if (abortController.signal.aborted) {
+        return
+      }
+      throw err
+    }
+
+    this.messages.updateContent(assistantMessageId, accumulatedContent)
+    this.messages.updateStatus(assistantMessageId, 'completed')
+
+    if (webSearchResults.length > 0) {
+      this.messages.updateWebSearchResults(assistantMessageId, webSearchResults)
+    }
+
+    this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
   }
 
   // PreSearch Mode：不支持 tool calling 时，先让模型提取搜索 query，再搜索并注入上下文
@@ -1058,16 +1238,17 @@ User message: ${userText}`
         }
 
         // 重建历史工具调用：让模型在后续 turn 感知已执行的 web 搜索
-        let toolCallsFromPayload: Array<{ id: string; name: string; arguments: string; output: string; isError: boolean }> = []
+        let toolCallsFromPayload: Array<{ id: string; name: string; namespace?: string; arguments: string; output: string; isError: boolean }> = []
         if (msg.providerPayloadJson) {
           try {
             const payload = JSON.parse(msg.providerPayloadJson) as {
-              toolCalls?: Array<{ id: string; name: string; arguments: string; output: string; isError: boolean }>
+              toolCalls?: Array<{ id: string; name: string; namespace?: string; arguments: string; output: string; isError: boolean }>
             }
             if (payload.toolCalls && payload.toolCalls.length > 0) {
               assistantMsg.toolCalls = payload.toolCalls.map((tc) => ({
                 id: tc.id,
                 name: tc.name,
+                namespace: tc.namespace,
                 arguments: tc.arguments,
               }))
               toolCallsFromPayload = payload.toolCalls
@@ -1160,6 +1341,16 @@ User message: ${userText}`
   private deriveTitle(text: string): string {
     const trimmed = text.trim().replace(/\n/g, ' ')
     return trimmed.slice(0, TITLE_MAX_LENGTH) || '新对话'
+  }
+
+  // 从 URL 提取 hostname 作为来源标题兜底，例如 https://openai.com/index/... → openai.com
+  private hostnameFromUrl(url: string | null): string | null {
+    if (!url) return null
+    try {
+      return new URL(url).hostname
+    } catch {
+      return null
+    }
   }
 
   private getLocalDate(): string {

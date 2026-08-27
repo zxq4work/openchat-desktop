@@ -33,6 +33,7 @@ export interface ChatGPTModel {
   base_instructions?: string
   use_responses_lite?: boolean
   web_search_tool_type?: string | null
+  supports_search_tool?: boolean
   model_messages?: {
     instructions_template?: string
     instructions_variables?: unknown
@@ -53,7 +54,11 @@ export interface ResponsesRequest {
   input: ProviderInputItem[]
   store?: boolean
   stream?: boolean
-  reasoning?: { effort: string; summary?: string }
+  reasoning?: { effort: string; summary?: string; context?: string }
+  useResponsesLite?: boolean
+  tools?: unknown[]
+  include?: string[]
+  toolChoice?: string | { type: string }
 }
 
 export interface ProviderFunctionCall {
@@ -68,13 +73,18 @@ export interface ProviderFunctionCall {
 export type ResponsesSSEEvent =
   | { type: 'response.created'; response: unknown }
   | { type: 'response.output_item.added'; item: { type: string; id: string; name?: string; namespace?: string }; output_index: number }
-  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string; name?: string; namespace?: string; call_id?: string; arguments?: string }; output_index: number }
+  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string; name?: string; namespace?: string; call_id?: string; arguments?: string; action?: { sources?: Array<{ url?: string; title?: string; type?: string }> }; annotations?: unknown[] }; output_index: number }
   | { type: 'response.output_text.delta'; delta: string }
   | { type: 'response.output_text.done'; text: string }
   | { type: 'response.reasoning_text.delta'; delta: string }
   | { type: 'response.reasoning_text.done'; text: string }
   | { type: 'response.reasoning_summary_text.delta'; delta: string }
   | { type: 'response.reasoning_summary_text.done'; text: string }
+  | { type: 'response.web_search_call.started'; response: unknown }
+  | { type: 'response.web_search_call.in_progress'; response: unknown }
+  | { type: 'response.web_search_call.searching'; response: unknown }
+  | { type: 'response.web_search_call.completed'; response: unknown }
+  | { type: 'response.web_search_call.failed'; response: unknown }
   | { type: 'response.completed'; response: unknown }
   | { type: 'error'; code: string; message: string }
 
@@ -127,6 +137,10 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
       input: request.input,
       store: false,
       stream: true,
+      ...(request.useResponsesLite ? { parallel_tool_calls: false } : {}),
+      ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
+      ...(request.include && request.include.length > 0 ? { include: request.include } : {}),
+      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       ...(request.reasoning ? { reasoning: { ...request.reasoning, summary: request.reasoning.summary ?? 'auto' } } : {}),
     })
 
@@ -138,6 +152,18 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     console.log('instructions_length=', request.instructions.length)
     console.log('input_messages=', request.input.length)
     console.log('reasoning=', request.reasoning ?? 'none')
+    if (request.tools && request.tools.length > 0) {
+      console.log('[Codex Search] backend-hosted-search=true tools=', JSON.stringify(request.tools))
+      console.log('[Codex Search] include=', request.include ? JSON.stringify(request.include) : 'none')
+      console.log('[Codex Search] tool_choice=', request.toolChoice ? JSON.stringify(request.toolChoice) : 'none')
+    } else {
+      console.log('[Codex Search] backend-hosted-search=false (no tools, direct generation)')
+    }
+    const hasAdditionalTools = request.input.some((i) => 'type' in i && i.type === 'additional_tools')
+    console.log('[Codex Search] client-additional-tools=', hasAdditionalTools)
+    if (request.useResponsesLite) {
+      console.log('[Codex Responses] responsesLite=true')
+    }
 
     const parser = new ResponsesStreamParser()
     const startTime = Date.now()
@@ -145,7 +171,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     let eventCount = 0
     const statusRef = { status: 0 }
     try {
-      for await (const event of this.streamRequest(parsedUrl, token, accountId, body, parser, signal, statusRef)) {
+      for await (const event of this.streamRequest(parsedUrl, token, accountId, body, parser, signal, statusRef, request.useResponsesLite)) {
         eventCount++
         yield event
       }
@@ -201,7 +227,8 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     body: string,
     parser: ResponsesStreamParser,
     signal?: AbortSignal,
-    statusRef?: { status: number }
+    statusRef?: { status: number },
+    useResponsesLite?: boolean
   ): AsyncIterable<ResponsesSSEEvent> {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
@@ -211,6 +238,12 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     if (accountId) {
       headers['ChatGPT-Account-Id'] = accountId
     }
+    if (useResponsesLite) {
+      headers['x-openai-internal-codex-responses-lite'] = 'true'
+    }
+
+    console.log('[Codex Search]')
+    console.log('responses-lite-header=', headers['x-openai-internal-codex-responses-lite'] === 'true')
 
     let abortHandler: (() => void) | null = null
 
@@ -345,6 +378,11 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
               parsed.type === 'response.reasoning_text.done' ||
               parsed.type === 'response.reasoning_summary_text.delta' ||
               parsed.type === 'response.reasoning_summary_text.done' ||
+              parsed.type === 'response.web_search_call.started' ||
+              parsed.type === 'response.web_search_call.in_progress' ||
+              parsed.type === 'response.web_search_call.searching' ||
+              parsed.type === 'response.web_search_call.completed' ||
+              parsed.type === 'response.web_search_call.failed' ||
               parsed.type === 'response.completed' ||
               parsed.type === 'error'
             )) {

@@ -170,7 +170,7 @@ async function initializeChatGPTProvider(): Promise<void> {
   // 读取持久化的搜索引擎设置，默认 bing
   const rawEngine = settingsRepo.get('web_search_engine')
   const engineType: WebSearchEngineType = rawEngine === 'baidu' || rawEngine === 'bing' || rawEngine === 'google' ? rawEngine : 'bing'
-  const webSearchService = new WebSearchService(getSearchEngine(engineType))
+  const webSearchService = new WebSearchService(getSearchEngine(engineType), engineType)
   const webFetchService = new WebFetchService()
   toolRegistry.register('openchat_web_search', new WebSearchTool(webSearchService))
   toolRegistry.register('openchat_web_fetch', new WebFetchTool(webFetchService))

@@ -100,6 +100,7 @@ export class ChatGPTModelService {
       isDefault: item.is_default,
       useResponsesLite: item.use_responses_lite ?? false,
       webSearchToolType: item.web_search_tool_type ?? null,
+      supportsSearchTool: item.supports_search_tool ?? false,
     }
   }
 

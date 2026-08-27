@@ -4,6 +4,7 @@
 export interface SearchResultCard {
   url?: string
   link?: string
+  uri?: string
   title?: string
   name?: string
   snippet?: string
@@ -21,6 +22,7 @@ export function presentSearchResults(rawResults: unknown[]): SearchResultCard[] 
 
       if (typeof obj.url === 'string') card.url = obj.url
       if (typeof obj.link === 'string') card.link = obj.link
+      if (typeof obj.uri === 'string') card.uri = obj.uri
       if (typeof obj.title === 'string') card.title = obj.title
       if (typeof obj.name === 'string') card.name = obj.name
       if (typeof obj.snippet === 'string') card.snippet = obj.snippet

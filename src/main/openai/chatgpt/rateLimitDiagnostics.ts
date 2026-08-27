@@ -42,7 +42,7 @@ export function logNon2xxResponse(
   headers: IncomingHttpHeaders,
   body: string
 ): string {
-  console.log('[429 Response Headers]')
+  console.log('[HTTP Error Response]')
   console.log(`endpoint=${method} ${endpoint}`)
   console.log(`status=${status}`)
 
@@ -62,7 +62,6 @@ export function logNon2xxResponse(
   }
 
   const truncatedBody = body.slice(0, 4000)
-  console.log('[429 Response Body]')
   console.log(redactSecrets(truncatedBody))
 
   return `HTTP ${status} from ${method} ${endpoint}`
