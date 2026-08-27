@@ -12,18 +12,9 @@ import { ChatView } from '../components/chat/ChatView'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
 import { presentSearchResults } from '../packages/SearchResultPresenter'
+import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
-
-// 从 URL 提取 hostname 作为来源标题兜底
-function hostnameFromUrl(url: string | null): string | null {
-  if (!url) return null
-  try {
-    return new URL(url).hostname
-  } catch {
-    return null
-  }
-}
 
 export function App() {
   const setAuthStatus = useAuthStore((s) => s.setStatus)

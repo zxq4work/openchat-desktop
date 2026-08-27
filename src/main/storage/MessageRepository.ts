@@ -63,13 +63,7 @@ export class MessageRepository {
 
   create(message: Message): void {
     const db = this.storage.database
-    db.run(`
-      INSERT INTO messages (
-        id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
-        model_id, reasoning_effort, provider_turn_id, provider_item_id,
-        provider_payload_json, error_code, error_message, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
+    const params = [
       message.id,
       message.conversationId,
       message.segmentId,
@@ -87,75 +81,128 @@ export class MessageRepository {
       message.errorMessage,
       message.createdAt,
       message.updatedAt,
-    ])
+    ]
+    try {
+      db.run(`
+        INSERT INTO messages (
+          id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
+          model_id, reasoning_effort, provider_turn_id, provider_item_id,
+          provider_payload_json, error_code, error_message, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, params)
+    } catch (e) {
+      const types = params.map((p, i) => `[${i}]=${typeof p}(${p === undefined ? 'UNDEFINED' : p === null ? 'null' : String(p).slice(0, 30)})`)
+      console.error('[DB] create params:', types.join(' '))
+      throw e
+    }
   }
 
   updateContent(id: string, content: string): void {
     const db = this.storage.database
-    db.run(`UPDATE messages SET content = ?, updated_at = ? WHERE id = ?`, [
-      content,
-      Date.now(),
-      id,
-    ])
+    try {
+      db.run(`UPDATE messages SET content = ?, updated_at = ? WHERE id = ?`, [
+        content,
+        Date.now(),
+        id,
+      ])
+    } catch (e) {
+      console.error('[DB] updateContent params:', { id: typeof id, content: typeof content, idVal: id, contentVal: content?.slice(0, 50) })
+      throw e
+    }
   }
 
   updateReasoningMeta(id: string, meta: ReasoningMeta): void {
     const db = this.storage.database
-    db.run(`UPDATE messages SET reasoning_json = ?, updated_at = ? WHERE id = ?`, [
-      JSON.stringify(meta),
-      Date.now(),
-      id,
-    ])
+    try {
+      db.run(`UPDATE messages SET reasoning_json = ?, updated_at = ? WHERE id = ?`, [
+        JSON.stringify(meta),
+        Date.now(),
+        id,
+      ])
+    } catch (e) {
+      console.error('[DB] updateReasoningMeta params:', { id: typeof id, meta: typeof meta, idVal: id })
+      throw e
+    }
   }
 
   updateWebSearchResults(id: string, results: WebSearchResultItem[]): void {
     const db = this.storage.database
-    db.run(`UPDATE messages SET web_search_results_json = ?, updated_at = ? WHERE id = ?`, [
-      JSON.stringify(results),
-      Date.now(),
-      id,
-    ])
+    try {
+      db.run(`UPDATE messages SET web_search_results_json = ?, updated_at = ? WHERE id = ?`, [
+        JSON.stringify(results),
+        Date.now(),
+        id,
+      ])
+    } catch (e) {
+      console.error('[DB] updateWebSearchResults params:', { id: typeof id, results: typeof results, idVal: id, resultsLen: results?.length })
+      throw e
+    }
   }
 
   updateStatus(id: string, status: MessageStatus): void {
     const db = this.storage.database
-    db.run(`UPDATE messages SET status = ?, updated_at = ? WHERE id = ?`, [
-      status,
-      Date.now(),
-      id,
-    ])
+    try {
+      db.run(`UPDATE messages SET status = ?, updated_at = ? WHERE id = ?`, [
+        status,
+        Date.now(),
+        id,
+      ])
+    } catch (e) {
+      console.error('[DB] updateStatus params:', { id: typeof id, status: typeof status, idVal: id, statusVal: status })
+      throw e
+    }
   }
 
   updateProviderIds(id: string, turnId: string, itemId: string): void {
     const db = this.storage.database
-    db.run(
-      `UPDATE messages SET provider_turn_id = ?, provider_item_id = ?, updated_at = ? WHERE id = ?`,
-      [turnId, itemId, Date.now(), id]
-    )
+    try {
+      db.run(
+        `UPDATE messages SET provider_turn_id = ?, provider_item_id = ?, updated_at = ? WHERE id = ?`,
+        [turnId, itemId, Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateProviderIds params:', { id: typeof id, turnId: typeof turnId, itemId: typeof itemId, idVal: id, turnIdVal: turnId, itemIdVal: itemId })
+      throw e
+    }
   }
 
   updateProviderItemId(id: string, itemId: string): void {
     const db = this.storage.database
-    db.run(
-      `UPDATE messages SET provider_item_id = ?, updated_at = ? WHERE id = ?`,
-      [itemId, Date.now(), id]
-    )
+    try {
+      db.run(
+        `UPDATE messages SET provider_item_id = ?, updated_at = ? WHERE id = ?`,
+        [itemId, Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateProviderItemId params:', { id: typeof id, itemId: typeof itemId, idVal: id, itemIdVal: itemId })
+      throw e
+    }
   }
 
   updateProviderPayload(id: string, payload: Record<string, unknown>): void {
     const db = this.storage.database
-    db.run(
-      `UPDATE messages SET provider_payload_json = ?, updated_at = ? WHERE id = ?`,
-      [JSON.stringify(payload), Date.now(), id]
-    )
+    try {
+      db.run(
+        `UPDATE messages SET provider_payload_json = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(payload), Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateProviderPayload params:', { id: typeof id, payload: typeof payload, idVal: id })
+      throw e
+    }
   }
 
   updateError(id: string, code: string, message: string): void {
     const db = this.storage.database
-    db.run(
-      `UPDATE messages SET error_code = ?, error_message = ?, status = 'failed', updated_at = ? WHERE id = ?`,
-      [code, message, Date.now(), id]
-    )
+    try {
+      db.run(
+        `UPDATE messages SET error_code = ?, error_message = ?, status = 'failed', updated_at = ? WHERE id = ?`,
+        [code, message, Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateError params:', { id: typeof id, code: typeof code, message: typeof message, idVal: id, codeVal: code, msgVal: message })
+      throw e
+    }
   }
 
   private rowToMessage(row: unknown[]): Message {

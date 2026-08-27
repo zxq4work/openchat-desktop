@@ -86,7 +86,7 @@ export type ResponsesSSEEvent =
   | { type: 'response.web_search_call.completed'; response: unknown }
   | { type: 'response.web_search_call.failed'; response: unknown }
   | { type: 'response.completed'; response: unknown }
-  | { type: 'error'; code: string; message: string }
+  | { type: 'error'; error: { code: string; message: string } }
 
 // ---- Interface ----
 
@@ -153,14 +153,10 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     console.log('input_messages=', request.input.length)
     console.log('reasoning=', request.reasoning ?? 'none')
     if (request.tools && request.tools.length > 0) {
-      console.log('[Codex Search] backend-hosted-search=true tools=', JSON.stringify(request.tools))
-      console.log('[Codex Search] include=', request.include ? JSON.stringify(request.include) : 'none')
-      console.log('[Codex Search] tool_choice=', request.toolChoice ? JSON.stringify(request.toolChoice) : 'none')
+      console.log('[Codex Search] backend-hosted-search=true')
     } else {
       console.log('[Codex Search] backend-hosted-search=false (no tools, direct generation)')
     }
-    const hasAdditionalTools = request.input.some((i) => 'type' in i && i.type === 'additional_tools')
-    console.log('[Codex Search] client-additional-tools=', hasAdditionalTools)
     if (request.useResponsesLite) {
       console.log('[Codex Responses] responsesLite=true')
     }
@@ -241,9 +237,6 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     if (useResponsesLite) {
       headers['x-openai-internal-codex-responses-lite'] = 'true'
     }
-
-    console.log('[Codex Search]')
-    console.log('responses-lite-header=', headers['x-openai-internal-codex-responses-lite'] === 'true')
 
     let abortHandler: (() => void) | null = null
 
