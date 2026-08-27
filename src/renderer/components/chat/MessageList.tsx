@@ -36,12 +36,10 @@ export function MessageList() {
     if (list) list.scrollTop = list.scrollHeight
   }
 
-  const lastMsgStatus = messages.length > 0 ? messages[messages.length - 1].status : null
-
   useEffect(() => {
     pinnedRef.current = true
     scrollToBottom()
-  }, [messages.length, segments.length, lastMsgStatus])
+  }, [messages.length, segments.length])
 
   // 监听用户滚动，判断是否贴底
   useEffect(() => {
