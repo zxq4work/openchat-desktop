@@ -7,11 +7,12 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:vite": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc -p tsconfig.main.json && tsc --noEmit && vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "test": "node --require ./scripts/polyfill-crypto.js ./node_modules/vitest/vitest.mjs run",
     "test:watch": "vitest",
     "start": "electron .",
+    "prepackage": "npm run build",
     "package": "electron-builder",
     "package:win": "electron-builder --win",
     "package:win:nsis": "electron-builder --win nsis",
