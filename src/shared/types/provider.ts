@@ -17,6 +17,7 @@ export type CanonicalRole =
 export interface CanonicalToolCall {
   id: string
   name: string
+  namespace?: string
   arguments: string
 }
 
@@ -39,6 +40,7 @@ export interface OpenChatToolDefinition {
   name: string
   description: string
   parameters: Record<string, unknown>
+  toolType?: string // 工具类型，默认 'function'。Codex 原生工具如 'web_search' 需设置此字段
 }
 
 export interface CanonicalModelRequest {
@@ -57,7 +59,8 @@ export type CanonicalModelEvent =
   | { type: 'reasoning_started'; itemId?: string }
   | { type: 'reasoning_delta'; text: string }
   | { type: 'reasoning_completed'; itemId?: string; summary?: string[] }
-  | { type: 'tool_call'; callId: string; name: string; arguments: string }
+  | { type: 'tool_call'; callId: string; name: string; namespace?: string; arguments: string }
+  | { type: 'web_search_call'; phase: 'started' | 'searching' | 'completed' | 'failed'; results?: unknown[] }
   | { type: 'turn_started'; turnId?: string }
   | { type: 'turn_completed'; turnId?: string }
   | { type: 'error'; code: string; message: string }

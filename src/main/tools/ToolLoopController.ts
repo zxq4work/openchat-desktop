@@ -20,6 +20,7 @@ export interface ToolLoopCallbacks {
   onReasoningDelta: (text: string) => void
   onReasoningCompleted: (itemId?: string, summary?: string[]) => void
   onTurnStarted: (turnId?: string) => void
+  onWebSearchCall?: (phase: 'started' | 'searching' | 'completed' | 'failed', results?: unknown[]) => void
   getProviderTurnId: () => string | null
   setProviderTurnId: (id: string) => void
 }
@@ -27,6 +28,7 @@ export interface ToolLoopCallbacks {
 export interface ToolCallHistoryEntry {
   callId: string
   name: string
+  namespace?: string
   arguments: string
   output: string
   rawResults: unknown[]
@@ -43,10 +45,12 @@ export interface ToolLoopResult {
 export class ToolLoopController {
   private adapter: ModelAdapter
   private toolRegistry: ToolRegistry
+  private toolExclude: string[]
 
-  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry) {
+  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry, toolExclude?: string[]) {
     this.adapter = adapter
     this.toolRegistry = toolRegistry
+    this.toolExclude = toolExclude ?? []
   }
 
   async run(
@@ -69,10 +73,12 @@ export class ToolLoopController {
     while (round <= MAX_TOOL_ROUNDS) {
       if (signal.aborted) break
 
+      const registryTools = this.toolRegistry.getDefinitions(this.toolExclude)
+      const extraTools = initialRequest.tools ?? []
       const roundRequest: CanonicalModelRequest = {
         ...initialRequest,
         messages,
-        tools: this.toolRegistry.getDefinitions(),
+        tools: [...extraTools, ...registryTools],
         toolChoice: 'auto',
       }
 
@@ -104,11 +110,16 @@ export class ToolLoopController {
               toolCalls.push({
                 id: event.callId,
                 name: event.name,
+                namespace: event.namespace,
                 arguments: event.arguments,
               })
             }
             break
           }
+
+          case 'web_search_call':
+            callbacks.onWebSearchCall?.(event.phase, event.results)
+            break
 
           case 'reasoning_started':
             callbacks.onReasoningStarted(event.itemId)

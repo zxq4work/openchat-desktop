@@ -37,6 +37,9 @@ export function WebSearchEngineSettings() {
   return (
     <div className="default-model-row">
       <label className="default-model-label">搜索引擎</label>
+      <p className="setting-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 4px' }}>
+        此搜索引擎仅用于自定义 API 提供商。ChatGPT / Codex 使用其官方搜索能力。
+      </p>
       <Dropdown
         className="default-model-dropdown"
         value={engine}

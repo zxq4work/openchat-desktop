@@ -18,8 +18,10 @@ export class ToolRegistry {
     this.tools.set(name, tool)
   }
 
-  getDefinitions(): OpenChatToolDefinition[] {
-    return Array.from(this.tools.values()).map((t) => t.definition)
+  getDefinitions(exclude?: string[]): OpenChatToolDefinition[] {
+    const all = Array.from(this.tools.values()).map((t) => t.definition)
+    if (!exclude || exclude.length === 0) return all
+    return all.filter((t) => !exclude.includes(t.name))
   }
 
   getExecutor(name: string): OpenChatTool | undefined {

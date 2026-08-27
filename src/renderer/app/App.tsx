@@ -15,6 +15,16 @@ import { presentSearchResults } from '../packages/SearchResultPresenter'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 
+// 从 URL 提取 hostname 作为来源标题兜底
+function hostnameFromUrl(url: string | null): string | null {
+  if (!url) return null
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}
+
 export function App() {
   const setAuthStatus = useAuthStore((s) => s.setStatus)
   const setAccount = useAuthStore((s) => s.setAccount)
@@ -202,11 +212,15 @@ export function App() {
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
 
       const results: WebSearchResultItem[] = e.webSearchResults
-        ? presentSearchResults(e.webSearchResults).map((card) => ({
-            title: card.title ?? card.name ?? null,
-            url: card.url ?? card.link ?? null,
-            snippet: card.snippet ?? card.description ?? card.text ?? null,
-          }))
+        ? presentSearchResults(e.webSearchResults).map((card) => {
+            const rawUrl = card.url ?? card.link ?? card.uri ?? null
+            const rawTitle = card.title ?? card.name ?? null
+            return {
+              title: rawTitle ?? hostnameFromUrl(rawUrl),
+              url: rawUrl,
+              snippet: card.snippet ?? card.description ?? card.text ?? null,
+            }
+          })
         : []
 
       const prev = useChatStreamStore.getState().webSearchStatus
@@ -230,6 +244,59 @@ export function App() {
         active: false,
         callId: null,
         error: e.toolCallError ?? '搜索失败',
+      })
+    }))
+
+    // Codex Native Search 事件：server-side web_search_call 状态
+    disposers.push(window.openchat.events.onWebSearchCallStarted((event: unknown) => {
+      const e = event as { conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: true,
+        callId: null,
+        toolName: 'web_search',
+        query: null,
+        error: null,
+      })
+    }))
+
+    disposers.push(window.openchat.events.onWebSearchCallCompleted((event: unknown) => {
+      const e = event as { conversationId?: string; webSearchResults?: unknown[] }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      const results: WebSearchResultItem[] = e.webSearchResults
+        ? presentSearchResults(e.webSearchResults).map((card) => {
+            const rawUrl = card.url ?? card.link ?? card.uri ?? null
+            const rawTitle = card.title ?? card.name ?? null
+            return {
+              title: rawTitle ?? hostnameFromUrl(rawUrl),
+              url: rawUrl,
+              snippet: card.snippet ?? card.description ?? card.text ?? null,
+            }
+          })
+        : []
+
+      const prev = useChatStreamStore.getState().webSearchStatus
+      const merged = [...prev.results, ...results]
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        query: null,
+        error: null,
+        results: merged,
+      })
+    }))
+
+    disposers.push(window.openchat.events.onWebSearchCallFailed((event: unknown) => {
+      const e = event as { conversationId?: string }
+      const streamingId = useChatStreamStore.getState().streamingConversationId
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+      useChatStreamStore.getState().setWebSearchStatus({
+        active: false,
+        callId: null,
+        error: 'Codex 搜索失败',
       })
     }))
 

@@ -61,7 +61,7 @@ interface Services {
   } | null
   credentialManager: OAuthCredentialManager | null
   usageService: ChatGPTUsageService | null
-  webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine) => void } | null
+  webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine, engineName?: string) => void; getEngineName: () => string } | null
 }
 
 async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
@@ -189,7 +189,7 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     services.settingsRepository?.set('web_search_engine', normalized)
     // 切换 WebSearchService 内部的搜索引擎，并清空缓存
     if (services.webSearchService) {
-      services.webSearchService.setEngine(getSearchEngine(normalized))
+      services.webSearchService.setEngine(getSearchEngine(normalized), normalized)
     }
   })
 
@@ -420,6 +420,15 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
         break
       case 'web-search-error':
         win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, event)
+        break
+      case 'web-search-call-started':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_STARTED, event)
+        break
+      case 'web-search-call-completed':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_COMPLETED, event)
+        break
+      case 'web-search-call-failed':
+        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_FAILED, event)
         break
       case 'stream-reset':
         win.webContents.send(IPC_CHANNELS.CHAT_STREAM_RESET, event)

@@ -20,15 +20,22 @@ function normalizeQuery(query: string): string {
 
 export class WebSearchService {
   private engine: SearchEngine
+  private engineName: string
   private cache: Map<string, CacheEntry> = new Map()
 
-  constructor(engine: SearchEngine) {
+  constructor(engine: SearchEngine, engineName = 'unknown') {
     this.engine = engine
+    this.engineName = engineName
   }
 
-  setEngine(engine: SearchEngine): void {
+  setEngine(engine: SearchEngine, engineName?: string): void {
     this.engine = engine
+    if (engineName) this.engineName = engineName
     this.cache.clear()
+  }
+
+  getEngineName(): string {
+    return this.engineName
   }
 
   async search(query: string, signal?: AbortSignal): Promise<SearchResultItem[]> {
