@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useProviderStore, type SafeProviderConfig } from '../../stores/providerStore'
 import { Dropdown } from '../Dropdown'
 
@@ -21,58 +21,29 @@ const TOOL_CALLING_LABELS: Record<string, string> = Object.fromEntries(
   TOOL_CALLING_OPTIONS.map((o) => [o.value, o.label])
 )
 
-export function ProviderSettings() {
-  const providers = useProviderStore((s) => s.providers)
-  const setProviders = useProviderStore((s) => s.setProviders)
-  const [editId, setEditId] = useState<string | null>(null)
-  const [showForm, setShowForm] = useState(false)
+interface ProviderFormDialogProps {
+  editId: string | null
+  initialName: string
+  initialProtocol: 'chat_completions' | 'responses'
+  initialBaseUrl: string
+  initialApiKey: string
+  initialModels: string[]
+  initialToolCalling: 'auto' | 'enabled' | 'disabled'
+  onSave: () => void
+  onClose: () => void
+}
 
-  // 表单状态
-  const [name, setName] = useState('')
-  const [protocol, setProtocol] = useState<'chat_completions' | 'responses'>('chat_completions')
-  const [baseUrl, setBaseUrl] = useState('')
-  const [apiKey, setApiKey] = useState('')
-  const [models, setModels] = useState<string[]>([])
+function ProviderFormDialog(props: ProviderFormDialogProps) {
+  const [name, setName] = useState(props.initialName)
+  const [protocol, setProtocol] = useState<'chat_completions' | 'responses'>(props.initialProtocol)
+  const [baseUrl, setBaseUrl] = useState(props.initialBaseUrl)
+  const [apiKey, setApiKey] = useState(props.initialApiKey)
+  const [models, setModels] = useState<string[]>([...props.initialModels])
   const [newModelInput, setNewModelInput] = useState('')
-  const [toolCalling, setToolCalling] = useState<'auto' | 'enabled' | 'disabled'>('auto')
+  const [toolCalling, setToolCalling] = useState<'auto' | 'enabled' | 'disabled'>(props.initialToolCalling)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
-
-  useEffect(() => {
-    loadProviders()
-  }, [])
-
-  async function loadProviders() {
-    const list = await window.openchat.providers.list()
-    setProviders(list as SafeProviderConfig[])
-  }
-
-  function resetForm() {
-    setName('')
-    setProtocol('chat_completions')
-    setBaseUrl('')
-    setApiKey('')
-    setModels([])
-    setNewModelInput('')
-    setToolCalling('auto')
-    setEditId(null)
-    setShowForm(false)
-    setFetchingModels(false)
-    setFetchError('')
-  }
-
-  function editProvider(p: SafeProviderConfig) {
-    setName(p.name)
-    setProtocol(p.protocol)
-    setBaseUrl(p.baseUrl)
-    setApiKey('')
-    setModels([...p.models])
-    setNewModelInput('')
-    setToolCalling(p.toolCalling)
-    setEditId(p.id)
-    setShowForm(true)
-    setFetchError('')
-  }
+  const overlayRef = useRef<HTMLDivElement>(null)
 
   function addModel() {
     const trimmed = newModelInput.trim()
@@ -87,6 +58,7 @@ export function ProviderSettings() {
   }
 
   function handleModelInputKeyDown(e: React.KeyboardEvent) {
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Enter') {
       e.preventDefault()
       addModel()
@@ -102,12 +74,11 @@ export function ProviderSettings() {
         baseUrl.trim(),
         apiKey.trim(),
         undefined,
-        editId ?? undefined
+        props.editId ?? undefined
       )
       if (fetchedModels.length === 0) {
         setFetchError('未获取到模型，请检查 API 地址和 Key')
       } else {
-        // 合并而非覆盖：保留手动添加的模型，追加新获取的模型
         const existing = new Set(models)
         for (const m of fetchedModels) {
           if (!existing.has(m)) {
@@ -127,7 +98,7 @@ export function ProviderSettings() {
   async function handleSave() {
     if (!name.trim() || !baseUrl.trim()) return
 
-    if (editId) {
+    if (props.editId) {
       const updates: Record<string, unknown> = {
         name: name.trim(),
         protocol,
@@ -138,7 +109,7 @@ export function ProviderSettings() {
       if (apiKey.trim()) {
         updates.apiKey = apiKey.trim()
       }
-      await window.openchat.providers.update(editId, updates)
+      await window.openchat.providers.update(props.editId, updates)
     } else {
       if (!apiKey.trim()) return
       await window.openchat.providers.create({
@@ -150,8 +121,188 @@ export function ProviderSettings() {
         toolCalling,
       })
     }
+    props.onSave()
+  }
 
-    resetForm()
+  return (
+    <div
+      className="dialog-overlay"
+      ref={overlayRef}
+      onMouseDown={(e) => {
+        if (e.target === overlayRef.current) props.onClose()
+      }}
+    >
+      <div className="dialog provider-dialog" onClick={(e) => e.stopPropagation()}>
+        <h3>{props.editId ? '编辑模型服务' : '添加模型服务'}</h3>
+
+        <div className="provider-form-field">
+          <label className="provider-label">名称</label>
+          <input
+            className="provider-input"
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="例如：我的 DeepSeek"
+          />
+        </div>
+
+        <div className="provider-form-field">
+          <label className="provider-label">协议</label>
+          <Dropdown
+            className="provider-dropdown"
+            value={protocol}
+            options={PROTOCOL_OPTIONS}
+            onChange={(value) => setProtocol(value as 'chat_completions' | 'responses')}
+            ariaLabel="选择协议"
+          />
+        </div>
+
+        <div className="provider-form-field">
+          <label className="provider-label">API Base URL</label>
+          <input
+            className="provider-input"
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://api.example.com/v1"
+          />
+        </div>
+
+        <div className="provider-form-field">
+          <label className="provider-label">API Key</label>
+          <input
+            className="provider-input"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={props.editId ? '留空则不修改' : 'sk-...'}
+          />
+        </div>
+
+        <div className="provider-form-field">
+          <label className="provider-label">模型列表</label>
+          <div className="provider-model-input-row">
+            <input
+              className="provider-input"
+              type="text"
+              value={newModelInput}
+              onChange={(e) => setNewModelInput(e.target.value)}
+              onKeyDown={handleModelInputKeyDown}
+              placeholder="输入模型 ID 后按回车或点击添加"
+            />
+            <button
+              className="provider-model-add-btn"
+              onClick={addModel}
+              disabled={!newModelInput.trim() || models.includes(newModelInput.trim())}
+            >
+              添加
+            </button>
+          </div>
+          <div className="provider-model-fetch-row">
+            <button
+              className="provider-model-fetch-btn"
+              onClick={handleFetchModels}
+              disabled={fetchingModels || !baseUrl.trim() || (!apiKey.trim() && !props.editId)}
+            >
+              {fetchingModels ? '获取中...' : '从 API 获取模型列表'}
+            </button>
+          </div>
+          {fetchError && (
+            <p className="provider-model-fetch-error">{fetchError}</p>
+          )}
+          {models.length > 0 && (
+            <div className="provider-model-tags">
+              {models.map((m, i) => (
+                <span key={`${m}-${i}`} className="provider-model-tag">
+                  {m}
+                  <button
+                    className="provider-model-tag-remove"
+                    onClick={() => removeModel(i)}
+                    aria-label={`移除 ${m}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          {models.length === 0 && (
+            <p className="provider-hint">暂未添加模型，可手动输入或点击"从 API 获取"自动拉取</p>
+          )}
+        </div>
+
+        <div className="provider-form-field">
+          <label className="provider-label">Tools</label>
+          <Dropdown
+            className="provider-dropdown"
+            value={toolCalling}
+            options={TOOL_CALLING_OPTIONS}
+            onChange={(value) => setToolCalling(value as 'auto' | 'enabled' | 'disabled')}
+            ariaLabel="选择 Tools 模式"
+          />
+        </div>
+
+        <div className="dialog-actions">
+          <button className="btn-cancel" onClick={props.onClose}>取消</button>
+          <button
+            className="btn-save"
+            onClick={handleSave}
+            disabled={!name.trim() || !baseUrl.trim()}
+          >
+            {props.editId ? '保存' : '添加'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function ProviderSettings() {
+  const providers = useProviderStore((s) => s.providers)
+  const setProviders = useProviderStore((s) => s.setProviders)
+
+  // 弹窗状态
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editId, setEditId] = useState<string | null>(null)
+  const [dialogInitial, setDialogInitial] = useState({
+    name: '',
+    protocol: 'chat_completions' as 'chat_completions' | 'responses',
+    baseUrl: '',
+    apiKey: '',
+    models: [] as string[],
+    toolCalling: 'auto' as 'auto' | 'enabled' | 'disabled',
+  })
+
+  useEffect(() => {
+    loadProviders()
+  }, [])
+
+  async function loadProviders() {
+    const list = await window.openchat.providers.list()
+    setProviders(list as SafeProviderConfig[])
+  }
+
+  function openAddDialog() {
+    setEditId(null)
+    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto' })
+    setDialogOpen(true)
+  }
+
+  function openEditDialog(p: SafeProviderConfig) {
+    setEditId(p.id)
+    setDialogInitial({
+      name: p.name,
+      protocol: p.protocol,
+      baseUrl: p.baseUrl,
+      apiKey: '',
+      models: [...p.models],
+      toolCalling: p.toolCalling,
+    })
+    setDialogOpen(true)
+  }
+
+  async function handleSave() {
+    setDialogOpen(false)
     await loadProviders()
   }
 
@@ -164,133 +315,23 @@ export function ProviderSettings() {
     <div className="provider-settings">
       <div className="provider-settings-header">
         <h4>模型服务</h4>
-        {!showForm && (
-          <button className="provider-add-btn" onClick={() => setShowForm(true)}>
-            + 添加
-          </button>
-        )}
+        <button className="provider-add-btn" onClick={openAddDialog}>
+          + 添加
+        </button>
       </div>
 
-      {showForm && (
-        <div className="provider-form">
-          <div className="provider-form-field">
-            <label className="provider-label">名称</label>
-            <input
-              className="provider-input"
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：我的 DeepSeek"
-            />
-          </div>
-
-          <div className="provider-form-field">
-            <label className="provider-label">协议</label>
-            <Dropdown
-              className="provider-dropdown"
-              value={protocol}
-              options={PROTOCOL_OPTIONS}
-              onChange={(value) => setProtocol(value as 'chat_completions' | 'responses')}
-              ariaLabel="选择协议"
-            />
-          </div>
-
-          <div className="provider-form-field">
-            <label className="provider-label">API Base URL</label>
-            <input
-              className="provider-input"
-              type="text"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder="https://api.example.com/v1"
-            />
-          </div>
-
-          <div className="provider-form-field">
-            <label className="provider-label">API Key</label>
-            <input
-              className="provider-input"
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={editId ? '留空则不修改' : 'sk-...'}
-            />
-          </div>
-
-          <div className="provider-form-field">
-            <label className="provider-label">模型列表</label>
-            <div className="provider-model-input-row">
-              <input
-                className="provider-input"
-                type="text"
-                value={newModelInput}
-                onChange={(e) => setNewModelInput(e.target.value)}
-                onKeyDown={handleModelInputKeyDown}
-                placeholder="输入模型 ID 后按回车或点击添加"
-              />
-              <button
-                className="provider-model-add-btn"
-                onClick={addModel}
-                disabled={!newModelInput.trim() || models.includes(newModelInput.trim())}
-              >
-                添加
-              </button>
-            </div>
-            <div className="provider-model-fetch-row">
-              <button
-                className="provider-model-fetch-btn"
-                onClick={handleFetchModels}
-                disabled={fetchingModels || !baseUrl.trim() || (!apiKey.trim() && !editId)}
-              >
-                {fetchingModels ? '获取中...' : '从 API 获取模型列表'}
-              </button>
-            </div>
-            {fetchError && (
-              <p className="provider-model-fetch-error">{fetchError}</p>
-            )}
-            {models.length > 0 && (
-              <div className="provider-model-tags">
-                {models.map((m, i) => (
-                  <span key={`${m}-${i}`} className="provider-model-tag">
-                    {m}
-                    <button
-                      className="provider-model-tag-remove"
-                      onClick={() => removeModel(i)}
-                      aria-label={`移除 ${m}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            {models.length === 0 && (
-              <p className="provider-hint">暂未添加模型，可手动输入或点击"从 API 获取"自动拉取</p>
-            )}
-          </div>
-
-          <div className="provider-form-field">
-            <label className="provider-label">Tools</label>
-            <Dropdown
-              className="provider-dropdown"
-              value={toolCalling}
-              options={TOOL_CALLING_OPTIONS}
-              onChange={(value) => setToolCalling(value as 'auto' | 'enabled' | 'disabled')}
-              ariaLabel="选择 Tools 模式"
-            />
-          </div>
-
-          <div className="provider-form-actions">
-            <button
-              className="provider-save-btn"
-              onClick={handleSave}
-              disabled={!name.trim() || !baseUrl.trim()}
-            >
-              {editId ? '保存' : '添加'}
-            </button>
-            <button className="provider-cancel-btn" onClick={resetForm}>取消</button>
-          </div>
-        </div>
+      {dialogOpen && (
+        <ProviderFormDialog
+          editId={editId}
+          initialName={dialogInitial.name}
+          initialProtocol={dialogInitial.protocol}
+          initialBaseUrl={dialogInitial.baseUrl}
+          initialApiKey={dialogInitial.apiKey}
+          initialModels={dialogInitial.models}
+          initialToolCalling={dialogInitial.toolCalling}
+          onSave={handleSave}
+          onClose={() => setDialogOpen(false)}
+        />
       )}
 
       {providers.length > 0 && (
@@ -299,7 +340,7 @@ export function ProviderSettings() {
             <div key={p.id} className="provider-card">
               <div className="provider-card-header">
                 <span className="provider-card-name">{p.name}</span>
-                <span className="provider-card-badge">{PROTOCOL_LABELS[p.protocol] ?? p.protocol}</span>
+                <span className={`provider-card-badge provider-card-badge--${p.protocol}`}>{PROTOCOL_LABELS[p.protocol] ?? p.protocol}</span>
               </div>
               <div className="provider-card-meta">
                 <span className="provider-card-url">{p.baseUrl}</span>
@@ -315,7 +356,7 @@ export function ProviderSettings() {
                 )}
               </div>
               <div className="provider-card-actions">
-                <button className="provider-edit-btn" onClick={() => editProvider(p)}>编辑</button>
+                <button className="provider-edit-btn" onClick={() => openEditDialog(p)}>编辑</button>
                 <button className="provider-delete-btn" onClick={() => handleDelete(p.id)}>删除</button>
               </div>
             </div>

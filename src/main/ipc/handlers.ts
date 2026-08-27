@@ -334,7 +334,10 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   // ===== Chat =====
   ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_event, id: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message } | null> => {
-    return await (services.conversationService?.sendMessage(id, text) ?? null)
+    console.log('[IPC CHAT_SEND] id=%s text=%s', id, text.slice(0, 80))
+    const result = await (services.conversationService?.sendMessage(id, text) ?? null)
+    console.log('[IPC CHAT_SEND] result=%s', result ? `userMsg=${result.userMessage.id} assistantMsg=${result.assistantMessage.id}` : 'null')
+    return result
   })
 
   ipcMain.handle(IPC_CHANNELS.CHAT_INTERRUPT, async (): Promise<void> => {

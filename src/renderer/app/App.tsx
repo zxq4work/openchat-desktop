@@ -81,6 +81,8 @@ export function App() {
     let flushTimer: ReturnType<typeof setInterval> | null = null
     let reasoningElapsedTimer: ReturnType<typeof setInterval> | null = null
     let reasoningTextAccum = ''
+    // 收集所有 IPC 监听器的清理函数，避免 StrictMode 双挂载导致重复监听
+    const disposers: Array<() => void> = []
 
     const startFlush = () => {
       if (flushTimer) return
@@ -93,7 +95,7 @@ export function App() {
       }, STREAM_FLUSH_MS)
     }
 
-    window.openchat.events.onChatDelta((event: unknown) => {
+    disposers.push(window.openchat.events.onChatDelta((event: unknown) => {
       const e = event as { text?: string; conversationId?: string }
       console.log('[App RAW] delta conversationId=%s textLen=%d', e.conversationId ?? '?', e.text?.length ?? 0)
       if (e.text) {
@@ -106,9 +108,9 @@ export function App() {
         pendingDeltas.push(e.text)
         startFlush()
       }
-    })
+    }))
 
-    window.openchat.events.onChatReasoningStarted((event: unknown) => {
+    disposers.push(window.openchat.events.onChatReasoningStarted((event: unknown) => {
       const e = event as { conversationId?: string }
       console.log('[App RAW] reasoning-started conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -135,9 +137,9 @@ export function App() {
         const elapsed = baseSeconds + Math.round((Date.now() - now) / 1000)
         useChatStreamStore.getState().setReasoningElapsedSeconds(elapsed)
       }, 1000)
-    })
+    }))
 
-    window.openchat.events.onChatReasoningDelta((event: unknown) => {
+    disposers.push(window.openchat.events.onChatReasoningDelta((event: unknown) => {
       const e = event as { text?: string; conversationId?: string }
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (!streamingId) {
@@ -147,9 +149,9 @@ export function App() {
         reasoningTextAccum += e.text
         useChatStreamStore.getState().setReasoningText(reasoningTextAccum)
       }
-    })
+    }))
 
-    window.openchat.events.onChatReasoningCompleted((event: unknown) => {
+    disposers.push(window.openchat.events.onChatReasoningCompleted((event: unknown) => {
       const e = event as { reasoningMeta?: import('../../shared/types/conversation').ReasoningMeta; conversationId?: string }
       console.log('[App RAW] reasoning-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -163,9 +165,9 @@ export function App() {
         useChatStreamStore.getState().setReasoningMeta(e.reasoningMeta)
       }
       useChatStreamStore.getState().setReasoningStatus('completed')
-    })
+    }))
 
-    window.openchat.events.onWebSearchStarted((event: unknown) => {
+    disposers.push(window.openchat.events.onWebSearchStarted((event: unknown) => {
       const e = event as { conversationId?: string; toolCallId?: string; toolCallName?: string; toolCallArgs?: string }
       console.log('[App RAW] web-search-started conversationId=%s toolCallId=%s toolName=%s', e.conversationId ?? '?', e.toolCallId ?? '?', e.toolCallName ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -191,9 +193,9 @@ export function App() {
         query,
         error: null,
       })
-    })
+    }))
 
-    window.openchat.events.onWebSearchCompleted((event: unknown) => {
+    disposers.push(window.openchat.events.onWebSearchCompleted((event: unknown) => {
       const e = event as { conversationId?: string; toolCallId?: string; webSearchResults?: unknown[] }
       console.log('[App RAW] web-search-completed conversationId=%s toolCallId=%s resultsCount=%d', e.conversationId ?? '?', e.toolCallId ?? '?', e.webSearchResults?.length ?? 0)
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -216,9 +218,9 @@ export function App() {
         error: null,
         results: merged,
       })
-    })
+    }))
 
-    window.openchat.events.onWebSearchError((event: unknown) => {
+    disposers.push(window.openchat.events.onWebSearchError((event: unknown) => {
       const e = event as { conversationId?: string; toolCallError?: string }
       console.log('[App RAW] web-search-error conversationId=%s error=%s', e.conversationId ?? '?', e.toolCallError ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -229,9 +231,9 @@ export function App() {
         callId: null,
         error: e.toolCallError ?? '搜索失败',
       })
-    })
+    }))
 
-    window.openchat.events.onStreamReset((event: unknown) => {
+    disposers.push(window.openchat.events.onStreamReset((event: unknown) => {
       const e = event as { conversationId?: string }
       console.log('[App RAW] stream-reset conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
@@ -248,13 +250,13 @@ export function App() {
         error: null,
         results: [],
       })
-    })
+    }))
 
-    window.openchat.events.onChatError((event: unknown) => {
+    disposers.push(window.openchat.events.onChatError((event: unknown) => {
       const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
-      console.log('[App RAW] chat-error conversationId=%s errorCode=%s', e.conversationId ?? '?', e.errorCode ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
-      if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+      console.log('[App RAW] chat-error conversationId=%s errorCode=%s streamingId=%s status=%s', e.conversationId ?? '?', e.errorCode ?? '?', streamingId ?? 'null', useChatStreamStore.getState().status)
+      if (e.conversationId && streamingId && e.conversationId !== streamingId) { console.log('[App RAW] chat-error SKIP: conversation mismatch'); return }
 
       console.error('[App] Chat error:', e.errorCode, e.errorMessage)
       if (flushTimer) {
@@ -268,25 +270,45 @@ export function App() {
       accumulatedText = ''
       pendingDeltas.length = 0
       reasoningTextAccum = ''
-      useChatStreamStore.getState().reset()
 
-      const id = useConversationStore.getState().activeConversationId
-      if (id) {
-        window.openchat.conversations.get(id).then((data) => {
-          if (data) {
-            useConversationStore.getState().setActiveConversation(data.conversation)
-            useConversationStore.getState().setActiveMessages(data.messages)
-            useConversationStore.getState().setActiveSegments(data.segments)
-          }
-        })
+      // 标记最后一条 assistant 消息为失败，不重新加载消息列表（避免竞态抖动）
+      const messages = useConversationStore.getState().activeMessages
+      const lastAssistantIdx = (() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') return i
+        }
+        return -1
+      })()
+      if (lastAssistantIdx >= 0) {
+        const updated = [...messages]
+        updated[lastAssistantIdx] = {
+          ...updated[lastAssistantIdx],
+          status: 'failed',
+          errorCode: e.errorCode ?? 'StreamFailed',
+          errorMessage: e.errorMessage ?? 'Unknown error',
+        }
+        useConversationStore.getState().setActiveMessages(updated)
       }
-    })
 
-    window.openchat.events.onTurnCompleted((event: unknown) => {
+      // 只清除流式状态，不 reset（保留 webSearchStatus 等）
+      useChatStreamStore.getState().setStatus('idle')
+      useChatStreamStore.getState().setStreamingConversationId(null)
+      useChatStreamStore.getState().setActiveAssistantMessage(null)
+      useChatStreamStore.getState().setBufferedText('')
+      useChatStreamStore.getState().setReasoningStatus('idle')
+      useChatStreamStore.getState().setReasoningText('')
+    }))
+
+    disposers.push(window.openchat.events.onTurnCompleted((event: unknown) => {
       const e = event as { conversationId?: string }
       console.log('[App RAW] turn-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
+
+      console.log('[App turn-completed] messagesCount=%d accumulatedTextLen=%d pendingDeltasCount=%d',
+        useConversationStore.getState().activeMessages.length,
+        accumulatedText.length,
+        pendingDeltas.length)
 
       if (flushTimer) {
         clearInterval(flushTimer)
@@ -302,37 +324,54 @@ export function App() {
         pendingDeltas.length = 0
         useChatStreamStore.getState().setBufferedText(accumulatedText)
       }
-      // 先重新加载消息以获取最终的 status/content，再重置流式状态
-      // 避免 reset() 清空 bufferedText 后消息内容短暂缺失导致高度抖动
-      const id = useConversationStore.getState().activeConversationId
-      if (id) {
-        window.openchat.conversations.get(id).then((data) => {
-          if (data) {
-            useConversationStore.getState().setActiveConversation(data.conversation)
-            useConversationStore.getState().setActiveMessages(data.messages)
-            useConversationStore.getState().setActiveSegments(data.segments)
-          }
-          accumulatedText = ''
-          pendingDeltas.length = 0
-          reasoningTextAccum = ''
-          useChatStreamStore.getState().reset()
-        })
-      } else {
-        accumulatedText = ''
-        pendingDeltas.length = 0
-        reasoningTextAccum = ''
-        useChatStreamStore.getState().reset()
+
+      // 直接标记最后一条 assistant 消息为 completed，不重新从 DB 加载
+      // 避免与 Composer 追加消息的竞态导致消息消失
+      const messages = useConversationStore.getState().activeMessages
+      const lastAssistantIdx = (() => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant') return i
+        }
+        return -1
+      })()
+      console.log('[App turn-completed] lastAssistantIdx=%d lastMsgId=%s lastMsgStatus=%s',
+        lastAssistantIdx,
+        lastAssistantIdx >= 0 ? messages[lastAssistantIdx].id : 'N/A',
+        lastAssistantIdx >= 0 ? messages[lastAssistantIdx].status : 'N/A')
+      if (lastAssistantIdx >= 0) {
+        const streamState = useChatStreamStore.getState()
+        const updated = [...messages]
+        updated[lastAssistantIdx] = {
+          ...updated[lastAssistantIdx],
+          content: accumulatedText || updated[lastAssistantIdx].content,
+          reasoningMeta: streamState.reasoningMeta ?? updated[lastAssistantIdx].reasoningMeta,
+          webSearchResults: streamState.webSearchStatus.results.length > 0
+            ? streamState.webSearchStatus.results
+            : updated[lastAssistantIdx].webSearchResults,
+          status: 'completed',
+        }
+        console.log('[App turn-completed] updated contentLen=%d', updated[lastAssistantIdx].content.length)
+        useConversationStore.getState().setActiveMessages(updated)
       }
+
+      accumulatedText = ''
+      pendingDeltas.length = 0
+      reasoningTextAccum = ''
+      useChatStreamStore.getState().reset()
 
       // 刷新侧边栏列表（标题/preview 已更新）
       window.openchat.conversations.list().then((list) => {
         useConversationStore.getState().setSummaries(list)
       })
-    })
+    }))
 
     return () => {
       if (flushTimer) clearInterval(flushTimer)
       if (reasoningElapsedTimer) clearInterval(reasoningElapsedTimer)
+      // 清理所有 IPC 监听器，避免 StrictMode 双挂载导致重复回调
+      for (const dispose of disposers) {
+        dispose()
+      }
     }
   }, [])
 

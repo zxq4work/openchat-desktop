@@ -11,14 +11,19 @@ export class MessageRepository {
 
   getByConversationId(conversationId: string, limit = MESSAGE_PAGE_SIZE, offset = 0): Message[] {
     const db = this.storage.database
+    // 先取最新的 N 条，再按 created_at ASC 排序，保证 UI 显示顺序正确
+    // 子查询：ORDER BY created_at DESC 取最新，外层 ORDER BY created_at ASC 恢复时间顺序
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, created_at, updated_at
-      FROM messages
-      WHERE conversation_id = ?
+      FROM (
+        SELECT * FROM messages
+        WHERE conversation_id = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+      )
       ORDER BY created_at ASC
-      LIMIT ? OFFSET ?
     `, [conversationId, limit, offset])
 
     if (!result.length || !result[0].values.length) return []

@@ -268,18 +268,20 @@ export class ChatGPTConversationService {
   }
 
   async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message }> {
+    console.log('[SendMessage] entry conversationId=%s activeGeneration=%s', conversationId, this.activeGeneration ? `set(conv=${this.activeGeneration.conversationId})` : 'null')
     if (this.activeGeneration) {
+      console.log('[SendMessage] BLOCKED: activeGeneration still set')
       throw new Error('已有正在进行的生成')
     }
 
     const conversation = this.conversations.getById(conversationId)
-    if (!conversation) throw new Error('会话不存在')
+    if (!conversation) { console.log('[SendMessage] FAIL: conversation not found'); throw new Error('会话不存在') }
 
     const segment = this.segments.getById(conversation.currentSegmentId)
-    if (!segment) throw new Error('当前上下文段不存在')
+    if (!segment) { console.log('[SendMessage] FAIL: segment not found currentSegmentId=%s', conversation.currentSegmentId); throw new Error('当前上下文段不存在') }
 
     const modelId = conversation.defaultModelId
-    if (!modelId) throw new Error('未选择模型，请先刷新模型列表')
+    if (!modelId) { console.log('[SendMessage] FAIL: no modelId'); throw new Error('未选择模型，请先刷新模型列表') }
 
     let effort = conversation.defaultReasoningEffort
     if (effort && effort.includes('[object Object]')) {
@@ -367,6 +369,7 @@ export class ChatGPTConversationService {
       assistantMessageId: assistantMessage.id,
       abortController,
     }
+    console.log('[SendMessage] SET activeGeneration assistantMessageId=%s', assistantMessage.id)
 
     void this.runGeneration(
       conversationId,
@@ -435,6 +438,7 @@ export class ChatGPTConversationService {
     abortController: AbortController,
     webSearchEnabled: boolean
   ): Promise<void> {
+    console.log('[runGeneration] entry conversationId=%s modelId=%s providerConfigId=%s webSearch=%s', conversationId, modelId, providerConfigId ?? 'codex', webSearchEnabled)
     try {
       const adapter = this.resolveAdapter(providerConfigId)
 
@@ -506,6 +510,8 @@ export class ChatGPTConversationService {
       const message = err instanceof Error ? err.message : String(err)
       const isAborted = abortController.signal.aborted
 
+      console.log('[runGeneration] CATCH: message=%s isAborted=%s', message, isAborted)
+
       if (err instanceof UsageLimitReachedError) {
         this.usageService.markExhaustedFrom429(err.resetsAt)
         void this.usageService.refresh()
@@ -522,8 +528,12 @@ export class ChatGPTConversationService {
         this.emitStreamEvent({ type: 'error', conversationId, errorCode: code, errorMessage: message })
       }
     } finally {
+      console.log('[runGeneration] FINALLY: assistantMessageId=%s activeGenerationAssistantMessageId=%s', assistantMessageId, this.activeGeneration?.assistantMessageId ?? 'null')
       if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
         this.activeGeneration = null
+        console.log('[runGeneration] FINALLY: cleared activeGeneration')
+      } else {
+        console.log('[runGeneration] FINALLY: did NOT clear activeGeneration (mismatch or null)')
       }
       await this.storage.save()
     }
