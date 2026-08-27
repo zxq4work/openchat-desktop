@@ -485,6 +485,7 @@ export function App() {
     // 若当前活跃会话是空白的（无消息），直接复用，不新建
     const store = useConversationStore.getState()
     if (store.activeConversationId && store.activeMessages.length === 0) {
+      useUiStore.getState().requestComposerFocus()
       return
     }
 
