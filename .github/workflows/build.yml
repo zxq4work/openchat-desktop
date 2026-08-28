@@ -1,0 +1,105 @@
+name: Build
+
+on:
+  workflow_dispatch:
+
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npm run package:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenChat-Windows-x64
+          path: |
+            release/*.exe
+            release/*.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (x64)
+    runs-on: macos-15-intel
+    env:
+      # 第一阶段不要求 Apple Developer ID 签名，生成未签名构建。
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npm run package:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenChat-macOS-x64
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux (x64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npm run package:linux
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenChat-Linux-x64
+          path: |
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error

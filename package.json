@@ -19,7 +19,8 @@
     "package:win:portable": "electron-builder --win portable",
     "package:win:portable:legacy-mac": "node scripts/package-win-portable-legacy-mac.js",
     "package:win:zip": "electron-builder --win zip",
-    "package:mac": "electron-builder --mac"
+    "package:mac": "electron-builder --mac",
+    "package:linux": "electron-builder --linux"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",

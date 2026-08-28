@@ -20,8 +20,18 @@ extraResources:
 mac:
   target:
     - dmg
+    - zip
   artifactName: ${productName}-${version}-mac.${ext}
   category: public.app-category.productivity
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+  category: Utility
 
 win:
   target:
