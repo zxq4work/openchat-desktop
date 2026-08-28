@@ -24,6 +24,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
+  CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
 
   // Chat

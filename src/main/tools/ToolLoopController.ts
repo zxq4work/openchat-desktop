@@ -6,11 +6,12 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
 } from '../../shared/types/provider'
-import { ToolRegistry } from './ToolRegistry'
+import { ToolRegistry, type ToolExecutionContext } from './ToolRegistry'
 
-const MAX_TOOL_ROUNDS = 4
+const MAX_TOOL_ROUNDS = 6
 const MAX_WEB_SEARCH_CALLS_PER_TURN = 10
 const MAX_WEB_FETCH_CALLS_PER_TURN = 10
+const MAX_WEB_RUN_CALLS_PER_TURN = 10
 
 export interface ToolLoopCallbacks {
   onToolCall: (toolCall: CanonicalToolCall) => void
@@ -46,11 +47,13 @@ export class ToolLoopController {
   private adapter: ModelAdapter
   private toolRegistry: ToolRegistry
   private toolExclude: string[]
+  private executionContext: ToolExecutionContext
 
-  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry, toolExclude?: string[]) {
+  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry, toolExclude?: string[], executionContext?: ToolExecutionContext) {
     this.adapter = adapter
     this.toolRegistry = toolRegistry
     this.toolExclude = toolExclude ?? []
+    this.executionContext = executionContext ?? {}
   }
 
   async run(
@@ -65,6 +68,7 @@ export class ToolLoopController {
 
     let searchCallCount = 0
     let fetchCallCount = 0
+    let webRunCallCount = 0
     const executedQueries = new Set<string>()
 
     let messages: CanonicalMessage[] = initialRequest.messages.slice()
@@ -107,6 +111,7 @@ export class ToolLoopController {
 
           case 'tool_call': {
             if (event.callId && event.name) {
+              console.log('[ToolLoop] tool_call event: name=%s namespace=%s callId=%s', event.name, event.namespace, event.callId)
               toolCalls.push({
                 id: event.callId,
                 name: event.name,
@@ -158,6 +163,7 @@ export class ToolLoopController {
         toolCalls,
         searchCallCount,
         fetchCallCount,
+        webRunCallCount,
         executedQueries,
         signal,
         callbacks,
@@ -241,6 +247,7 @@ export class ToolLoopController {
     toolCalls: CanonicalToolCall[],
     searchCallCount: number,
     fetchCallCount: number,
+    webRunCallCount: number,
     executedQueries: Set<string>,
     signal: AbortSignal,
     callbacks: ToolLoopCallbacks,
@@ -273,6 +280,22 @@ export class ToolLoopController {
             callId: tc.id,
             name: tc.name,
             output: JSON.stringify({ error: 'TOOL_LIMIT_EXCEEDED', message: 'Max web_fetch calls per turn reached' }),
+            isError: true,
+          }
+          toolResults.push(skippedResult)
+          callbacks.onToolResult(tc.id, tc.name, false, undefined, skippedResult.output)
+          continue
+        }
+      }
+
+      if (tc.name === 'run' && tc.namespace === 'web') {
+        webRunCallCount++
+        if (webRunCallCount > MAX_WEB_RUN_CALLS_PER_TURN) {
+          console.log('[ToolLoop] Max web.run calls reached')
+          const skippedResult: CanonicalToolResult = {
+            callId: tc.id,
+            name: tc.name,
+            output: 'Error: Max web.run calls per turn reached',
             isError: true,
           }
           toolResults.push(skippedResult)
@@ -324,29 +347,31 @@ export class ToolLoopController {
       }
 
       try {
-        const result = await executor.execute(args, { signal, conversationId: '', segmentId: '' })
+        const result = await executor.execute(args, { signal, ...this.executionContext })
         result.callId = tc.id
         result.name = tc.name
         toolResults.push(result)
 
         console.log('[Tool Result] name=', tc.name, '| output length=', result.output.length)
 
-        let rawResults: unknown[] = []
-        try {
-          const parsed = JSON.parse(result.output) as Record<string, unknown>
-          if (Array.isArray(parsed.results)) {
-            rawResults = parsed.results
-          } else if (parsed.url && typeof parsed.url === 'string') {
-            // web_fetch result: fabricate a single-item results array for UI
-            rawResults = [{ url: parsed.url, title: (parsed.title as string) || (parsed.url as string), snippet: ((parsed.content as string) || '').slice(0, 150) }]
+        let rawResults: unknown[] = result.rawResults ?? []
+        if (rawResults.length === 0) {
+          try {
+            const parsed = JSON.parse(result.output) as Record<string, unknown>
+            if (Array.isArray(parsed.results)) {
+              rawResults = parsed.results
+            } else if (parsed.url && typeof parsed.url === 'string') {
+              rawResults = [{ url: parsed.url, title: (parsed.title as string) || (parsed.url as string), snippet: ((parsed.content as string) || '').slice(0, 150) }]
+            }
+          } catch {
+            // not JSON
           }
-        } catch {
-          // not JSON
         }
 
         toolCallHistory.push({
           callId: tc.id,
           name: tc.name,
+          namespace: tc.namespace,
           arguments: tc.arguments,
           output: result.output,
           rawResults,

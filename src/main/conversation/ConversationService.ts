@@ -84,6 +84,7 @@ export class ConversationService {
       currentSegmentId: '',
       useModelInstructions: true,
       webSearchEnabled: false,
+      codexSearchMode: 'hosted',
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
@@ -124,6 +125,7 @@ export class ConversationService {
       currentSegmentId: segmentId,
       useModelInstructions: true,
       webSearchEnabled: false,
+      codexSearchMode: 'hosted',
       providerConfigId,
       createdAt: now,
       updatedAt: now,
@@ -225,6 +227,11 @@ export class ConversationService {
 
   async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
     this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
+    await this.storage.save()
+  }
+
+  async updateCodexSearchMode(id: string, mode: 'hosted' | 'standalone'): Promise<void> {
+    this.conversations.updateCodexSearchMode(id, mode)
     await this.storage.save()
   }
 

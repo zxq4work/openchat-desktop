@@ -28,7 +28,9 @@ export function WebSearchToggle() {
     ? 'Codex 额度已用尽，恢复后可继续联网搜索'
     : activeConversation?.providerConfigId
       ? (webSearchEnabled ? 'OpenChat 网页搜索（已开启）' : 'OpenChat 网页搜索')
-      : (webSearchEnabled ? 'Codex 官方搜索（已开启）' : 'Codex 官方搜索')
+      : (webSearchEnabled
+          ? (activeConversation.codexSearchMode === 'standalone' ? 'Codex Standalone（已开启）' : 'Codex Hosted（已开启）')
+          : (activeConversation.codexSearchMode === 'standalone' ? 'Codex Standalone' : 'Codex Hosted'))
 
   return (
     <button

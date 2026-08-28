@@ -5,6 +5,7 @@ import { ModelSelector } from './ModelSelector'
 import { ProviderSelector } from './ProviderSelector'
 import { ReasoningSelector } from './ReasoningSelector'
 import { WebSearchToggle } from './WebSearchToggle'
+import { CodexSearchModeSelector } from './CodexSearchModeSelector'
 import { MessageInput } from './MessageInput'
 import { SendButton } from './SendButton'
 import { useCodexUsageStore, isCodexExhausted } from '../../stores/codexUsageStore'
@@ -189,6 +190,7 @@ export function Composer() {
           <ModelSelector />
           <ReasoningSelector />
           <WebSearchToggle />
+          <CodexSearchModeSelector />
           <div className="composer-spacer" />
           <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0 && !isExhausted} />
         </div>

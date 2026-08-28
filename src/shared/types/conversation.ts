@@ -8,6 +8,7 @@ export interface Conversation {
   currentSegmentId: string
   useModelInstructions: boolean
   webSearchEnabled: boolean
+  codexSearchMode: 'hosted' | 'standalone'
   providerConfigId: string | null
   createdAt: number
   updatedAt: number
@@ -55,6 +56,7 @@ export interface WebSearchResultItem {
   title: string | null
   url: string | null
   snippet: string | null
+  sourceType?: 'web' | 'api'
 }
 
 export interface Message {

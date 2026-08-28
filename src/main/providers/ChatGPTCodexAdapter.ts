@@ -90,7 +90,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       }
     }
 
-    // hosted 工具放入顶层 tools（区别于 additional_tools）
+    // client 工具放入 additional_tools
     if (clientTools.length > 0) {
       input.unshift({
         type: 'additional_tools',
@@ -102,6 +102,9 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     for (const msg of request.messages) {
       input.push(...this.convertMessages(msg))
     }
+
+    console.log('[Codex Adapter] buildRequest input items=', input.length,
+      'types=', input.map(i => 'type' in i ? i.type : i.role).join(','))
 
     const req: {
       model: string
@@ -156,22 +159,48 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
   }
 
   private convertMessages(msg: CanonicalMessage): ProviderInputItem[] {
-    if (msg.toolCalls && msg.toolCalls.length > 0) {
-      return msg.toolCalls.map((tc) => ({
-        type: 'function_call' as const,
-        call_id: tc.id,
-        name: tc.name,
-        namespace: tc.namespace,
-        arguments: tc.arguments,
-      }))
-    }
-
+    // function_call_output（工具执行结果）
     if (msg.toolResult) {
       return [{
         type: 'function_call_output' as const,
         call_id: msg.toolResult.callId,
         output: msg.toolResult.output,
       }]
+    }
+
+    // assistant 消息：buildCanonicalRequest 已拆分为独立消息，每条只有一种内容
+    if (msg.role === 'assistant') {
+      // web_search_call（Hosted 搜索）
+      if (msg.webSearchCalls && msg.webSearchCalls.length > 0) {
+        return msg.webSearchCalls.map((wsc) => {
+          const wireItem = {
+            type: 'web_search_call' as const,
+            id: wsc.id,
+            ...(wsc.status ? { status: wsc.status } : {}),
+            action: wsc.action ? { ...wsc.action, type: wsc.action.type ?? 'search' } : { type: 'search' },
+          }
+          console.log('[Hosted Replay Probe] wire=', JSON.stringify(wireItem))
+          return wireItem
+        })
+      }
+
+      // function_call（Standalone web.run / Custom tool）
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        return msg.toolCalls.map((tc) => ({
+          type: 'function_call' as const,
+          call_id: tc.id,
+          name: tc.name,
+          namespace: tc.namespace,
+          arguments: tc.arguments,
+        }))
+      }
+
+      // 最终 assistant 文本
+      if (msg.content) {
+        return [{ role: 'assistant', content: msg.content }]
+      }
+
+      return []
     }
 
     return [{
@@ -220,14 +249,19 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
             arguments: event.item.arguments ?? '',
           }
         }
-        // hosted web_search 结果：item.type === 'web_search_call'，含 action.sources
+        // hosted web_search 结果：item.type === 'web_search_call'，原样保留服务端字段
         if (event.item.type === 'web_search_call') {
-          const item = event.item as { type: string; id: string; action?: { sources?: Array<{ url?: string; title?: string; type?: string }> } }
-          const sources = item.action?.sources ?? []
-          console.log('[Codex Adapter] web_search_call sourcesCount=', sources.length)
+          const item = event.item as { type: string; id: string; status?: string; action?: { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }
+          const action = item.action ? { type: item.action.type ?? 'search', ...item.action } : { type: 'search' }
+          const sources = action.sources ?? []
+          console.log('[Hosted Replay Probe] raw=', JSON.stringify({ id: item.id, type: item.type, status: item.status, action }))
+          console.log('[Hosted Replay Probe] raw action keys=', Object.keys(item.action ?? {}))
           return {
             type: 'web_search_call',
             phase: 'completed',
+            itemId: item.id,
+            status: item.status,
+            action,
             results: sources,
           }
         }

@@ -53,6 +53,7 @@ interface Services {
     updateEffort: (id: string, effort: string) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
+    updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') => Promise<void>
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message } | null>
@@ -292,6 +293,10 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, async (_event, id: string, webSearchEnabled: boolean): Promise<void> => {
     await services.conversationService?.updateWebSearchEnabled(id, webSearchEnabled)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE, async (_event, id: string, mode: 'hosted' | 'standalone'): Promise<void> => {
+    await services.conversationService?.updateCodexSearchMode(id, mode)
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, (_event, id: string): ContextSegment | null => {

@@ -26,6 +26,7 @@ export interface CanonicalToolResult {
   name: string
   output: string
   isError?: boolean
+  rawResults?: unknown[]
 }
 
 export interface CanonicalMessage {
@@ -33,6 +34,7 @@ export interface CanonicalMessage {
   content?: string
   toolCalls?: CanonicalToolCall[]
   toolResult?: CanonicalToolResult
+  webSearchCalls?: CanonicalWebSearchCall[]
 }
 
 // 工具定义（JSON Schema 参数）
@@ -41,6 +43,7 @@ export interface OpenChatToolDefinition {
   description: string
   parameters: Record<string, unknown>
   toolType?: string // 工具类型，默认 'function'。Codex 原生工具如 'web_search' 需设置此字段
+  namespace?: string // Codex namespaced client tool（如 web.run）
 }
 
 export interface CanonicalModelRequest {
@@ -60,7 +63,7 @@ export type CanonicalModelEvent =
   | { type: 'reasoning_delta'; text: string }
   | { type: 'reasoning_completed'; itemId?: string; summary?: string[] }
   | { type: 'tool_call'; callId: string; name: string; namespace?: string; arguments: string }
-  | { type: 'web_search_call'; phase: 'started' | 'searching' | 'completed' | 'failed'; results?: unknown[] }
+  | { type: 'web_search_call'; phase: 'started' | 'searching' | 'completed' | 'failed'; itemId?: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> }; results?: unknown[] }
   | { type: 'turn_started'; turnId?: string }
   | { type: 'turn_completed'; turnId?: string }
   | { type: 'error'; code: string; message: string }
@@ -106,4 +109,23 @@ export interface WebFetchResult {
   title: string
   content: string
   truncated: boolean
+}
+
+// --- Provider-native tool history (stored in providerPayloadJson) ---
+
+export interface CanonicalWebSearchCall {
+  id: string
+  status?: string
+  action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> }
+}
+
+export type ProviderPayloadItem =
+  | { type: 'function_call'; call_id: string; name: string; namespace?: string; arguments: string }
+  | { type: 'function_call_output'; call_id: string; output: string }
+  | { type: 'web_search_call'; id: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }
+
+export interface ProviderPayloadV2 {
+  provider: 'chatgpt_codex' | 'custom'
+  protocol: ProviderProtocol
+  items: ProviderPayloadItem[]
 }
