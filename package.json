@@ -28,21 +28,21 @@
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
-    "https-proxy-agent": "^5.0.1",
-    "katex": "^0.18.4",
-    "react-markdown": "^9.0.1",
-    "rehype-katex": "^7.0.0",
-    "remark-breaks": "^4.0.0",
-    "remark-gfm": "^4.0.0",
-    "remark-math": "^6.0.0",
+    "https-proxy-agent": "5.0.1",
+    "katex": "0.18.4",
+    "react-markdown": "9.0.1",
+    "rehype-katex": "7.0.0",
+    "remark-breaks": "4.0.0",
+    "remark-gfm": "4.0.0",
+    "remark-math": "6.0.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "socks-proxy-agent": "^5.0.1",
+    "socks-proxy-agent": "5.0.1",
     "sql.js": "1.10.3",
     "zustand": "4.5.7"
   },
   "devDependencies": {
-    "@types/katex": "^0.16.8",
+    "@types/katex": "0.16.8",
     "@types/node": "18.19.39",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
@@ -53,5 +53,9 @@
     "typescript": "5.4.5",
     "vite": "4.5.3",
     "vitest": "1.6.1"
+  },
+  "engines": {
+    "node": "16.17.1",
+    "npm": "8.15.0"
   }
 }
