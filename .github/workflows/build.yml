@@ -37,6 +37,9 @@ jobs:
       - name: Package
         run: npm run package:win
 
+      - name: Package Portable
+        run: npm run package:win:portable
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
