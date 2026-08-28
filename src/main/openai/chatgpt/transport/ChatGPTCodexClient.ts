@@ -40,13 +40,24 @@ export interface ChatGPTModel {
   }
 }
 
-// Provider 输入项：支持普通消息、additional_tools 声明、
+// Provider 输入项：支持普通消息、additional_tools 声明，
 // function_call（模型工具调用）以及 function_call_output（工具回传结果）
 export type ProviderInputItem =
   | { role: string; content: string }
   | { type: 'additional_tools'; role: string; tools: unknown[] }
   | { type: 'function_call'; call_id: string; name: string; arguments: string; namespace?: string }
   | { type: 'function_call_output'; call_id: string; output: string }
+  | { type: 'web_search_call'; id: string; status?: string; action?: WebSearchAction }
+
+// Hosted WebSearch action：保留服务端原始字段（type/query/queries/url/pattern/sources）
+export interface WebSearchAction {
+  type: string
+  query?: string
+  queries?: string[]
+  url?: string
+  pattern?: string
+  sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }>
+}
 
 export interface ResponsesRequest {
   model: string
@@ -73,7 +84,7 @@ export interface ProviderFunctionCall {
 export type ResponsesSSEEvent =
   | { type: 'response.created'; response: unknown }
   | { type: 'response.output_item.added'; item: { type: string; id: string; name?: string; namespace?: string }; output_index: number }
-  | { type: 'response.output_item.done'; item: { type: string; id: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string; name?: string; namespace?: string; call_id?: string; arguments?: string; action?: { sources?: Array<{ url?: string; title?: string; type?: string }> }; annotations?: unknown[] }; output_index: number }
+  | { type: 'response.output_item.done'; item: { type: string; id: string; status?: string; summary?: Array<{ type: string; text: string }>; encrypted_content?: string; name?: string; namespace?: string; call_id?: string; arguments?: string; action?: WebSearchAction; annotations?: unknown[] }; output_index: number }
   | { type: 'response.output_text.delta'; delta: string }
   | { type: 'response.output_text.done'; text: string }
   | { type: 'response.reasoning_text.delta'; delta: string }
@@ -153,9 +164,15 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     console.log('input_messages=', request.input.length)
     console.log('reasoning=', request.reasoning ?? 'none')
     if (request.tools && request.tools.length > 0) {
-      console.log('[Codex Search] backend-hosted-search=true')
+      console.log('[Codex Search] mode=hosted')
     } else {
-      console.log('[Codex Search] backend-hosted-search=false (no tools, direct generation)')
+      // 有 additional_tools（client tools）也是 standalone 模式
+      const hasAdditionalTools = request.input.some((i) => 'type' in i && i.type === 'additional_tools')
+      if (hasAdditionalTools) {
+        console.log('[Codex Search] mode=standalone client-tools=true')
+      } else {
+        console.log('[Codex Search] mode=none')
+      }
     }
     if (request.useResponsesLite) {
       console.log('[Codex Responses] responsesLite=true')

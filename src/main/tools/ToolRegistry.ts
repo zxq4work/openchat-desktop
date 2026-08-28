@@ -4,6 +4,7 @@ export interface ToolExecutionContext {
   signal?: AbortSignal
   conversationId?: string
   segmentId?: string
+  modelId?: string
 }
 
 export interface OpenChatTool {

@@ -22,6 +22,7 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
+  CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
   CHAT_SEND: 'chat:send',
@@ -99,6 +100,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS, id, useModelInstructions),
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, id, webSearchEnabled),
+    updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE, id, mode),
     updateProviderConfig: (id: string, providerConfigId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, id, providerConfigId),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),

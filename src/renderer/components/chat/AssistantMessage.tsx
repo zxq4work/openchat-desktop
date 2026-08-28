@@ -130,7 +130,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             onClick={() => setSearchExpanded(!searchExpanded)}
           >
             <span className="message-search-results-icon">&#128269;</span>
-            <span>搜索到 {searchResults.length} 个参考页面</span>
+            <span>{searchResults.every((r) => r.sourceType === 'api') ? `${searchResults.length} 个数据源` : `搜索到 ${searchResults.length} 个参考页面`}</span>
             <span className="message-search-results-arrow">
               {searchExpanded ? '▾' : '▸'}
             </span>
@@ -138,8 +138,12 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
           {searchExpanded && (
             <ul className="message-search-results-list">
               {searchResults.map((item, i) => (
-                <li key={i} className="message-search-result-item">
-                  {item.url ? (
+                <li key={i} className={`message-search-result-item${item.sourceType === 'api' ? ' message-search-result-api' : ''}`}>
+                  {item.sourceType === 'api' ? (
+                    <span className="message-search-result-title message-search-result-api-title">
+                      {item.title || '内置服务'}
+                    </span>
+                  ) : item.url ? (
                     <a
                       className="message-search-result-title"
                       href={item.url}

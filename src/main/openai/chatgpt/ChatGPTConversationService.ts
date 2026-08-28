@@ -8,11 +8,12 @@ import type {
   ContextSegment,
   Message,
 } from '../../../shared/types/conversation'
-import type { CanonicalMessage, CanonicalModelRequest, CanonicalToolCall } from '../../../shared/types/provider'
+import type { CanonicalMessage, CanonicalModelRequest, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol } from '../../../shared/types/provider'
 import { TITLE_MAX_LENGTH } from '../../../shared/constants'
 import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
+import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
 import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
@@ -24,6 +25,8 @@ import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
+import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandaloneSearchClient'
+import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
@@ -42,7 +45,57 @@ Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.`
 
-const CODEX_SEARCH_INSTRUCTIONS = `You have access to web search via the web_search tool.
+// Codex 搜索模式语义判定规则（Hosted 和 Standalone 共用）
+const CODEX_SEARCH_MODE_SEMANTICS = `<!-- CODEX_SEARCH_MODE_SEMANTICS_V1 -->
+## Web Search Modes in OpenChat
+
+There are THREE distinct web search mechanisms. They are NOT interchangeable. When asked "what tool did you use" or "what search mode was used", identify the correct one from the conversation history items — NOT from the current instructions or current search mode.
+
+### 1. Hosted Web Search (provider-native)
+- History item type: \`web_search_call\` with \`action.type\` (e.g. \`search\`)
+- Executed server-side by the Codex backend. NOT a client function tool.
+- Do NOT call it \`web.run\`. Do NOT call it "Standalone" or a "function tool".
+- \`action.sources\` may contain:
+  - \`{ type: "url", url, title }\` — ordinary web page source
+  - \`{ type: "api", name: "oai-weather" }\` — built-in API data source (e.g. weather)
+- Both are still Hosted Web Search. An \`api\` source does NOT mean a separate "weather tool" was called; it means Hosted Search used an internal API data source. Describe it as: "Hosted Web Search used the built-in oai-weather data source."
+
+### 2. Standalone Web Search (web.run)
+- History item type: \`function_call\` with \`namespace: "web"\` and \`name: "run"\`, paired with a corresponding \`function_call_output\`
+- Client-side tool executed via /backend-api/codex/alpha/search. Often referred to as \`web.run\` or Standalone Web Search.
+- This is NEVER Hosted Web Search. Do NOT call it "Hosted", "hosted search", "本地搜索", or "local search".
+- If the history contains \`{ type: "function_call", name: "run", namespace: "web" }\` + \`function_call_output\`, the search was Standalone — regardless of what the current instructions say about "web_search" or "Hosted".
+
+### 3. OpenChat Custom Web Search
+- History item type: \`function_call\` with \`name: "openchat_web_search"\` (no namespace)
+- Client-side tool used by non-Codex custom providers.
+
+## Rules for answering "what tool/mode did you use"
+
+You MUST determine the search mode from the ACTUAL history item type in the conversation input. Do NOT guess from:
+- the result content (web pages, weather data, news, etc. do NOT determine the mode)
+- the current instructions (they describe the CURRENT session's tool, not the HISTORY)
+- the current SearchMode (it applies to this turn only, not to previous turns)
+
+Strict mapping:
+- \`type: web_search_call\` → answer "Hosted Web Search". Do NOT answer \`web.run\`, "Standalone", or "function tool".
+- \`type: function_call\` with \`namespace=web, name=run\` + \`function_call_output\` → answer "Standalone Web Search (web.run)". Do NOT answer "Hosted" or "hosted search".
+- \`type: function_call\` with \`name=openchat_web_search\` → answer "OpenChat Custom Web Search".
+
+## Most recent search takes priority
+
+When the user asks about "刚才", "上一次", "刚刚", "the previous search", or "what search was used", identify the MOST RECENT completed search tool call in the conversation history.
+
+- Most recent \`web_search_call\` → Hosted Web Search
+- Most recent \`function_call(namespace=web, name=run)\` + \`function_call_output\` → Standalone Web Search
+
+Do NOT classify an older search event when a newer completed search exists. For example, if the history contains both an earlier Hosted \`web_search_call\` and a later Standalone \`function_call web.run\`, and the user asks "刚才用了什么", the answer is Standalone — because that is the most recent search.
+
+Examples:
+- History item \`{ "type": "web_search_call", "action": { "type": "search" } }\` → This was Hosted Web Search
+- History item \`{ "type": "function_call", "name": "run", "namespace": "web" }\` + \`{ "type": "function_call_output" }\` → This was Standalone Web Search (web.run)`
+
+const CODEX_SEARCH_INSTRUCTIONS = `You have access to web search via the Hosted web_search tool. This describes your CURRENT capability for this turn.
 
 When you truly need external or up-to-date information, you may call web_search.
 If the existing conversation context is sufficient to answer, answer directly without searching again.
@@ -57,7 +110,27 @@ Use openchat_web_fetch when a search result snippet is insufficient and you need
 Prefer concise search queries.
 Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
-When using web results, cite relevant source URLs in the final answer.`
+When using web results, cite relevant source URLs in the final answer.
+
+` + CODEX_SEARCH_MODE_SEMANTICS
+
+// Standalone 搜索指令：web.run 通过 additional_tools 声明，模型自主决定是否调用
+const CODEX_STANDALONE_SEARCH_INSTRUCTIONS = `You have access to web search via the web.run tool (namespace: web, name: run). This describes your CURRENT capability for this turn.
+
+When you truly need external or up-to-date information, you may call web.run.
+If the existing conversation context is sufficient to answer, answer directly without searching again.
+
+Use web.run when:
+- the user explicitly asks to search, browse, look up, find or verify information;
+- the answer depends on current or potentially changed information;
+- external verification would materially improve accuracy.
+
+Prefer concise search queries.
+Prefer primary and authoritative sources when possible.
+Never claim that you searched the web unless a web tool was actually executed.
+When using web results, cite relevant source URLs in the final answer.
+
+` + CODEX_SEARCH_MODE_SEMANTICS
 
 export interface StreamEvent {
   type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'web-search-call-started' | 'web-search-call-completed' | 'web-search-call-failed' | 'stream-reset'
@@ -85,6 +158,7 @@ export class ChatGPTConversationService {
   private storage: StorageService
   private codexClient: ChatGPTCodexClient
   private modelService: ChatGPTModelService
+  private standaloneSearchClient: ChatGPTCodexStandaloneSearchClient
   private toolRegistry: ToolRegistry
   private webSearchService: WebSearchService
   private providerConfigService: ProviderConfigService
@@ -119,6 +193,7 @@ export class ChatGPTConversationService {
     this.messages = new MessageRepository(storage)
     this.codexClient = codexClient
     this.modelService = modelService
+    this.standaloneSearchClient = new ChatGPTCodexStandaloneSearchClient(credentialManager)
     this.toolRegistry = toolRegistry
     this.webSearchService = webSearchService
     this.providerConfigService = providerConfigService
@@ -147,6 +222,7 @@ export class ChatGPTConversationService {
       currentSegmentId: '',
       useModelInstructions: true,
       webSearchEnabled: false,
+      codexSearchMode: 'hosted',
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
@@ -182,6 +258,7 @@ export class ChatGPTConversationService {
       currentSegmentId: segmentId,
       useModelInstructions: true,
       webSearchEnabled: false,
+      codexSearchMode: 'hosted',
       providerConfigId,
       createdAt: now,
       updatedAt: now,
@@ -399,7 +476,8 @@ export class ChatGPTConversationService {
       text,
       conversation.providerConfigId,
       abortController,
-      conversation.webSearchEnabled
+      conversation.webSearchEnabled,
+      conversation.codexSearchMode
     )
 
     return { userMessage, assistantMessage }
@@ -416,10 +494,13 @@ export class ChatGPTConversationService {
   // 根据当前 Provider 决定搜索后端：Codex 使用原生搜索，自定义 Provider 使用 OpenChat 自定义搜索
   private resolveSearchStrategy(
     providerConfigId: string | null,
-    webSearchEnabled: boolean
-  ): 'none' | 'codex-native' | 'openchat-custom' {
+    webSearchEnabled: boolean,
+    codexSearchMode: 'hosted' | 'standalone'
+  ): 'none' | 'codex-hosted' | 'codex-standalone' | 'openchat-custom' {
     if (!webSearchEnabled) return 'none'
-    if (providerConfigId === null) return 'codex-native'
+    if (providerConfigId === null) {
+      return codexSearchMode === 'standalone' ? 'codex-standalone' : 'codex-hosted'
+    }
     return 'openchat-custom'
   }
 
@@ -465,7 +546,8 @@ export class ChatGPTConversationService {
     userText: string,
     providerConfigId: string | null,
     abortController: AbortController,
-    webSearchEnabled: boolean
+    webSearchEnabled: boolean,
+    codexSearchMode: 'hosted' | 'standalone'
   ): Promise<void> {
     console.log('[runGeneration] entry conversationId=%s modelId=%s providerConfigId=%s webSearch=%s', conversationId, modelId, providerConfigId ?? 'codex', webSearchEnabled)
     try {
@@ -494,17 +576,25 @@ export class ChatGPTConversationService {
 
       const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
 
-      const searchStrategy = this.resolveSearchStrategy(providerConfigId, webSearchEnabled)
-      const engineLabel = searchStrategy === 'codex-native'
-        ? 'codex-native'
-        : searchStrategy === 'openchat-custom'
-          ? (this.webSearchService.getEngineName())
-          : 'none'
+      const searchStrategy = this.resolveSearchStrategy(providerConfigId, webSearchEnabled, codexSearchMode)
+      const engineLabel = searchStrategy === 'codex-hosted'
+        ? 'codex-hosted'
+        : searchStrategy === 'codex-standalone'
+          ? 'codex-standalone'
+          : searchStrategy === 'openchat-custom'
+            ? (this.webSearchService.getEngineName())
+            : 'none'
       console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', searchStrategy, engineLabel)
 
       switch (searchStrategy) {
-        case 'codex-native':
+        case 'codex-hosted':
           await this.runGenerationWithCodexHostedSearch(
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+          )
+          break
+
+        case 'codex-standalone':
+          await this.runGenerationWithCodexStandaloneSearch(
             conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
           )
           break
@@ -601,7 +691,7 @@ export class ChatGPTConversationService {
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
 
-    const controller = new ToolLoopController(adapter, this.toolRegistry)
+    const controller = new ToolLoopController(adapter, this.toolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId })
 
     const callbacks: ToolLoopCallbacks = {
       onToolCall: (toolCall: CanonicalToolCall) => {
@@ -690,7 +780,7 @@ export class ChatGPTConversationService {
     }
 
     const fullInstructions = instructions + '\n\n' + SEARCH_INSTRUCTIONS
-    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
+    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort, adapter.protocol)
 
     const result = await controller.run(request, abortController.signal, callbacks)
     console.log('[Generation] ToolLoop done finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
@@ -730,18 +820,31 @@ export class ChatGPTConversationService {
       }
     }
 
-    // 持久化工具调用历史，使模型在后续 turn 能感知已执行的搜索工具
-    if (result.toolCallHistory.length > 0) {
-      this.messages.updateProviderPayload(assistantMessageId, {
-        toolCalls: result.toolCallHistory.map((entry) => ({
-          id: entry.callId,
+    // 持久化 provider-native tool history（V2 schema）
+    // 按真实执行顺序保存 function_call + function_call_output 配对
+    const completeToolHistoryCustom = result.toolCallHistory.filter((entry) => entry.output)
+    if (completeToolHistoryCustom.length > 0) {
+      const customItems: ProviderPayloadItem[] = []
+      for (const entry of completeToolHistoryCustom) {
+        customItems.push({
+          type: 'function_call',
+          call_id: entry.callId,
           name: entry.name,
           ...(entry.namespace ? { namespace: entry.namespace } : {}),
           arguments: entry.arguments,
+        })
+        customItems.push({
+          type: 'function_call_output',
+          call_id: entry.callId,
           output: entry.output,
-          isError: entry.isError,
-        })),
+        })
+      }
+      this.messages.updateProviderPayload(assistantMessageId, {
+        provider: 'custom',
+        protocol: adapter.protocol,
+        items: customItems,
       })
+      console.log('[Provider History] save assistantId=%s provider=custom protocol=%s items=%d types=%s', assistantMessageId.slice(0, 8), adapter.protocol, customItems.length, customItems.map((i) => i.type).join(','))
     }
 
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
@@ -763,10 +866,13 @@ export class ChatGPTConversationService {
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
-    const webSearchResults: Array<{ title: string | null; url: string | null; snippet: string | null }> = []
+    const webSearchResults: Array<{ title: string | null; url: string | null; snippet: string | null; sourceType?: 'web' | 'api' }> = []
+    const webSearchCallItems: Array<{ id: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }> = []
 
     const fullInstructions = instructions + '\n\n' + CODEX_SEARCH_INSTRUCTIONS
-    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort)
+    const semIdx = fullInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
+    console.log('[Codex Search Semantics] mode=hosted snippet=%s', semIdx >= 0 ? fullInstructions.slice(semIdx, semIdx + 200) : 'NOT_FOUND')
+    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort, adapter.protocol)
     request.tools = [{
       name: 'web_search',
       description: '',
@@ -830,22 +936,44 @@ export class ChatGPTConversationService {
               case 'searching':
                 break
               case 'completed':
-                console.log('[Codex] web_search_call phase=completed resultsCount=', event.results?.length ?? 0)
+                console.log('[Codex] web_search_call phase=completed itemId=', event.itemId ?? '(none)', 'resultsCount=', event.results?.length ?? 0)
+                // 持久化 provider-native web_search_call item（用于跨 turn 模型记忆）
+                if (event.itemId) {
+                  webSearchCallItems.push({
+                    id: event.itemId,
+                    status: event.status,
+                    action: event.action ?? { type: 'search' },
+                  })
+                }
                 if (event.results) {
                   for (const item of event.results) {
                     if (item && typeof item === 'object') {
                       const obj = item as Record<string, unknown>
                       const rawUrl = (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null) ?? (typeof obj.uri === 'string' ? obj.uri : null)
-                      const rawTitle = typeof obj.title === 'string' ? obj.title : null
+                      const rawTitle = (typeof obj.title === 'string' ? obj.title : null)
+                      const rawSnippet = (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null)
+                      // 内置 API 引用（如 {"type":"api","name":"oai-weather"}），无 URL
+                      if (!rawUrl) {
+                        const apiName = typeof obj.name === 'string' ? obj.name : ''
+                        webSearchResults.push({
+                          title: apiName ? `内置服务: ${apiName}` : '内置服务',
+                          url: null,
+                          snippet: rawSnippet,
+                          sourceType: 'api',
+                        })
+                        continue
+                      }
                       webSearchResults.push({
                         title: rawTitle ?? hostnameFromUrl(rawUrl),
                         url: rawUrl,
-                        snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
+                        snippet: rawSnippet,
+                        sourceType: 'web',
                       })
                     }
                   }
                 }
-                this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults: webSearchResults })
+                this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults })
+                console.log('[Codex] web_search_call emitted webSearchResults count=', webSearchResults.length, 'first=', webSearchResults[0] ? JSON.stringify(webSearchResults[0]) : '(empty)')
                 break
               case 'failed':
                 console.log('[Codex] web_search_call phase=failed')
@@ -877,6 +1005,188 @@ export class ChatGPTConversationService {
       this.messages.updateWebSearchResults(assistantMessageId, webSearchResults)
     }
 
+    // 持久化 provider-native tool history（V2 schema）
+    if (webSearchCallItems.length > 0) {
+      this.messages.updateProviderPayload(assistantMessageId, {
+        provider: 'chatgpt_codex',
+        protocol: 'chatgpt_codex',
+        items: webSearchCallItems.map((i) => ({ type: 'web_search_call' as const, id: i.id, status: i.status, action: i.action })),
+      })
+      for (const i of webSearchCallItems) {
+        console.log('[Hosted Replay Probe] persisted=', JSON.stringify({ id: i.id, status: i.status, action: i.action }))
+      }
+      console.log('[Provider History] save assistantId=%s provider=codex items=%d types=%s', assistantMessageId.slice(0, 8), webSearchCallItems.length, webSearchCallItems.map(() => 'web_search_call').join(','))
+    }
+
+    this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+  }
+
+  // Codex Standalone Search：模型通过 web.run 工具自主调用 /alpha/search
+  // 失败时仅报错，不回退到 Hosted
+  private async runGenerationWithCodexStandaloneSearch(
+    conversationId: string,
+    adapter: ModelAdapter,
+    modelId: string,
+    instructions: string,
+    effort: string,
+    assistantMessageId: string,
+    userText: string,
+    segmentId: string,
+    abortController: AbortController
+  ): Promise<void> {
+    let accumulatedContent = ''
+    let providerTurnId: string | null = null
+    let reasoningStartedAt: number | null = null
+    let totalReasoningDuration = 0
+
+    // 先构建 canonical request 以获取对话历史，传给 web.run 工具
+    const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
+    const semIdx2 = standaloneInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
+    console.log('[Codex Search Semantics] mode=standalone snippet=%s', semIdx2 >= 0 ? standaloneInstructions.slice(semIdx2, semIdx2 + 200) : 'NOT_FOUND')
+    const request = this.buildCanonicalRequest(modelId, standaloneInstructions, segmentId, userText, effort, adapter.protocol)
+
+    // 构建 web.run 工具注册表
+    const standaloneToolRegistry = new ToolRegistry()
+    const webRunTool = new CodexStandaloneWebRunTool(
+      this.standaloneSearchClient,
+      modelId,
+      segmentId,
+      request.messages
+    )
+    standaloneToolRegistry.register('run', webRunTool)
+
+    const controller = new ToolLoopController(adapter, standaloneToolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId })
+
+    const callbacks: ToolLoopCallbacks = {
+      onToolCall: (toolCall: CanonicalToolCall) => {
+        this.emitStreamEvent({
+          type: 'web-search-started',
+          conversationId,
+          toolCallId: toolCall.id,
+          toolCallName: toolCall.name,
+          toolCallArgs: toolCall.arguments,
+        })
+      },
+      onToolResult: (callId, toolName, success, rawResults) => {
+        if (toolName === 'run') {
+          if (success) {
+            this.emitStreamEvent({
+              type: 'web-search-completed',
+              conversationId,
+              toolCallId: callId,
+              webSearchResults: rawResults,
+            })
+          } else {
+            this.emitStreamEvent({
+              type: 'web-search-error',
+              conversationId,
+              toolCallId: callId,
+            })
+          }
+        }
+      },
+      onDelta: (text) => {
+        accumulatedContent += text
+        this.messages.updateContent(assistantMessageId, accumulatedContent)
+        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text })
+      },
+      onReasoningStarted: (itemId) => {
+        reasoningStartedAt = Date.now()
+        this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
+      },
+      onReasoningDelta: (text) => {
+        this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text })
+      },
+      onReasoningCompleted: (itemId, summary) => {
+        const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+        totalReasoningDuration += phaseDuration
+        const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
+        const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(summary ?? [])]
+        const meta = {
+          duration: totalReasoningDuration,
+          effort: effort || '',
+          summary: accumulatedSummary,
+          available: accumulatedSummary.length > 0,
+        }
+        this.messages.updateReasoningMeta(assistantMessageId, meta)
+        this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId, reasoningMeta: meta })
+      },
+      onTurnStarted: (turnId) => {
+        if (turnId && !providerTurnId) {
+          providerTurnId = turnId
+          this.messages.updateProviderIds(assistantMessageId, turnId, '')
+        }
+        this.emitStreamEvent({ type: 'turn-started', conversationId, turnId })
+      },
+      getProviderTurnId: () => providerTurnId,
+      setProviderTurnId: (id) => {
+        providerTurnId = id
+        this.messages.updateProviderIds(assistantMessageId, id, '')
+      },
+    }
+
+    const result = await controller.run(request, abortController.signal, callbacks)
+    console.log('[CodexStandalone] ToolLoop done finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
+
+    this.messages.updateContent(assistantMessageId, result.finalText)
+    this.messages.updateStatus(assistantMessageId, 'completed')
+
+    // 持久化搜索结果
+    if (result.toolCallHistory.length > 0) {
+      const allResults: Array<{ title: string | null; url: string | null; snippet: string | null; sourceType?: 'web' | 'api' }> = []
+      for (const entry of result.toolCallHistory) {
+        if (entry.name !== 'run') continue
+        for (const item of entry.rawResults) {
+          if (item && typeof item === 'object') {
+            const obj = item as Record<string, unknown>
+            allResults.push({
+              title: (typeof obj.title === 'string' ? obj.title : null) ?? (typeof obj.name === 'string' ? obj.name : null),
+              url: (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null),
+              snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
+              sourceType: 'web',
+            })
+          }
+        }
+      }
+      if (allResults.length > 0) {
+        this.messages.updateWebSearchResults(assistantMessageId, allResults)
+      }
+    }
+
+    // 持久化 provider-native tool history（V2 schema）
+    // 按真实执行顺序保存 function_call + function_call_output 配对
+    // 只保存有合法 output 的完整 pair（error output 也算合法）
+    const completeToolHistory = result.toolCallHistory.filter((entry) => entry.output)
+    if (completeToolHistory.length > 0) {
+      const items: ProviderPayloadItem[] = []
+      for (const entry of completeToolHistory) {
+        // 确保 namespace 不丢失：Codex SSE 可能不返回 namespace，但 ToolRegistry 定义中有
+        const ns = entry.namespace ?? (entry.name === 'run' ? 'web' : undefined)
+        items.push({
+          type: 'function_call',
+          call_id: entry.callId,
+          name: entry.name,
+          ...(ns ? { namespace: ns } : {}),
+          arguments: entry.arguments,
+        })
+        items.push({
+          type: 'function_call_output',
+          call_id: entry.callId,
+          output: entry.output,
+        })
+      }
+      this.messages.updateProviderPayload(assistantMessageId, {
+        provider: 'chatgpt_codex',
+        protocol: 'chatgpt_codex',
+        items,
+      })
+      console.log('[Provider History] save assistantId=%s provider=codex items=%d detail=%s', assistantMessageId.slice(0, 8), items.length, items.map((i) => {
+        if (i.type === 'function_call') return `fc:${i.name}@${i.namespace ?? '?'}`
+        if (i.type === 'function_call_output') return 'fco'
+        return 'wsc'
+      }).join(','))
+    }
+
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
   }
 
@@ -900,7 +1210,9 @@ export class ChatGPTConversationService {
       toolCallArgs: JSON.stringify({ query: '正在分析搜索词...' }),
     })
 
-    const searchQuery = await this.extractSearchQuery(adapter, modelId, userText, abortController)
+    const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+    const recentContext = this.buildRecentContext(segmentId)
+    const searchQuery = await this.extractSearchQuery(adapter, modelId, userText, abortController, recentContext)
     console.log('[PreSearch] extracted query=', searchQuery)
 
     // 模型判定无需搜索（追问/澄清/已讨论内容），直接生成，跳过搜索
@@ -912,7 +1224,6 @@ export class ChatGPTConversationService {
         toolCallId: 'pre-search',
         webSearchResults: [],
       })
-      const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
       await this.runGenerationDirect(
         conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
       )
@@ -968,8 +1279,6 @@ export class ChatGPTConversationService {
       })
     }
 
-    const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
-
     // Responses 协议优先使用 developer message 注入搜索上下文
     if (searchContext && adapter.protocol === 'responses') {
       const request = this.buildCanonicalRequestWithDeveloper(
@@ -990,27 +1299,46 @@ export class ChatGPTConversationService {
     )
   }
 
+  // 从当前 segment 的最近消息中提取简短上下文，帮助模型从模糊消息推断搜索词
+  private buildRecentContext(segmentId: string, maxMessages = 4): string {
+    const messages = this.messages.getBySegmentId(segmentId)
+    // 取最后 maxMessages 条（跳过当前 pending/streaming 的 assistant 消息）
+    const recent = messages
+      .filter((m) => m.status === 'completed' || m.status === 'stopped')
+      .slice(-maxMessages)
+    if (recent.length === 0) return ''
+    return recent
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 200)}`)
+      .join('\n')
+  }
+
   // 判断是否需要搜索，是则提取 query；否则返回空字符串跳过搜索
   private async extractSearchQuery(
     adapter: ModelAdapter,
     modelId: string,
     userText: string,
-    abortController: AbortController
+    abortController: AbortController,
+    conversationContext?: string
   ): Promise<string> {
-    const prompt = `Decide whether the following user message needs a web search.
+    const contextHint = conversationContext
+      ? `\n\nRecent conversation context for reference:\n${conversationContext}`
+      : ''
+    const prompt = `The user has explicitly enabled web search. You must decide whether the following user message needs a web search.
+
+Since the user turned on web search, lean toward searching. If the message is ambiguous (e.g. "再搜一下？", "search again", "tell me more"), infer the search topic from the conversation context and output a relevant search query.
 
 If a web search IS needed, output the best search query on a single line.
 
-If a web search is NOT needed, output only the word: NO_SEARCH
+If a web search is truly NOT needed (pure chitchat, no factual question at all), output only the word: NO_SEARCH
 
 Do NOT think, reason, or explain. Output exactly one of:
 - A search query (one line)
 - NO_SEARCH
 
-User message: ${userText}`
+User message: ${userText}${contextHint}`
     const request: CanonicalModelRequest = {
       model: modelId,
-      systemPrompt: 'You are a search decision assistant. Output only a search query or NO_SEARCH. No thinking, no reasoning, no explanation.',
+      systemPrompt: 'You are a search decision assistant. The user has web search enabled — output a search query unless the message is pure chitchat with zero factual intent. No thinking, no reasoning, no explanation.',
       messages: [{ role: 'user', content: prompt }],
     }
     let query = ''
@@ -1067,7 +1395,7 @@ User message: ${userText}`
     segmentId: string,
     abortController: AbortController
   ): Promise<void> {
-    const request = this.buildCanonicalRequest(modelId, instructions, segmentId, '', effort)
+    const request = this.buildCanonicalRequest(modelId, instructions, segmentId, '', effort, adapter.protocol)
     await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
   }
 
@@ -1198,7 +1526,8 @@ User message: ${userText}`
     instructions: string,
     segmentId: string,
     userText: string,
-    effort: string
+    effort: string,
+    targetProtocol?: ProviderProtocol
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
@@ -1214,50 +1543,148 @@ User message: ${userText}`
       }
 
       if (msg.role === 'assistant') {
-        const assistantMsg: CanonicalMessage = { role: 'assistant' }
-        if (msg.content) {
-          assistantMsg.content = msg.content
-        }
+        // 解析 providerPayloadJson，按真实执行顺序重建 history
+        let webSearchCalls: CanonicalWebSearchCall[] | undefined
+        // 按原始顺序收集的 tool items（function_call + function_call_output 交替）
+        const orderedToolItems: Array<{ type: 'function_call'; call_id: string; name: string; namespace?: string; arguments: string } | { type: 'function_call_output'; call_id: string; output: string }> = []
 
-        // 重建历史工具调用：让模型在后续 turn 感知已执行的 web 搜索
-        let toolCallsFromPayload: Array<{ id: string; name: string; namespace?: string; arguments: string; output: string; isError: boolean }> = []
         if (msg.providerPayloadJson) {
           try {
-            const payload = JSON.parse(msg.providerPayloadJson) as {
-              toolCalls?: Array<{ id: string; name: string; namespace?: string; arguments: string; output: string; isError: boolean }>
-            }
-            if (payload.toolCalls && payload.toolCalls.length > 0) {
-              assistantMsg.toolCalls = payload.toolCalls.map((tc) => ({
-                id: tc.id,
-                name: tc.name,
-                namespace: tc.namespace,
-                arguments: tc.arguments,
-              }))
-              toolCallsFromPayload = payload.toolCalls
+            const payload = JSON.parse(msg.providerPayloadJson) as Record<string, unknown>
+
+            // V2 schema: { provider, protocol, items }
+            if (payload.items && Array.isArray(payload.items)) {
+              const v2 = payload as unknown as ProviderPayloadV2
+
+              for (const item of v2.items) {
+                if (item.type === 'web_search_call') {
+                  if (targetProtocol === 'chatgpt_codex') {
+                    if (!webSearchCalls) webSearchCalls = []
+                    webSearchCalls.push({
+                      id: item.id,
+                      status: item.status,
+                      action: item.action ? { ...item.action, type: item.action.type ?? 'search' } : { type: 'search' },
+                    })
+                  }
+                } else if (item.type === 'function_call') {
+                  orderedToolItems.push({
+                    type: 'function_call',
+                    call_id: item.call_id,
+                    name: item.name,
+                    namespace: item.namespace,
+                    arguments: item.arguments,
+                  })
+                } else if (item.type === 'function_call_output') {
+                  orderedToolItems.push({
+                    type: 'function_call_output',
+                    call_id: item.call_id,
+                    output: item.output,
+                  })
+                }
+              }
+
+              if (webSearchCalls && webSearchCalls.length > 0) {
+                for (const i of webSearchCalls) {
+                  console.log('[Hosted Replay Probe] restored=', JSON.stringify({ id: i.id, status: i.status, action: i.action }))
+                }
+              }
+              if (orderedToolItems.length > 0) {
+                console.log('[Provider History] restore assistantId=%s types=%s', msg.id.slice(0, 8), orderedToolItems.map(i => i.type).join(','))
+              }
+            } else if (payload.toolCalls && Array.isArray(payload.toolCalls)) {
+              // Legacy schema: { toolCalls: [...] } — 转换为 function_call + function_call_output 对
+              const calls = payload.toolCalls as Array<{ id: string; name: string; namespace?: string; arguments: string; output: string; isError: boolean }>
+              for (const tc of calls) {
+                orderedToolItems.push({
+                  type: 'function_call',
+                  call_id: tc.id,
+                  name: tc.name,
+                  namespace: tc.namespace,
+                  arguments: tc.arguments,
+                })
+                if (tc.output) {
+                  orderedToolItems.push({
+                    type: 'function_call_output',
+                    call_id: tc.id,
+                    output: tc.output,
+                  })
+                }
+              }
+            } else if (payload.hostedSearchCalls && Array.isArray(payload.hostedSearchCalls)) {
+              // Legacy schema: { hostedSearchCalls: [...] } — 转换为 webSearchCalls
+              if (targetProtocol === 'chatgpt_codex') {
+                const calls = payload.hostedSearchCalls as Array<{ title: string | null; url: string | null; snippet: string | null; sourceType?: string }>
+                webSearchCalls = calls.map((_, idx) => ({
+                  id: `legacy_hosted_${idx}`,
+                  action: {
+                    type: 'search',
+                    sources: calls
+                      .filter((r) => r.url)
+                      .map((r) => ({
+                        url: r.url ?? undefined,
+                        title: r.title ?? undefined,
+                        type: r.sourceType ?? undefined,
+                        snippet: r.snippet ?? undefined,
+                      })),
+                  },
+                }))
+              }
             }
           } catch {
             // 忽略无法解析的 payload
           }
         }
 
-        if (assistantMsg.content || assistantMsg.toolCalls) {
-          messages.push(assistantMsg)
+        // 按真实时序重建 messages：
+        // web_search_call → function_call → function_call_output → ... → assistant(final text)
+
+        // 1. Hosted web_search_call
+        if (webSearchCalls && webSearchCalls.length > 0) {
+          messages.push({ role: 'assistant', webSearchCalls })
+          console.log('[Provider History] load assistantId=%s webSearchCalls=%d sources=%s',
+            msg.id.slice(0, 8), webSearchCalls.length,
+            webSearchCalls.map(w => w.action?.sources?.length ?? 0).join(','))
         }
 
-        // 追加工具结果消息
-        for (const tc of toolCallsFromPayload) {
-          messages.push({
-            role: 'tool',
-            content: tc.output,
-            toolResult: {
-              callId: tc.id,
-              name: tc.name,
-              output: tc.output,
-              isError: tc.isError,
-            },
-          })
+        // 2. 按原始顺序发射 function_call / function_call_output
+        for (const item of orderedToolItems) {
+          if (item.type === 'function_call') {
+            messages.push({
+              role: 'assistant',
+              toolCalls: [{
+                id: item.call_id,
+                name: item.name,
+                namespace: item.namespace,
+                arguments: item.arguments,
+              }],
+            })
+          } else {
+            // function_call_output
+            messages.push({
+              role: 'tool',
+              content: item.output,
+              toolResult: {
+                callId: item.call_id,
+                name: '',
+                output: item.output,
+              },
+            })
+          }
+        }
+
+        // 3. 最终 assistant 文本（在所有工具结果之后）
+        if (msg.content) {
+          messages.push({ role: 'assistant', content: msg.content })
         }
       }
+    }
+
+    // 注入所有历史搜索的确定性来源上下文
+    const allProvenances = resolveAllSearchProvenance(segmentMessages)
+    if (allProvenances.length > 0) {
+      const ctx = buildAllProvenanceContext(allProvenances)
+      messages.push({ role: 'developer', content: ctx })
+      console.log('[Search Provenance] count=%d modes=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','))
     }
 
     // 如果 userText 不在 messages 中，追加
@@ -1340,6 +1767,11 @@ User message: ${userText}`
 
   async updateWebSearchEnabled(id: string, webSearchEnabled: boolean): Promise<void> {
     this.conversations.updateWebSearchEnabled(id, webSearchEnabled)
+    await this.storage.save()
+  }
+
+  async updateCodexSearchMode(id: string, mode: 'hosted' | 'standalone'): Promise<void> {
+    this.conversations.updateCodexSearchMode(id, mode)
     await this.storage.save()
   }
 

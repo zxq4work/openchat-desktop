@@ -13,6 +13,7 @@ interface DropdownProps {
   className?: string
   placeholder?: string
   ariaLabel?: string
+  title?: string
 }
 
 interface MenuPosition {
@@ -35,6 +36,7 @@ export function Dropdown({
   className,
   placeholder,
   ariaLabel,
+  title,
 }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<MenuPosition>({
@@ -135,6 +137,7 @@ export function Dropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        title={title}
       >
         <span className={`dropdown-value${selected ? '' : ' placeholder'}`}>
           {selected ? selected.label : placeholder ?? '请选择'}

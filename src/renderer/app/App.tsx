@@ -206,10 +206,12 @@ export function App() {
         ? presentSearchResults(e.webSearchResults).map((card) => {
             const rawUrl = card.url ?? card.link ?? card.uri ?? null
             const rawTitle = card.title ?? card.name ?? null
+            const sourceType = (card.raw as Record<string, unknown>)?.sourceType === 'api' ? 'api' as const : 'web' as const
             return {
               title: rawTitle ?? hostnameFromUrl(rawUrl),
               url: rawUrl,
               snippet: card.snippet ?? card.description ?? card.text ?? null,
+              sourceType,
             }
           })
         : []
@@ -261,10 +263,12 @@ export function App() {
         ? presentSearchResults(e.webSearchResults).map((card) => {
             const rawUrl = card.url ?? card.link ?? card.uri ?? null
             const rawTitle = card.title ?? card.name ?? null
+            const sourceType = (card.raw as Record<string, unknown>)?.sourceType === 'api' ? 'api' as const : 'web' as const
             return {
               title: rawTitle ?? hostnameFromUrl(rawUrl),
               url: rawUrl,
               snippet: card.snippet ?? card.description ?? card.text ?? null,
+              sourceType,
             }
           })
         : []

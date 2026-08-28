@@ -964,6 +964,12 @@ textarea {
   text-decoration: underline;
 }
 
+.message-search-result-api-title {
+  color: var(--text-secondary);
+  font-weight: 400;
+  font-style: italic;
+}
+
 .message-search-result-url {
   font-size: 11px;
   color: var(--text-muted);
