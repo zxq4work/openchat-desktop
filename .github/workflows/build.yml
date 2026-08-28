@@ -7,10 +7,17 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   build-windows:
     name: Build Windows (x64)
     runs-on: windows-2022
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -42,9 +49,10 @@ jobs:
   build-macos:
     name: Build macOS (x64)
     runs-on: macos-15-intel
+
     env:
-      # 第一阶段不要求 Apple Developer ID 签名，生成未签名构建。
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -76,6 +84,7 @@ jobs:
   build-linux:
     name: Build Linux (x64)
     runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5

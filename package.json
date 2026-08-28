@@ -1,6 +1,10 @@
 {
   "name": "openchat-desktop",
   "version": "0.1.0",
+  "author": {
+    "name": "zxq4work",
+    "email": "zxq4work@users.noreply.github.com"
+  },
   "description": "A lightweight Chatbox-style ChatGPT desktop client",
   "main": "dist/src/main/bootstrap/main.js",
   "private": true,
