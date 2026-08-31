@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import { useCodexUsageStore } from '../../stores/codexUsageStore'
 import type { CodexUsageView } from '../../../shared/types/usage'
+import { ConfirmDialog } from '../ConfirmDialog'
 
 function formatWindowSeconds(seconds: number): string {
   const days = Math.round(seconds / 86400)
@@ -127,6 +128,7 @@ export function AccountPanel() {
 
   const [accountIdCopied, setAccountIdCopied] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
 
   const handleRefreshUsage = async () => {
     setRefreshing(true)
@@ -230,7 +232,19 @@ export function AccountPanel() {
             {renderUsageSection(usage, refreshing, handleRefreshUsage)}
           </div>
         </div>
-        <button className="btn-logout-outline" onClick={handleLogout}>退出登录</button>
+        <button className="btn-logout-outline" onClick={() => setLogoutConfirmOpen(true)}>退出登录</button>
+
+        <ConfirmDialog
+          open={logoutConfirmOpen}
+          title="退出登录"
+          message="确定要退出当前账号吗？"
+          confirmText="确认退出"
+          onConfirm={async () => {
+            await handleLogout()
+            setLogoutConfirmOpen(false)
+          }}
+          onCancel={() => setLogoutConfirmOpen(false)}
+        />
       </div>
     )
   }

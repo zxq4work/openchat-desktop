@@ -1344,7 +1344,7 @@ textarea {
 }
 
 .confirm-layer {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
@@ -1352,7 +1352,8 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  z-index: 1010;
+  pointer-events: auto;
 }
 
 .confirm-dialog {

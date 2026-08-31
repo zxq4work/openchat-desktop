@@ -7,6 +7,7 @@ import { ProxySettings } from './ProxySettings'
 import { ProviderSettings } from './ProviderSettings'
 import { DefaultModelSettings } from './DefaultModelSettings'
 import { WebSearchEngineSettings } from './WebSearchEngineSettings'
+import { ConfirmDialog } from '../ConfirmDialog'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -18,24 +19,18 @@ export function SettingsDialog() {
   const themeMode = useThemeStore((s) => s.mode)
   const setThemeMode = useThemeStore((s) => s.setMode)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
-  const [clearing, setClearing] = React.useState(false)
 
   const handleClearAll = async () => {
-    setClearing(true)
-    try {
-      await window.openchat.conversations.removeAll()
-      useConversationStore.getState().clearAll()
-      setConfirmOpen(false)
-      setSettingsDialogOpen(false)
-      useUiStore.getState().showToast('所有会话已清空')
-    } finally {
-      setClearing(false)
-    }
+    await window.openchat.conversations.removeAll()
+    useConversationStore.getState().clearAll()
+    setConfirmOpen(false)
+    setSettingsDialogOpen(false)
+    useUiStore.getState().showToast('所有会话已清空')
   }
 
   return (
     <div className="dialog-overlay">
-      <div className={`dialog settings-dialog${confirmOpen ? ' has-confirm' : ''}`}>
+      <div className="dialog settings-dialog">
         <div className="settings-dialog-header">
           <h3>设置</h3>
           <button
@@ -118,39 +113,14 @@ export function SettingsDialog() {
         </div>
       </div>
 
-      {confirmOpen && (
-        <div className="confirm-layer">
-          <div className="dialog confirm-dialog">
-            <h3>清空所有会话</h3>
-            <p className="dialog-subtitle">
-              此操作不可撤销，所有聊天记录将永久删除。
-            </p>
-            <div className="dialog-actions">
-              <button
-                className="btn-cancel"
-                onClick={() => setConfirmOpen(false)}
-                disabled={clearing}
-              >
-                取消
-              </button>
-              <button
-                className="btn-logout"
-                onClick={handleClearAll}
-                disabled={clearing}
-              >
-                {clearing ? (
-                  <>
-                    <span className="btn-spinner" />
-                    删除中...
-                  </>
-                ) : (
-                  '确认清空'
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmOpen}
+        title="清空所有会话"
+        message="此操作不可撤销，所有聊天记录将永久删除。"
+        confirmText="确认清空"
+        onConfirm={handleClearAll}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   )
 }
