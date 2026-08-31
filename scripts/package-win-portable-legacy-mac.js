@@ -34,12 +34,22 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // electron-builder 的 NSIS 缓存根目录
 const EB_CACHE_ROOT = path.join(
   os.homedir(),
-  'Library', 'Caches', 'electron-builder', 'nsis'
+  'Library', 'Caches', 'electron-builder'
 );
 
-// electron-builder 24.13.3 需要的 NSIS 资源目录
-const NSIS_4041_DIR = path.join(EB_CACHE_ROOT, 'nsis-3.0.4.1');
-const NSIS_RESOURCES_DIR = path.join(EB_CACHE_ROOT, 'nsis-resources-3.4.1');
+// NSIS compiler
+const NSIS_4041_DIR = path.join(
+  EB_CACHE_ROOT,
+  'nsis',
+  'nsis-3.0.4.1'
+);
+
+// NSIS plugins/resources
+const NSIS_RESOURCES_DIR = path.join(
+  EB_CACHE_ROOT,
+  'nsis-resources',
+  'nsis-resources-3.4.1'
+);
 
 // 项目级下载缓存（node_modules/.cache 已在 .gitignore 中）
 const BUILD_CACHE_DIR = path.join(PROJECT_ROOT, 'node_modules', '.cache', 'openchat-build');
