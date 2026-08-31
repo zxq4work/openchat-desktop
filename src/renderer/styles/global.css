@@ -1202,7 +1202,6 @@ textarea {
   right: 0;
   bottom: 0;
   background: var(--overlay-bg);
-  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1319,6 +1318,9 @@ textarea {
 .btn-logout {
   background: var(--danger);
   color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .btn-logout:hover {
@@ -1341,6 +1343,74 @@ textarea {
   background: var(--danger-bg);
 }
 
+.confirm-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.confirm-dialog {
+  width: 420px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.04), 0 16px 48px rgba(0, 0, 0, 0.16);
+  animation: confirmIn 0.15s ease;
+}
+
+:root[data-theme='dark'] .confirm-dialog {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+@keyframes confirmIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.btn-cancel:disabled,
+.btn-logout:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #FFFFFF;
+  border-radius: 50%;
+  animation: btnSpin 0.6s linear infinite;
+}
+
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
+}
+
+.toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  padding: 10px 24px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  z-index: 2000;
+  animation: toastIn 0.25s ease;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
 /* ========================================
    Settings Dialog
    ======================================== */
@@ -1353,6 +1423,13 @@ textarea {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.settings-dialog.has-confirm {
+  transform: scale(0.99);
+  opacity: 0.75;
+  pointer-events: none;
 }
 
 .settings-dialog-body {

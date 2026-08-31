@@ -170,6 +170,25 @@ export class ConversationService {
     await this.storage.save()
   }
 
+  async removeAllConversations(): Promise<void> {
+    const allConversations = this.conversations.listSummaries()
+
+    // 尝试清理所有远端线程（不阻止本地删除）
+    for (const summary of allConversations) {
+      const threadIds = this.segments.listProviderThreadIds(summary.id)
+      for (const threadId of threadIds) {
+        try {
+          await this.threadService.deleteThread(threadId)
+        } catch {
+          // WARN: 远端清理失败，继续本地删除
+        }
+      }
+    }
+
+    this.conversations.removeAll()
+    await this.storage.save()
+  }
+
   updateRole(id: string, newSystemPrompt: string): void {
     const conversation = this.conversations.getById(id)
     if (!conversation) return

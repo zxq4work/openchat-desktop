@@ -18,9 +18,12 @@ interface UiState {
   searchMatches: SearchMatch[]
   currentMatchIndex: number
   focusRequestId: number
+  toast: string | null
 
   toggleSidebar: () => void
   requestComposerFocus: () => void
+  showToast: (message: string) => void
+  clearToast: () => void
   setSettingsDialogOpen: (open: boolean) => void
   setConversationSettingsOpen: (open: boolean) => void
   setModelPickerOpen: (open: boolean) => void
@@ -45,9 +48,12 @@ export const useUiStore = create<UiState>((set, get) => ({
   searchMatches: [],
   currentMatchIndex: -1,
   focusRequestId: 0,
+  toast: null,
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   requestComposerFocus: () => set((state) => ({ focusRequestId: state.focusRequestId + 1 })),
+  showToast: (message) => set({ toast: message }),
+  clearToast: () => set({ toast: null }),
   setSettingsDialogOpen: (open) => set({ settingsDialogOpen: open }),
   setConversationSettingsOpen: (open) => set({ conversationSettingsOpen: open }),
   setModelPickerOpen: (open) => set({ modelPickerOpen: open }),

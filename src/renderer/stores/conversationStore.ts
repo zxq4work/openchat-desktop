@@ -32,4 +32,5 @@ export const useConversationStore = create<ConversationState>((set) => ({
   setActiveConversation: (conversation) => set({ activeConversation: conversation }),
   setActiveMessages: (messages) => set({ activeMessages: messages }),
   setActiveSegments: (segments) => set({ activeSegments: segments }),
+  clearAll: () => set({ summaries: [], activeConversationId: null, activeConversation: null, activeMessages: [], activeSegments: [] }),
 }))

@@ -17,6 +17,7 @@ const IPC_CHANNELS = {
   CONVERSATIONS_CREATE: 'conversations:create',
   CONVERSATIONS_RENAME: 'conversations:rename',
   CONVERSATIONS_REMOVE: 'conversations:remove',
+  CONVERSATIONS_REMOVE_ALL: 'conversations:remove-all',
   CONVERSATIONS_UPDATE_ROLE: 'conversations:update-role',
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',
@@ -91,6 +92,7 @@ const openchat = {
     rename: (id: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_RENAME, id, title),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE, id),
+    removeAll: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE_ALL),
     updateRole: (id: string, prompt: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_ROLE, id, prompt),
     updateModel: (id: string, modelId: string) =>

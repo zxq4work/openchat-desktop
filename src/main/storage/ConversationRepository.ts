@@ -155,6 +155,11 @@ export class ConversationRepository {
     db.run(`DELETE FROM conversations WHERE id = ?`, [id])
   }
 
+  removeAll(): void {
+    const db = this.storage.database
+    db.run(`DELETE FROM conversations`)
+  }
+
   private rowToConversation(row: unknown[]): Conversation {
     return {
       id: String(row[0]),

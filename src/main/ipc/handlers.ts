@@ -48,6 +48,7 @@ interface Services {
     createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null) => Conversation
     renameConversation: (id: string, title: string) => void
     removeConversation: (id: string) => Promise<void>
+    removeAllConversations: () => Promise<void>
     updateRole: (id: string, prompt: string) => void
     updateModel: (id: string, modelId: string) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
@@ -273,6 +274,15 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     await services.conversationService?.removeConversation(id)
     // 清理草稿
     services.settingsRepository?.remove(`draft_${id}`)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_REMOVE_ALL, async (): Promise<void> => {
+    // 先列出所有会话 ID 用于清理草稿
+    const conversationIds = (services.conversationService?.listConversations() ?? []).map((c) => c.id)
+    await services.conversationService?.removeAllConversations()
+    for (const id of conversationIds) {
+      services.settingsRepository?.remove(`draft_${id}`)
+    }
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_ROLE, (_event, id: string, prompt: string): void => {

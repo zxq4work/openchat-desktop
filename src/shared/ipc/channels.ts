@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_CREATE: 'conversations:create',
   CONVERSATIONS_RENAME: 'conversations:rename',
   CONVERSATIONS_REMOVE: 'conversations:remove',
+  CONVERSATIONS_REMOVE_ALL: 'conversations:remove-all',
   CONVERSATIONS_UPDATE_ROLE: 'conversations:update-role',
   CONVERSATIONS_UPDATE_MODEL: 'conversations:update-model',
   CONVERSATIONS_UPDATE_EFFORT: 'conversations:update-effort',

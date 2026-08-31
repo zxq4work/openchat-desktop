@@ -23,6 +23,15 @@ export function App() {
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
   const settingsDialogOpen = useUiStore((s) => s.settingsDialogOpen)
   const conversationSettingsOpen = useUiStore((s) => s.conversationSettingsOpen)
+  const toast = useUiStore((s) => s.toast)
+  const clearToast = useUiStore((s) => s.clearToast)
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => clearToast(), 2500)
+      return () => clearTimeout(timer)
+    }
+  }, [toast, clearToast])
 
   // 首帧渲染完成后通知主进程关闭 Splash 并显示主窗口。
   // 使用双 rAF 确保至少一帧已绘制，避免主窗口 show 时出现白屏。
@@ -601,6 +610,7 @@ export function App() {
       <ChatView />
       {conversationSettingsOpen && activeConversationId && <ConversationSettingsDialog />}
       {settingsDialogOpen && <SettingsDialog />}
+      {toast && <div className="toast">{toast}</div>}
     </div>
   )
 }

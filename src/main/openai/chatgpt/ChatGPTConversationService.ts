@@ -290,6 +290,11 @@ export class ChatGPTConversationService {
     await this.storage.save()
   }
 
+  async removeAllConversations(): Promise<void> {
+    this.conversations.removeAll()
+    await this.storage.save()
+  }
+
   updateRole(id: string, newSystemPrompt: string): void {
     const conversation = this.conversations.getById(id)
     if (!conversation) return
