@@ -68,6 +68,9 @@ export function ProxySettings() {
         setConfig(withMode)
         configRef.current = withMode
       }
+    }).catch((err) => {
+      console.error('[ProxySettings] load failed:', err)
+    }).finally(() => {
       setLoaded(true)
     })
   }, [])

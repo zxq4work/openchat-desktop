@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, dialog, nativeTheme } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import { AppServerProcess, AppServerMode } from '../openai/AppServerProcess'
@@ -41,8 +41,12 @@ import type { WebSearchEngineType } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
+import { createSplashHtml } from '../splash/splash-template'
 
 let mainWindow: BrowserWindow | null = null
+let splashWindow: BrowserWindow | null = null
+let splashClosed = false
+let splashShownAt = 0
 
 const services = {
   appServerProcess: null as AppServerProcess | null,
@@ -268,6 +272,128 @@ async function initializeServices(): Promise<void> {
   }
 }
 
+function createSplashWindow(): void {
+  const isDev = !!process.env.VITE_DEV_SERVER_URL
+  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+
+  console.log('[splash] mode:', isDev ? 'development' : 'production')
+  console.log('[splash] theme:', theme)
+
+  splashWindow = new BrowserWindow({
+    width: 400,
+    height: 360,
+    frame: false,
+    resizable: false,
+    center: true,
+    show: false,
+    skipTaskbar: true,
+    backgroundColor: theme === 'dark' ? '#0F172A' : '#F7F8FC',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+
+  // 诊断事件
+  splashWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.error('[splash] did-fail-load', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      })
+    }
+  )
+
+  splashWindow.webContents.on('did-finish-load', () => {
+    console.log('[splash] did-finish-load')
+  })
+
+  splashWindow.webContents.on('dom-ready', () => {
+    console.log('[splash] dom-ready')
+  })
+
+  splashWindow.webContents.on(
+    'console-message',
+    (_event, level, message, line, sourceId) => {
+      console.log('[splash console]', { level, message, line, sourceId })
+    }
+  )
+
+  splashWindow.webContents.on(
+    'render-process-gone',
+    (_event, details) => {
+      console.error('[splash] render-process-gone', details)
+    }
+  )
+
+  splashWindow.once('ready-to-show', () => {
+    splashShownAt = Date.now()
+    splashWindow?.show()
+  })
+
+  const html = createSplashHtml(theme)
+  const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+
+  splashWindow.loadURL(url).then(() => {
+    console.log('[splash] loadURL success')
+  }).catch((error) => {
+    console.error('[splash] loadURL failed:', error)
+  })
+}
+
+function showMainWindow(): void {
+  if (!mainWindow) return
+
+  // 主窗口显示与 Splash 关闭同步执行，确保 Splash 完整展示最短 500ms。
+  // 若先 show 主窗口再延迟关闭 Splash，主窗口会立即遮挡 Splash，
+  // 导致 Splash 的 500ms 延迟「看不见」，表现为一闪而过。
+  const finish = () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+
+    if (splashWindow && !splashClosed) {
+      splashClosed = true
+      splashWindow.close()
+      splashWindow = null
+    }
+  }
+
+  if (splashWindow && !splashClosed) {
+    const elapsed = Date.now() - splashShownAt
+    const minDelay = 500
+    const delay = Math.max(0, minDelay - elapsed)
+    setTimeout(finish, delay)
+  } else {
+    finish()
+  }
+}
+
+function handleInitFailure(err: unknown): void {
+  console.error('OpenChat initialization failed:', err)
+
+  if (splashWindow && !splashClosed) {
+    splashClosed = true
+    splashWindow.close()
+    splashWindow = null
+  }
+
+  // 显示主窗口，让用户看到错误状态
+  if (mainWindow) {
+    showMainWindow()
+  } else {
+    createWindow()
+    showMainWindow()
+  }
+
+  dialog.showErrorBox('启动失败', `OpenChat Desktop 初始化失败，请重试。\n${err}`)
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -275,6 +401,7 @@ function createWindow(): void {
     minWidth: 800,
     minHeight: 500,
     title: APP_TITLE,
+    show: false,
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
@@ -283,6 +410,27 @@ function createWindow(): void {
       webSecurity: true,
       preload: path.join(__dirname, '../../preload/index.js'),
     },
+  })
+
+  mainWindow.once('ready-to-show', () => {
+    // Electron 层面首帧已渲染。不直接显示主窗口——真正的“准备完成”
+    // 以渲染进程发送 APP_READY 为准（见下方 IPC 监听），此处仅作为
+    // 兜底：5 秒后仍未收到 APP_READY 则强制显示，避免永久卡在 Splash。
+  })
+
+  // 超时 fallback：5 秒后 APP_READY 仍未到达，强制显示主窗口
+  const readyFallback = setTimeout(() => {
+    if (mainWindow && !mainWindow.isVisible() && !splashClosed) {
+      console.warn('[splash] main renderer ready timeout (5s), showing main window anyway')
+      showMainWindow()
+    }
+  }, 5000)
+
+  // 注册 APP_READY handler（全局只注册一次）
+  ipcMain.once(IPC_CHANNELS.APP_READY, () => {
+    console.log('[splash] main renderer ready')
+    clearTimeout(readyFallback)
+    showMainWindow()
   })
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -344,14 +492,31 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
-  await initializeServices()
-  registerIpcHandlers(services, () => mainWindow)
-  Menu.setApplicationMenu(null)
+  // 1. 先显示 Splash Window
+  createSplashWindow()
+
+  // 2. 后台初始化所有服务
+  try {
+    await initializeServices()
+    registerIpcHandlers(services, () => mainWindow)
+    Menu.setApplicationMenu(null)
+  } catch (err) {
+    handleInitFailure(err)
+    return
+  }
+
+  // 3. 创建主窗口（show: false）
   createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    // macOS Dock 点击 — 如果已有主窗口则显示，否则恢复（不重播 Splash）
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    } else {
       createWindow()
+      showMainWindow()
     }
   })
 })
@@ -360,6 +525,17 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('browser-window-created', (_event, window) => {
+  window.on('closed', () => {
+    if (window === splashWindow) {
+      splashWindow = null
+    }
+    if (window === mainWindow) {
+      mainWindow = null
+    }
+  })
 })
 
 app.on('will-quit', () => {

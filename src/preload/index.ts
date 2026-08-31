@@ -66,6 +66,7 @@ const IPC_CHANNELS = {
   PROVIDERS_UPDATE: 'providers:update',
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
+  APP_READY: 'app:ready',
 } as const
 
 const openchat = {
@@ -243,6 +244,10 @@ const openchat = {
       ipcRenderer.on(IPC_CHANNELS.CODEX_USAGE_CHANGED, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.CODEX_USAGE_CHANGED, handler)
     },
+  },
+
+  app: {
+    notifyReady: () => ipcRenderer.send(IPC_CHANNELS.APP_READY),
   },
 }
 

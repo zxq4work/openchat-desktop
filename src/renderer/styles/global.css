@@ -1018,6 +1018,27 @@ textarea {
   box-shadow: 0 0 0 1px var(--accent-ring), 0 0 0 4px var(--accent-ring-outer);
 }
 
+/* 输入框滚动条：加宽轨道 + 透明边框内缩，使方形滚动条不戳出圆角边框 */
+.message-input::-webkit-scrollbar {
+  width: 12px;
+}
+
+.message-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.message-input::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.message-input::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
 .message-input::placeholder {
   color: var(--text-muted);
 }

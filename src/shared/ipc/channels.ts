@@ -86,6 +86,9 @@ export const IPC_CHANNELS = {
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
 
+  // App
+  APP_READY: 'app:ready',
+
   // Google Search Session
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
 } as const

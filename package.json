@@ -18,13 +18,13 @@
     "start": "electron .",
     "prepackage": "npm run build",
     "package": "electron-builder",
-    "package:win": "electron-builder --win",
-    "package:win:nsis": "electron-builder --win nsis",
-    "package:win:portable": "electron-builder --win portable",
-    "package:win:portable:legacy-mac": "node scripts/package-win-portable-legacy-mac.js",
-    "package:win:zip": "electron-builder --win zip",
-    "package:mac": "electron-builder --mac",
-    "package:linux": "electron-builder --linux"
+    "package:win": "npm run build && electron-builder --win",
+    "package:win:nsis": "npm run build && electron-builder --win nsis",
+    "package:win:portable": "npm run build && electron-builder --win portable",
+    "package:win:portable:legacy-mac": "npm run build && node scripts/package-win-portable-legacy-mac.js",
+    "package:win:zip": "npm run build && electron-builder --win zip",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:linux": "npm run build && electron-builder --linux"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",

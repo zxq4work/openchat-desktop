@@ -18,6 +18,9 @@ export function WebSearchEngineSettings() {
         setEngine(e)
         engineRef.current = e
       }
+    }).catch((err) => {
+      console.error('[WebSearchEngineSettings] load failed:', err)
+    }).finally(() => {
       setLoaded(true)
     })
   }, [])

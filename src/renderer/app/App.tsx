@@ -24,6 +24,23 @@ export function App() {
   const settingsDialogOpen = useUiStore((s) => s.settingsDialogOpen)
   const conversationSettingsOpen = useUiStore((s) => s.conversationSettingsOpen)
 
+  // 首帧渲染完成后通知主进程关闭 Splash 并显示主窗口。
+  // 使用双 rAF 确保至少一帧已绘制，避免主窗口 show 时出现白屏。
+  useEffect(() => {
+    let cancelled = false
+    const raf2 = () => {
+      if (!cancelled) window.openchat.app.notifyReady()
+    }
+    const raf1 = () => {
+      if (!cancelled) requestAnimationFrame(raf2)
+    }
+    const id = requestAnimationFrame(raf1)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(id)
+    }
+  }, [])
+
   // 初始化认证和模型
   useEffect(() => {
     async function init() {

@@ -44,6 +44,9 @@ export function DefaultModelSettings() {
         setDefaults(next)
         defaultsRef.current = next
       }
+    }).catch((err) => {
+      console.error('[DefaultModelSettings] load failed:', err)
+    }).finally(() => {
       setLoaded(true)
     })
   }, [])
