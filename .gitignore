@@ -6,7 +6,7 @@ dist/
 release/
 
 # Electron-builder resources
-build/
+# build/
 
 # Claude Code
 .claude/
