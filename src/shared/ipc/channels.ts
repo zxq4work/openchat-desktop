@@ -55,6 +55,8 @@ export const IPC_CHANNELS = {
   SETTINGS_REFRESH_SYSTEM_PROXY: 'settings:refresh-system-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
+  SETTINGS_GET_DEFAULT_WEB_SEARCH: 'settings:get-default-web-search',
+  SETTINGS_SET_DEFAULT_WEB_SEARCH: 'settings:set-default-web-search',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
 

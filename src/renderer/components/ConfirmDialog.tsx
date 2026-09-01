@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogStack } from '../hooks/useDialogStack'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -31,6 +32,8 @@ export function ConfirmDialog({
       settingsDialog?.classList.remove('has-confirm')
     }
   }, [open])
+
+  useDialogStack(onCancel, open)
 
   if (!open) return null
 

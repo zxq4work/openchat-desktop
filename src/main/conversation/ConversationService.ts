@@ -109,7 +109,8 @@ export class ConversationService {
     defaultModelId: string | null,
     defaultReasoningEffort: string | null,
     systemPrompt = '',
-    providerConfigId: string | null = null
+    providerConfigId: string | null = null,
+    webSearchEnabled = false
   ): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
@@ -124,7 +125,7 @@ export class ConversationService {
       defaultReasoningEffort,
       currentSegmentId: segmentId,
       useModelInstructions: true,
-      webSearchEnabled: false,
+      webSearchEnabled,
       codexSearchMode: 'hosted',
       providerConfigId,
       createdAt: now,

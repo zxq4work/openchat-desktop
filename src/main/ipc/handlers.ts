@@ -45,7 +45,7 @@ interface Services {
   conversationService: {
     listConversations: () => Conversation[]
     getConversation: (id: string) => { conversation: Conversation; segments: ContextSegment[]; messages: Message[] } | null
-    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null) => Conversation
+    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null, webSearchEnabled?: boolean) => Conversation
     renameConversation: (id: string, title: string) => void
     removeConversation: (id: string) => Promise<void>
     removeAllConversations: () => Promise<void>
@@ -181,6 +181,15 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     services.settingsRepository?.set('default_model', JSON.stringify({ providerId, modelId, effort }))
   })
 
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_DEFAULT_WEB_SEARCH, (): boolean => {
+    const raw = services.settingsRepository?.get('default_web_search') ?? null
+    return raw === '1'
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_DEFAULT_WEB_SEARCH, (_event, enabled: boolean): void => {
+    services.settingsRepository?.set('default_web_search', enabled ? '1' : '0')
+  })
+
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE, (): string => {
     const raw = services.settingsRepository?.get('web_search_engine') ?? null
     return raw === 'baidu' || raw === 'bing' || raw === 'google' ? raw : 'bing'
@@ -262,8 +271,8 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     return services.conversationService?.getConversation(id) ?? null
   })
 
-  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null): Conversation | null => {
-    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId) ?? null
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean): Conversation | null => {
+    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId, webSearchEnabled) ?? null
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_RENAME, (_event, id: string, title: string): void => {
@@ -391,6 +400,14 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
       const win = getMainWindow()
       if (!win) return
       win.webContents.send(IPC_CHANNELS.AUTH_CHANGED, status)
+
+      // 登录成功后启动 Codex usage 自动刷新；登出时停止
+      if (status === 'logged-in') {
+        services.usageService?.startAutoRefresh()
+        void services.usageService?.refresh()
+      } else if (status === 'logged-out') {
+        services.usageService?.stopAutoRefresh()
+      }
     })
   }
 

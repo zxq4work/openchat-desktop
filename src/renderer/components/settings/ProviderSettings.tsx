@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProviderStore, type SafeProviderConfig } from '../../stores/providerStore'
+import { useDialogStack } from '../../hooks/useDialogStack'
 import { Dropdown } from '../Dropdown'
 
 const PROTOCOL_OPTIONS = [
@@ -44,6 +45,8 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   const overlayRef = useRef<HTMLDivElement>(null)
+
+  useDialogStack(props.onClose)
 
   function addModel() {
     const trimmed = newModelInput.trim()

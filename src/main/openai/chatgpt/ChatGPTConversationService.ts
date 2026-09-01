@@ -243,7 +243,7 @@ export class ChatGPTConversationService {
     return { conversation, segments, messages }
   }
 
-  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null): Conversation {
+  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
     const segmentId = randomUUID()
@@ -257,7 +257,7 @@ export class ChatGPTConversationService {
       defaultReasoningEffort,
       currentSegmentId: segmentId,
       useModelInstructions: true,
-      webSearchEnabled: false,
+      webSearchEnabled,
       codexSearchMode: 'hosted',
       providerConfigId,
       createdAt: now,

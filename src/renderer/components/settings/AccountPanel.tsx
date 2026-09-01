@@ -44,7 +44,7 @@ function renderUsageSection(
     )
   }
 
-  const planLabel = usage.planType ? `${usage.planType} · Codex` : 'Codex'
+  const planLabel = usage.planType ? `${usage.planType.charAt(0).toUpperCase() + usage.planType.slice(1)} · Codex` : 'Codex'
 
   if (usage.state === 'exhausted') {
     return (
@@ -211,10 +211,11 @@ export function AccountPanel() {
         <div className="account-info">
           <div className="account-email">{email || '未知用户'}</div>
           <div className="account-meta">
-            {planType && <span className="account-plan">{planType}</span>}
+            {planType && <span className="account-plan">{planType.charAt(0).toUpperCase() + planType.slice(1)}</span>}
             {planType && <span className="account-separator">·</span>}
             <span className="account-status-logged-in">已登录</span>
           </div>
+          <button className="btn-logout-outline" onClick={() => setLogoutConfirmOpen(true)}>退出登录</button>
           {accountId && (
             <div className="account-id-row">
               <span className="account-id-label">Account ID</span>
@@ -232,7 +233,6 @@ export function AccountPanel() {
             {renderUsageSection(usage, refreshing, handleRefreshUsage)}
           </div>
         </div>
-        <button className="btn-logout-outline" onClick={() => setLogoutConfirmOpen(true)}>退出登录</button>
 
         <ConfirmDialog
           open={logoutConfirmOpen}

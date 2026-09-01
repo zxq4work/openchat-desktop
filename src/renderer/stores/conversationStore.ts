@@ -18,6 +18,7 @@ interface ConversationState {
   setActiveConversation: (conversation: Conversation | null) => void
   setActiveMessages: (messages: Message[]) => void
   setActiveSegments: (segments: ContextSegment[]) => void
+  clearAll: () => void
 }
 
 export const useConversationStore = create<ConversationState>((set) => ({

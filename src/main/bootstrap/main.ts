@@ -203,6 +203,7 @@ async function initializeChatGPTProvider(): Promise<void> {
   const isLoggedIn = await credentialManager.isLoggedIn().catch(() => false)
   if (isLoggedIn) {
     void usageService.refresh()
+    usageService.startAutoRefresh()
   }
 }
 
@@ -398,8 +399,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
-    minHeight: 500,
+    minWidth: 900,
+    minHeight: 600,
     title: APP_TITLE,
     show: false,
     autoHideMenuBar: true,

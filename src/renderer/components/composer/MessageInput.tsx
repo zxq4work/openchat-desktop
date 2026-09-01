@@ -53,7 +53,7 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
       <textarea
         ref={textareaRef}
         className="message-input"
-        placeholder="输入消息……"
+        placeholder="输入消息…"
         value={text}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}

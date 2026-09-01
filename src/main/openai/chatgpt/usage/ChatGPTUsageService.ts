@@ -8,6 +8,7 @@ import type {
 
 const CACHE_TTL_MS = 60_000
 const RESET_GRACE_MS = 15_000
+const AUTO_REFRESH_INTERVAL_MS = 30 * 60_000
 
 export type UsageChangeHandler = (state: CodexUsageView) => void
 
@@ -22,6 +23,7 @@ export class ChatGPTUsageService {
   private client: ChatGPTUsageClient
   private state: CodexUsageAvailability = { state: 'unknown' }
   private resetTimer: ReturnType<typeof setTimeout> | null = null
+  private autoRefreshTimer: ReturnType<typeof setInterval> | null = null
   private listeners: UsageChangeHandler[] = []
 
   constructor(credentialManager: OAuthCredentialManager) {
@@ -30,6 +32,24 @@ export class ChatGPTUsageService {
 
   onChange(handler: UsageChangeHandler): void {
     this.listeners.push(handler)
+  }
+
+  /**
+   * 启动定时自动刷新（每 30 分钟），仅在已登录时由调用方启动。
+   * 重复调用安全：会先清除已有定时器。
+   */
+  startAutoRefresh(): void {
+    this.stopAutoRefresh()
+    this.autoRefreshTimer = setInterval(() => {
+      void this.refresh()
+    }, AUTO_REFRESH_INTERVAL_MS)
+  }
+
+  stopAutoRefresh(): void {
+    if (this.autoRefreshTimer) {
+      clearInterval(this.autoRefreshTimer)
+      this.autoRefreshTimer = null
+    }
   }
 
   getState(): CodexUsageAvailability {

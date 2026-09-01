@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
+import { useDialogStack } from '../../hooks/useDialogStack'
 
 export function ConversationSettingsDialog() {
   const conversation = useConversationStore((s) => s.activeConversation)
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation)
   const setSummaries = useConversationStore((s) => s.setSummaries)
   const setConversationSettingsOpen = useUiStore((s) => s.setConversationSettingsOpen)
+
+  useDialogStack(() => setConversationSettingsOpen(false))
 
   const [title, setTitle] = useState(conversation?.title ?? '')
   const [role, setRole] = useState(conversation?.systemPrompt ?? '')

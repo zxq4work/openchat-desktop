@@ -578,6 +578,7 @@ export function App() {
     }
 
     const saved = await window.openchat.settings.getDefaultModel()
+    const defaultWebSearch = await window.openchat.settings.getDefaultWebSearch()
     const models = useModelStore.getState().models
 
     let defaultModel = saved.modelId
@@ -593,7 +594,7 @@ export function App() {
           : null)
     }
 
-    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId)
+    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId, defaultWebSearch)
     if (conv) {
       const list = await window.openchat.conversations.list()
       useConversationStore.getState().setSummaries(list)

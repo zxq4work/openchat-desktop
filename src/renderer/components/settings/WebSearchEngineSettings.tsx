@@ -38,19 +38,21 @@ export function WebSearchEngineSettings() {
   if (!loaded) return null
 
   return (
-    <div className="default-model-row">
-      <label className="default-model-label">搜索引擎</label>
-      <p className="setting-hint" style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: '0 0 4px' }}>
+    <div>
+      <div className="default-model-row">
+        <label className="default-model-label">搜索引擎</label>
+        <Dropdown
+          className="default-model-dropdown"
+          value={engine}
+          placeholder="选择搜索引擎"
+          options={ENGINE_OPTIONS}
+          onChange={handleChange}
+          ariaLabel="选择搜索引擎"
+        />
+      </div>
+      <p className="default-model-hint">
         此搜索引擎仅用于自定义 API 提供商。ChatGPT / Codex 使用其官方搜索能力。
       </p>
-      <Dropdown
-        className="default-model-dropdown"
-        value={engine}
-        placeholder="选择搜索引擎"
-        options={ENGINE_OPTIONS}
-        onChange={handleChange}
-        ariaLabel="选择搜索引擎"
-      />
       {engine === 'google' && (
         <div className="proxy-system-info" style={{ marginTop: 8 }}>
           <p className="proxy-system-hint">

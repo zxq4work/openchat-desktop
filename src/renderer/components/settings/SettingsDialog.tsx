@@ -2,6 +2,7 @@ import React from 'react'
 import { useUiStore } from '../../stores/uiStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useThemeStore, type ThemeMode } from '../../stores/themeStore'
+import { useDialogStack } from '../../hooks/useDialogStack'
 import { AccountPanel } from './AccountPanel'
 import { ProxySettings } from './ProxySettings'
 import { ProviderSettings } from './ProviderSettings'
@@ -19,6 +20,8 @@ export function SettingsDialog() {
   const themeMode = useThemeStore((s) => s.mode)
   const setThemeMode = useThemeStore((s) => s.setMode)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
+
+  useDialogStack(() => setSettingsDialogOpen(false), !confirmOpen)
 
   const handleClearAll = async () => {
     await window.openchat.conversations.removeAll()
@@ -82,14 +85,14 @@ export function SettingsDialog() {
           <div className="settings-section-divider" />
 
           <div className="settings-section">
-            <h4>代理</h4>
-            <ProxySettings />
+            <ProviderSettings />
           </div>
 
           <div className="settings-section-divider" />
 
           <div className="settings-section">
-            <ProviderSettings />
+            <h4>代理</h4>
+            <ProxySettings />
           </div>
 
           <div className="settings-section-divider" />

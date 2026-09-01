@@ -48,6 +48,8 @@ const IPC_CHANNELS = {
   SETTINGS_REFRESH_SYSTEM_PROXY: 'settings:refresh-system-proxy',
   SETTINGS_GET_DEFAULT_MODEL: 'settings:get-default-model',
   SETTINGS_SET_DEFAULT_MODEL: 'settings:set-default-model',
+  SETTINGS_GET_DEFAULT_WEB_SEARCH: 'settings:get-default-web-search',
+  SETTINGS_SET_DEFAULT_WEB_SEARCH: 'settings:set-default-web-search',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
   DRAFT_GET: 'draft:get',
@@ -87,8 +89,8 @@ const openchat = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_GET, id),
-    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null) =>
-      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId),
+    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId, webSearchEnabled),
     rename: (id: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_RENAME, id, title),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE, id),
@@ -124,6 +126,9 @@ const openchat = {
     getDefaultModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_DEFAULT_MODEL) as Promise<{ providerId: string | null; modelId: string | null; effort: string | null }>,
     setDefaultModel: (providerId: string | null, modelId: string | null, effort: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_MODEL, providerId, modelId, effort),
+    getDefaultWebSearch: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_DEFAULT_WEB_SEARCH) as Promise<boolean>,
+    setDefaultWebSearch: (enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_WEB_SEARCH, enabled),
     getWebSearchEngine: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE) as Promise<string>,
     setWebSearchEngine: (engine: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, engine),
     getDraft: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_GET, conversationId) as Promise<string | null>,

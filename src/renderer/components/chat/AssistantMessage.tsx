@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import type { Message } from '../../../shared/types/conversation'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useModelStore } from '../../stores/modelStore'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 
 interface Props {
@@ -24,6 +25,10 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   const hasSearchResults = searchResults.length > 0
 
   const rawContent = isStreaming ? message.content + streamState.bufferedText : message.content
+
+  const codexModels = useModelStore((s) => s.models)
+  // 判断消息当时所用模型是否为 Codex 模型（modelId 存在于 Codex 模型列表即为 Codex）
+  const isCodex = !!message.modelId && codexModels.some((m) => m.id === message.modelId)
 
   // 推理状态：优先取流式状态，否则取 DB 持久化的 reasoningMeta
   const reasoningMeta = isStreaming && streamState.reasoningMeta
@@ -79,7 +84,13 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             </span>
             {hasSummary && (
               <span className="message-thinking-arrow">
-                {summaryExpanded ? '▾' : '▸'}
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  {summaryExpanded ? (
+                    <path d="M3 5L6 8L9 5" />
+                  ) : (
+                    <path d="M5 3L8 6L5 9" />
+                  )}
+                </svg>
               </span>
             )}
           </div>
@@ -93,11 +104,13 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
           {!thinkingActive && hasSummary && summaryExpanded && (
             <div className="message-thinking-content">
               <div className="message-thinking-summary-title">推理摘要</div>
-              <ul className="message-thinking-summary-list">
-                {reasoningMeta.summary.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
+              <div className="message-thinking-summary-content">
+                <MarkdownRenderer>{
+                isCodex
+                  ? reasoningMeta.summary.map((s) => `- ${s}`).join('\n')
+                  : reasoningMeta.summary.join('\n\n')
+              }</MarkdownRenderer>
+              </div>
             </div>
           )}
         </div>
@@ -132,8 +145,14 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             <span className="message-search-results-icon">&#128269;</span>
             <span>{searchResults.every((r) => r.sourceType === 'api') ? `${searchResults.length} 个数据源` : `搜索到 ${searchResults.length} 个参考页面`}</span>
             <span className="message-search-results-arrow">
-              {searchExpanded ? '▾' : '▸'}
-            </span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  {searchExpanded ? (
+                    <path d="M3 5L6 8L9 5" />
+                  ) : (
+                    <path d="M5 3L8 6L5 9" />
+                  )}
+                </svg>
+              </span>
           </div>
           {searchExpanded && (
             <ul className="message-search-results-list">

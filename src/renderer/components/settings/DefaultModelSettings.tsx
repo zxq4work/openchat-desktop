@@ -30,11 +30,15 @@ export function DefaultModelSettings() {
     modelId: null,
     effort: null,
   })
+  const [defaultWebSearch, setDefaultWebSearch] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const defaultsRef = useRef(defaults)
 
   useEffect(() => {
-    window.openchat.settings.getDefaultModel().then((d) => {
+    Promise.all([
+      window.openchat.settings.getDefaultModel(),
+      window.openchat.settings.getDefaultWebSearch(),
+    ]).then(([d, ws]) => {
       if (d) {
         const next = {
           providerId: d.providerId ?? null,
@@ -44,6 +48,7 @@ export function DefaultModelSettings() {
         setDefaults(next)
         defaultsRef.current = next
       }
+      setDefaultWebSearch(ws)
     }).catch((err) => {
       console.error('[DefaultModelSettings] load failed:', err)
     }).finally(() => {
@@ -122,6 +127,11 @@ export function DefaultModelSettings() {
     doSave(next)
   }
 
+  const handleDefaultWebSearchChange = (enabled: boolean) => {
+    setDefaultWebSearch(enabled)
+    window.openchat.settings.setDefaultWebSearch(enabled)
+  }
+
   if (!loaded) return null
 
   const providerOptions = [
@@ -169,6 +179,24 @@ export function DefaultModelSettings() {
           />
         </div>
       )}
+      <div className="default-model-row">
+        <label className="default-model-label">默认启用搜索</label>
+        <div
+          className={`settings-switch ${defaultWebSearch ? 'settings-switch-on' : ''}`}
+          onClick={() => handleDefaultWebSearchChange(!defaultWebSearch)}
+          role="switch"
+          aria-checked={defaultWebSearch}
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              handleDefaultWebSearchChange(!defaultWebSearch)
+            }
+          }}
+        >
+          <div className="settings-switch-thumb" />
+        </div>
+      </div>
       <p className="default-model-hint">新会话将自动应用以上设置</p>
     </div>
   )

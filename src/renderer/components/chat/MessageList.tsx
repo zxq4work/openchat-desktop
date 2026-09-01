@@ -30,11 +30,26 @@ export function MessageList() {
 
   // 用户是否处于“贴底”状态：只有在底部附近才自动跟随滚动，否则尊重用户向上滚动阅读
   const pinnedRef = useRef(true)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const scrollToBottom = () => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }
+
+  // 是否在底部附近
+  const isNearBottom = useCallback(() => {
+    const list = listRef.current
+    if (!list) return true
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 80
+  }, [])
+
+  // 点击“回到底部”按钮
+  const handleScrollToBottomClick = useCallback(() => {
+    pinnedRef.current = true
+    scrollToBottom()
+    setShowScrollToBottom(false)
+  }, [])
 
   useEffect(() => {
     pinnedRef.current = true
@@ -49,6 +64,7 @@ export function MessageList() {
     const handleScroll = () => {
       const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
       pinnedRef.current = distanceFromBottom < 80
+      setShowScrollToBottom(distanceFromBottom >= 300)
     }
     list.addEventListener('scroll', handleScroll)
     return () => list.removeEventListener('scroll', handleScroll)
@@ -120,6 +136,18 @@ export function MessageList() {
           </>
         )}
       </div>
+      {showScrollToBottom && (
+        <button
+          className="scroll-to-bottom-btn"
+          onClick={handleScrollToBottomClick}
+          aria-label="回到底部"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 3v10" />
+            <path d="M3 8l5 5 5-5" />
+          </svg>
+        </button>
+      )}
       <MessageListContextMenu
         visible={contextMenu.visible}
         x={contextMenu.x}
