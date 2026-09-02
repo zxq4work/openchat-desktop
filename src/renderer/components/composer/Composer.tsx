@@ -143,9 +143,15 @@ export function Composer() {
       const message = err instanceof Error ? err.message : String(err)
       console.log('[Composer] catch block: setting error, status=%s streamingId=%s', useChatStreamStore.getState().status, useChatStreamStore.getState().streamingConversationId)
       setError(message)
-      setStatus('idle')
-      setActiveAssistantMessage(null)
-      useChatStreamStore.getState().setStreamingConversationId(null)
+      // 仅当当前会话正是流式会话时才清理流式状态；否则说明是被主进程的
+      // 单一生成槽位拦截（已有另一个会话在生成），此时不能清掉 streamingConversationId，
+      // 否则另一个会话的 turn-completed/error 事件将失去过滤，错误地写入当前会话。
+      const currentStreamingId = useChatStreamStore.getState().streamingConversationId
+      if (currentStreamingId === conversationId) {
+        setStatus('idle')
+        setActiveAssistantMessage(null)
+        useChatStreamStore.getState().setStreamingConversationId(null)
+      }
     }
   }
 

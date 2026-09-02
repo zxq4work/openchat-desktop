@@ -70,16 +70,26 @@ export function MessageList() {
     return () => list.removeEventListener('scroll', handleScroll)
   }, [])
 
-  // 流式输出期间，内容高度变化（如思考提示出现、文本增长）自动滚动到底部
+  // 监听内容高度变化（流式文本增长、思考过程展开/收起等），同步贴底状态与按钮显示
+  // 流式期间且贴底时自动滚动到底部；非流式时只更新按钮状态，不强制滚动
   // 注意：必须观察内容包裹层（会随内容增长），而不是滚动容器（flex:1 高度固定，不会触发）
   useEffect(() => {
-    if (streamStatus !== 'streaming' && streamStatus !== 'starting') return
-
+    const list = listRef.current
     const content = contentRef.current
-    if (!content) return
+    if (!list || !content) return
 
+    const isStreaming = streamStatus === 'streaming' || streamStatus === 'starting'
     const observer = new ResizeObserver(() => {
-      if (pinnedRef.current) scrollToBottom()
+      if (isStreaming && pinnedRef.current) {
+        // 流式期间且贴底：先滚动到底部，再刷新按钮状态（此时距离必然很小）
+        scrollToBottom()
+        setShowScrollToBottom(false)
+        return
+      }
+      // 非流式或非贴底：仅更新贴底状态与按钮，不强制滚动
+      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+      pinnedRef.current = distanceFromBottom < 80
+      setShowScrollToBottom(distanceFromBottom >= 300)
     })
     observer.observe(content)
 

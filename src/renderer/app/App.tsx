@@ -128,6 +128,9 @@ export function App() {
       if (e.text) {
         const streamingId = useChatStreamStore.getState().streamingConversationId
         if (!streamingId) {
+          // 懒绑定：仅当事件所属会话与当前激活会话一致时才采纳
+          const activeConvId = useConversationStore.getState().activeConversationId
+          if (e.conversationId && e.conversationId !== activeConvId) return
           useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
         } else if (e.conversationId && e.conversationId !== streamingId) {
           return
@@ -142,6 +145,9 @@ export function App() {
       console.log('[App RAW] reasoning-started conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (!streamingId) {
+        // 懒绑定：仅当事件所属会话与当前激活会话一致时才采纳
+        const activeConvId = useConversationStore.getState().activeConversationId
+        if (e.conversationId && e.conversationId !== activeConvId) return
         useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
       }
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
@@ -170,6 +176,9 @@ export function App() {
       const e = event as { text?: string; conversationId?: string }
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (!streamingId) {
+        // 懒绑定：仅当事件所属会话与当前激活会话一致时才采纳
+        const activeConvId = useConversationStore.getState().activeConversationId
+        if (e.conversationId && e.conversationId !== activeConvId) return
         useChatStreamStore.getState().setStreamingConversationId(e.conversationId ?? null)
       } else if (e.conversationId && e.conversationId !== streamingId) return
       if (e.text) {
@@ -359,23 +368,30 @@ export function App() {
       pendingDeltas.length = 0
       reasoningTextAccum = ''
 
-      // 标记最后一条 assistant 消息为失败，不重新加载消息列表（避免竞态抖动）
-      const messages = useConversationStore.getState().activeMessages
-      const lastAssistantIdx = (() => {
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') return i
+      // 仅当事件所属会话正是当前激活会话时才更新 activeMessages
+      const activeConvId = useConversationStore.getState().activeConversationId
+      const eventConvId = e.conversationId
+      if (eventConvId && eventConvId !== activeConvId) {
+        console.log('[App chat-error] SKIP message update: event conv %s != active conv %s', eventConvId, activeConvId)
+      } else {
+        // 标记最后一条 assistant 消息为失败，不重新加载消息列表（避免竞态抖动）
+        const messages = useConversationStore.getState().activeMessages
+        const lastAssistantIdx = (() => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'assistant') return i
+          }
+          return -1
+        })()
+        if (lastAssistantIdx >= 0) {
+          const updated = [...messages]
+          updated[lastAssistantIdx] = {
+            ...updated[lastAssistantIdx],
+            status: 'failed',
+            errorCode: e.errorCode ?? 'StreamFailed',
+            errorMessage: e.errorMessage ?? 'Unknown error',
+          }
+          useConversationStore.getState().setActiveMessages(updated)
         }
-        return -1
-      })()
-      if (lastAssistantIdx >= 0) {
-        const updated = [...messages]
-        updated[lastAssistantIdx] = {
-          ...updated[lastAssistantIdx],
-          status: 'failed',
-          errorCode: e.errorCode ?? 'StreamFailed',
-          errorMessage: e.errorMessage ?? 'Unknown error',
-        }
-        useConversationStore.getState().setActiveMessages(updated)
       }
 
       // 只清除流式状态，不 reset（保留 webSearchStatus 等）
@@ -413,33 +429,41 @@ export function App() {
         useChatStreamStore.getState().setBufferedText(accumulatedText)
       }
 
-      // 直接标记最后一条 assistant 消息为 completed，不重新从 DB 加载
-      // 避免与 Composer 追加消息的竞态导致消息消失
-      const messages = useConversationStore.getState().activeMessages
-      const lastAssistantIdx = (() => {
-        for (let i = messages.length - 1; i >= 0; i--) {
-          if (messages[i].role === 'assistant') return i
+      // 仅当事件所属会话正是当前激活会话时才更新 activeMessages，
+      // 防止用户在流式期间切换到其他会话后，已完成事件错误地写入当前会话
+      const activeConvId = useConversationStore.getState().activeConversationId
+      const eventConvId = e.conversationId
+      if (eventConvId && eventConvId !== activeConvId) {
+        console.log('[App turn-completed] SKIP: event conv %s != active conv %s', eventConvId, activeConvId)
+      } else {
+        // 直接标记最后一条 assistant 消息为 completed，不重新从 DB 加载
+        // 避免与 Composer 追加消息的竞态导致消息消失
+        const messages = useConversationStore.getState().activeMessages
+        const lastAssistantIdx = (() => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'assistant') return i
+          }
+          return -1
+        })()
+        console.log('[App turn-completed] lastAssistantIdx=%d lastMsgId=%s lastMsgStatus=%s',
+          lastAssistantIdx,
+          lastAssistantIdx >= 0 ? messages[lastAssistantIdx].id : 'N/A',
+          lastAssistantIdx >= 0 ? messages[lastAssistantIdx].status : 'N/A')
+        if (lastAssistantIdx >= 0) {
+          const streamState = useChatStreamStore.getState()
+          const updated = [...messages]
+          updated[lastAssistantIdx] = {
+            ...updated[lastAssistantIdx],
+            content: accumulatedText || updated[lastAssistantIdx].content,
+            reasoningMeta: streamState.reasoningMeta ?? updated[lastAssistantIdx].reasoningMeta,
+            webSearchResults: streamState.webSearchStatus.results.length > 0
+              ? streamState.webSearchStatus.results
+              : updated[lastAssistantIdx].webSearchResults,
+            status: 'completed',
+          }
+          console.log('[App turn-completed] updated contentLen=%d', updated[lastAssistantIdx].content.length)
+          useConversationStore.getState().setActiveMessages(updated)
         }
-        return -1
-      })()
-      console.log('[App turn-completed] lastAssistantIdx=%d lastMsgId=%s lastMsgStatus=%s',
-        lastAssistantIdx,
-        lastAssistantIdx >= 0 ? messages[lastAssistantIdx].id : 'N/A',
-        lastAssistantIdx >= 0 ? messages[lastAssistantIdx].status : 'N/A')
-      if (lastAssistantIdx >= 0) {
-        const streamState = useChatStreamStore.getState()
-        const updated = [...messages]
-        updated[lastAssistantIdx] = {
-          ...updated[lastAssistantIdx],
-          content: accumulatedText || updated[lastAssistantIdx].content,
-          reasoningMeta: streamState.reasoningMeta ?? updated[lastAssistantIdx].reasoningMeta,
-          webSearchResults: streamState.webSearchStatus.results.length > 0
-            ? streamState.webSearchStatus.results
-            : updated[lastAssistantIdx].webSearchResults,
-          status: 'completed',
-        }
-        console.log('[App turn-completed] updated contentLen=%d', updated[lastAssistantIdx].content.length)
-        useConversationStore.getState().setActiveMessages(updated)
       }
 
       accumulatedText = ''
