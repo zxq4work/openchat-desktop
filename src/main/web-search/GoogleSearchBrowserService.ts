@@ -31,6 +31,7 @@ export class GoogleSearchBrowserService {
   private idleTimer: ReturnType<typeof setTimeout> | null = null
   private currentSearch: Promise<SearchResultItem[]> | null = null
   private lastProxyMode: ProxyMode | null = null
+  private webRequestHooked = false
 
   /** 确保 BrowserWindow 已创建并准备好 */
   private async ensureWindow(): Promise<BrowserWindow> {
@@ -42,6 +43,17 @@ export class GoogleSearchBrowserService {
     console.log('[GoogleBrowser] event=create')
 
     this.searchSession = electronSession.fromPartition(GOOGLE_SESSION_PARTITION, { cache: true })
+
+    // 阻止图片、字体、媒体等重资源加载，降低 Google 搜索结果页的内存占用，
+    // 避免主进程因 BrowserWindow 渲染 Google 页面而 OOM 崩溃。
+    // 注意：不拦截 stylesheet，否则 CSS 隐藏的元素会变成可见，污染 innerText 提取结果。
+    if (!this.webRequestHooked) {
+      this.webRequestHooked = true
+      this.searchSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+        const blocked = ['image', 'font', 'media']
+        callback({ cancel: blocked.includes(details.resourceType) })
+      })
+    }
 
     // 同步当前代理设置
     await this.syncProxyToSession()
@@ -202,7 +214,6 @@ export class GoogleSearchBrowserService {
     let abortHandler: (() => void) | null = null
     let consecutiveJsErrors = 0
     const MAX_CONSECUTIVE_JS_ERRORS = 5
-
     return new Promise<SearchResultItem[]>((resolve, reject) => {
       const cleanup = () => {
         if (pollTimer) { clearTimeout(pollTimer); pollTimer = null }
@@ -212,16 +223,27 @@ export class GoogleSearchBrowserService {
         }
       }
 
-      // 监听页面加载失败，立即终止轮询
-      const failLoadHandler = (_event: Electron.Event, errorCode: number, _errorDescription: string, validatedURL: string, _isMainFrame: boolean) => {
-        console.log('[GoogleBrowser] did-fail-load errorCode=%d url=%s', errorCode, validatedURL)
-        settleWithCleanup(() => reject(new Error(`SEARCH_PAGE_LOAD_FAILED: 页面加载失败 (${errorCode})`)))
+      // 监听页面加载失败，立即终止轮询。
+      // ERR_ABORTED (-3) 是页面导航被替换/重定向时的正常信号（Google SERP 会追加 &sei= 参数做 JS 重定向），
+      // 不能当成致命错误，否则会提前中断本次搜索并让 window 处于半加载状态。
+      const failLoadHandler = (_event: Electron.Event, errorCode: number, errorDescription: string, validatedURL: string, isMainFrame: boolean) => {
+        console.log('[GoogleBrowser] did-fail-load errorCode=%d desc=%s url=%s isMainFrame=%s', errorCode, errorDescription, validatedURL, isMainFrame)
+        if (errorCode === -3) {
+          // ERR_ABORTED：导航被取消/替换，忽略，继续轮询
+          return
+        }
+        settleWithCleanup(() => reject(new Error(`SEARCH_PAGE_LOAD_FAILED: 页面加载失败 (${errorCode} ${errorDescription})`)))
       }
       win.webContents.on('did-fail-load', failLoadHandler)
 
       // 监听 renderer 崩溃，避免 executeJavaScript 在已崩溃的进程上继续执行
-      const crashedHandler = () => {
-        console.log('[GoogleBrowser] renderer-crashed')
+      const crashedHandler = (_event: Electron.Event, details: { reason?: string; exitCode?: number }) => {
+        console.log('[GoogleBrowser] render-process-gone reason=%s exitCode=%s', details?.reason ?? 'unknown', details?.exitCode ?? 'unknown')
+        // 销毁窗口，让下一次搜索重新创建
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.destroy()
+        }
+        this.window = null
         settleWithCleanup(() => reject(new Error('SEARCH_RENDERER_CRASHED: 搜索页面渲染进程崩溃')))
       }
       win.webContents.on('render-process-gone', crashedHandler)
@@ -431,7 +453,17 @@ export class GoogleSearchBrowserService {
     win.webContents.stop()
 
     // 加载搜索 URL
-    await win.loadURL(urlStr)
+    // Google 搜索结果页加载后会做一次 JS 重定向（追加 &sei= 会话参数），
+    // 首次导航因此被 abort，loadURL 的 Promise 会以 ERR_ABORTED(-3) reject。
+    // 这是正常现象：捕获并忽略，继续轮询等待重定向后的最终页面渲染完成。
+    // 若此处把 rejection 当致命错误抛出，会让 window 停留在半加载状态，
+    // 下一次搜索复用该 window 时 loadURL 触发 Chromium SIGSEGV。
+    try {
+      await win.loadURL(urlStr)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.log('[GoogleBrowser] loadURL rejected (non-fatal) msg=%s', msg)
+    }
 
     // 等待结果
     return this.waitForResults(win, signal)

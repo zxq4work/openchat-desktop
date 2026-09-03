@@ -6,6 +6,8 @@ import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const BAIDU_SEARCH_URL = 'https://www.baidu.com/s'
 const MAX_RESULTS = 10
+// 防止返回异常超大的页面被 cheerio 全量解析导致主进程 OOM 崩溃
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 export class BaiduHtmlSearchEngine implements SearchEngine {
   async search(query: string, signal?: AbortSignal): Promise<SearchResultItem[]> {
@@ -52,7 +54,15 @@ export class BaiduHtmlSearchEngine implements SearchEngine {
 
           if (res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300) {
             const chunks: Buffer[] = []
-            res.on('data', (chunk: Buffer) => chunks.push(chunk))
+            let totalBytes = 0
+            res.on('data', (chunk: Buffer) => {
+              totalBytes += chunk.length
+              if (totalBytes > MAX_RESPONSE_BYTES) {
+                req.destroy(new Error('Baidu search response too large'))
+                return
+              }
+              chunks.push(chunk)
+            })
             res.on('end', () => {
               cleanup()
               resolve(Buffer.concat(chunks).toString('utf8'))

@@ -6,6 +6,8 @@ import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const GOOGLE_SEARCH_URL = 'https://www.google.com/search'
 const MAX_RESULTS = 10
+// 防止返回异常超大的页面被 cheerio 全量解析导致主进程 OOM 崩溃
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 type GoogleResponseType =
   | 'NORMAL_SERP'
@@ -332,7 +334,15 @@ export class GoogleHtmlSearchEngine implements SearchEngine {
             }
 
             const chunks: Buffer[] = []
-            res.on('data', (chunk: Buffer) => chunks.push(chunk))
+            let totalBytes = 0
+            res.on('data', (chunk: Buffer) => {
+              totalBytes += chunk.length
+              if (totalBytes > MAX_RESPONSE_BYTES) {
+                req.destroy(new Error('Google search response too large'))
+                return
+              }
+              chunks.push(chunk)
+            })
             res.on('end', () => {
               cleanup()
               const html = Buffer.concat(chunks).toString('utf8')

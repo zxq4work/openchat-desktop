@@ -6,6 +6,8 @@ import { createRequest } from '../openai/chatgpt/httpsClient'
 
 const BING_SEARCH_URL = 'https://www.bing.com/search'
 const MAX_RESULTS = 10
+// 防止 Bing 返回异常超大的页面（如反爬/验证页）被 cheerio 全量解析导致主进程 OOM 崩溃
+const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 export class BingHtmlSearchEngine implements SearchEngine {
   async search(query: string, signal?: AbortSignal): Promise<SearchResultItem[]> {
@@ -21,6 +23,8 @@ export class BingHtmlSearchEngine implements SearchEngine {
       const headers: Record<string, string> = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
       }
 
       const req = createRequest(
@@ -47,7 +51,15 @@ export class BingHtmlSearchEngine implements SearchEngine {
 
           if (res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300) {
             const chunks: Buffer[] = []
-            res.on('data', (chunk: Buffer) => chunks.push(chunk))
+            let totalBytes = 0
+            res.on('data', (chunk: Buffer) => {
+              totalBytes += chunk.length
+              if (totalBytes > MAX_RESPONSE_BYTES) {
+                req.destroy(new Error('Bing search response too large'))
+                return
+              }
+              chunks.push(chunk)
+            })
             res.on('end', () => {
               cleanup()
               resolve(Buffer.concat(chunks).toString('utf8'))
