@@ -1835,6 +1835,33 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.usage-detail-value-tooltip {
+  position: relative;
+}
+
+.usage-detail-tooltip {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  padding: 4px 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.usage-detail-value-tooltip:hover .usage-detail-tooltip {
+  display: block;
+}
+
 .usage-progress-bar {
   height: 4px;
   border-radius: 2px;
@@ -1847,6 +1874,27 @@ textarea {
   background: var(--accent);
   border-radius: 2px;
   transition: width 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.usage-progress-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  background-size: 60% 100%;
+  animation: usage-progress-shine 3s ease-in-out infinite;
+}
+
+@keyframes usage-progress-shine {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
 }
 
 .usage-refresh-btn {

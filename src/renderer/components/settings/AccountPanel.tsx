@@ -11,14 +11,27 @@ function formatWindowSeconds(seconds: number): string {
   return `${hours} 小时`
 }
 
-function formatResetTime(resetAt: number): string {
+function formatRelativeTime(resetAt: number): string {
+  const now = Date.now()
+  const remainMs = resetAt * 1000 - now
+  const remainMinutes = Math.max(0, Math.ceil(remainMs / 60000))
+  const remainHours = Math.floor(remainMinutes / 60)
+  const remainMins = remainMinutes % 60
+
+  if (remainHours > 0) {
+    return `${remainHours}时${remainMins}分`
+  }
+  return `${remainMins}分`
+}
+
+function formatAbsoluteTime(resetAt: number): string {
   const d = new Date(resetAt * 1000)
   const y = d.getFullYear()
-  const month = d.getMonth() + 1
-  const day = d.getDate()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
   const hours = String(d.getHours()).padStart(2, '0')
   const minutes = String(d.getMinutes()).padStart(2, '0')
-  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${hours}:${minutes}`
+  return `${y}-${month}-${day} ${hours}:${minutes}`
 }
 
 function renderUsageSection(
@@ -66,7 +79,7 @@ function renderUsageSection(
         {usage.resetAt != null && (
           <div className="usage-detail-row">
             <span className="usage-detail-key">恢复</span>
-            <span className="usage-detail-value">{formatResetTime(usage.resetAt)}</span>
+            <span className="usage-detail-value">{formatAbsoluteTime(usage.resetAt)}</span>
           </div>
         )}
         <button
@@ -81,31 +94,67 @@ function renderUsageSection(
   }
 
   // available
-  const usedPercent = usage.usedPercent ?? 0
+  const primaryUsedPercent = usage.usedPercent ?? 0
+  const secondaryUsedPercent = usage.secondaryUsedPercent ?? 0
+  const hasSecondary = usage.secondaryWindowSeconds != null
+
   return (
     <div className="usage-detail">
       <div className="usage-detail-header">
         <span className="usage-label">{planLabel}</span>
         <span className="usage-state-badge usage-state-available">可用</span>
       </div>
+
+      {/* Primary window */}
       {usage.windowSeconds != null && (
         <>
+          <div className="usage-detail-row">
+            <span className="usage-detail-key">{formatWindowSeconds(usage.windowSeconds)} 用量</span>
+            <span className="usage-detail-value">{primaryUsedPercent}%</span>
+          </div>
           <div className="usage-progress-bar">
             <div
               className="usage-progress-fill"
-              style={{ width: `${Math.min(usedPercent, 100)}%` }}
+              style={{ width: `${Math.min(primaryUsedPercent, 100)}%` }}
             />
           </div>
-          <div className="usage-detail-row">
-            <span className="usage-detail-key">本周期已使用</span>
-            <span className="usage-detail-value">{usedPercent}%</span>
-          </div>
-          <div className="usage-detail-row">
-            <span className="usage-detail-key">窗口</span>
-            <span className="usage-detail-value">{formatWindowSeconds(usage.windowSeconds)}</span>
-          </div>
+          {usage.resetAt != null && (
+            <div className="usage-detail-row">
+              <span className="usage-detail-key">重置剩余时间</span>
+              <span className="usage-detail-value usage-detail-value-tooltip">
+                {formatRelativeTime(usage.resetAt)}
+                <span className="usage-detail-tooltip">{formatAbsoluteTime(usage.resetAt)}</span>
+              </span>
+            </div>
+          )}
         </>
       )}
+
+      {/* Secondary window */}
+      {hasSecondary && (
+        <>
+          <div className="usage-detail-row" style={{ marginTop: 8 }}>
+            <span className="usage-detail-key">{formatWindowSeconds(usage.secondaryWindowSeconds!)} 用量</span>
+            <span className="usage-detail-value">{secondaryUsedPercent}%</span>
+          </div>
+          <div className="usage-progress-bar">
+            <div
+              className="usage-progress-fill"
+              style={{ width: `${Math.min(secondaryUsedPercent, 100)}%` }}
+            />
+          </div>
+          {usage.secondaryResetAt != null && (
+            <div className="usage-detail-row">
+              <span className="usage-detail-key">重置剩余时间</span>
+              <span className="usage-detail-value usage-detail-value-tooltip">
+                {formatRelativeTime(usage.secondaryResetAt)}
+                <span className="usage-detail-tooltip">{formatAbsoluteTime(usage.secondaryResetAt)}</span>
+              </span>
+            </div>
+          )}
+        </>
+      )}
+
       <button
         className="usage-refresh-btn"
         onClick={onRefresh}

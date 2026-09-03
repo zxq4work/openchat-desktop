@@ -192,12 +192,29 @@ export class ChatGPTUsageService {
     const usedPercent =
       primaryWindow?.used_percent ?? (state.state === 'exhausted' ? 100 : undefined)
 
+    const resetAt =
+      state.state === 'exhausted'
+        ? state.resetAt
+        : primaryWindow?.reset_at
+
+    console.log('[Codex Usage] toView debug:', {
+      state: state.state,
+      primaryWindow,
+      secondaryWindow: usage.rate_limit?.secondary_window,
+      computedResetAt: resetAt,
+    })
+
+    const secondaryWindow = usage.rate_limit?.secondary_window
+
     return {
       state: state.state,
       planType: usage.plan_type,
       usedPercent,
       windowSeconds: primaryWindow?.limit_window_seconds,
-      resetAt: state.state === 'exhausted' ? state.resetAt : undefined,
+      resetAt,
+      secondaryUsedPercent: secondaryWindow?.used_percent,
+      secondaryWindowSeconds: secondaryWindow?.limit_window_seconds,
+      secondaryResetAt: secondaryWindow?.reset_at,
       hasCredits: usage.credits?.has_credits,
     }
   }

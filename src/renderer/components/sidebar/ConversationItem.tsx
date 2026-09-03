@@ -45,7 +45,8 @@ export function ConversationItem({ summary, active }: Props) {
     setMenuOpen((prev) => !prev)
   }
 
-  const handleOpenSettings = async () => {
+  const handleOpenSettings = async (e: React.MouseEvent) => {
+    e.stopPropagation()
     setActiveConversationId(summary.id)
     const data = await window.openchat.conversations.get(summary.id)
     if (data) {
@@ -57,7 +58,8 @@ export function ConversationItem({ summary, active }: Props) {
     setMenuOpen(false)
   }
 
-  const handleDelete = async () => {
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation()
     setMenuOpen(false)
     await window.openchat.conversations.remove(summary.id)
 

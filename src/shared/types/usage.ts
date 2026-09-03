@@ -67,6 +67,9 @@ export interface CodexUsageView {
   usedPercent?: number
   windowSeconds?: number
   resetAt?: number
+  secondaryUsedPercent?: number
+  secondaryWindowSeconds?: number
+  secondaryResetAt?: number
   hasCredits?: boolean
 }
 
