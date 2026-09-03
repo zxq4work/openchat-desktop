@@ -70,6 +70,7 @@ export class ToolLoopController {
     let fetchCallCount = 0
     let webRunCallCount = 0
     const executedQueries = new Set<string>()
+    let searchProviderChallenge = false
 
     let messages: CanonicalMessage[] = initialRequest.messages.slice()
     let round = 0
@@ -167,9 +168,15 @@ export class ToolLoopController {
         executedQueries,
         signal,
         callbacks,
-        toolCallHistory
+        toolCallHistory,
+        searchProviderChallenge
       )
       totalToolCalls += toolCalls.length
+
+      // 检测到搜索引擎验证，后续轮次不再搜索
+      if (!searchProviderChallenge && toolResults.some((tr) => tr.isError && tr.output.includes('SEARCH_PROVIDER_CHALLENGE'))) {
+        searchProviderChallenge = true
+      }
 
       if (signal.aborted) break
 
@@ -251,13 +258,26 @@ export class ToolLoopController {
     executedQueries: Set<string>,
     signal: AbortSignal,
     callbacks: ToolLoopCallbacks,
-    toolCallHistory: ToolCallHistoryEntry[]
+    toolCallHistory: ToolCallHistoryEntry[],
+    searchProviderChallenge: boolean
   ): Promise<CanonicalToolResult[]> {
     const toolResults: CanonicalToolResult[] = []
 
     for (const tc of toolCalls) {
       if (tc.name === 'openchat_web_search') {
         searchCallCount++
+        if (searchProviderChallenge) {
+          console.log('[ToolLoop] Skipping web_search due to provider challenge')
+          const skippedResult: CanonicalToolResult = {
+            callId: tc.id,
+            name: tc.name,
+            output: JSON.stringify({ error: 'SEARCH_PROVIDER_CHALLENGE', message: '搜索已被禁用，当前网络环境触发搜索引擎验证' }),
+            isError: true,
+          }
+          toolResults.push(skippedResult)
+          callbacks.onToolResult(tc.id, tc.name, false, undefined, skippedResult.output)
+          continue
+        }
         if (searchCallCount > MAX_WEB_SEARCH_CALLS_PER_TURN) {
           console.log('[ToolLoop] Max web_search calls reached')
           const skippedResult: CanonicalToolResult = {
@@ -378,7 +398,19 @@ export class ToolLoopController {
           isError: result.isError ?? false,
         })
 
-        callbacks.onToolResult(tc.id, tc.name, !result.isError, rawResults)
+        let errorOutput: string | undefined
+        if (result.isError) {
+          try {
+            const parsed = JSON.parse(result.output) as Record<string, unknown>
+            errorOutput = (parsed.message as string) || (parsed.error as string) || result.output
+          } catch {
+            errorOutput = result.output
+          }
+        }
+        if (result.isError && result.output.includes('SEARCH_PROVIDER_CHALLENGE')) {
+          searchProviderChallenge = true
+        }
+        callbacks.onToolResult(tc.id, tc.name, !result.isError, rawResults, errorOutput)
       } catch (err) {
         console.error('[Tool Error]', err instanceof Error ? err.message : String(err))
         const errorResult: CanonicalToolResult = {

@@ -133,8 +133,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
           </span>
         </div>
       )}
-      {isStreaming && webSearch.error && (
-        <div className="message-web-search-error">{webSearch.error}</div>
+      {(isStreaming ? webSearch.error : message.webSearchError) && (
+        <div className="message-web-search-error">{isStreaming ? webSearch.error : message.webSearchError}</div>
       )}
       {hasSearchResults && (
         <div className="message-search-results">

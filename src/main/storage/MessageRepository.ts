@@ -16,7 +16,7 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, created_at, updated_at
+             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
       FROM (
         SELECT * FROM messages
         WHERE conversation_id = ?
@@ -36,7 +36,7 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, created_at, updated_at
+             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
       FROM messages
       WHERE segment_id = ?
       ORDER BY created_at ASC
@@ -52,7 +52,7 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, created_at, updated_at
+             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
       FROM messages WHERE id = ?
     `, [id])
 
@@ -79,6 +79,7 @@ export class MessageRepository {
       message.providerPayloadJson ?? null,
       message.errorCode,
       message.errorMessage,
+      message.webSearchError ?? null,
       message.createdAt,
       message.updatedAt,
     ]
@@ -87,8 +88,8 @@ export class MessageRepository {
         INSERT INTO messages (
           id, conversation_id, segment_id, role, content, reasoning_json, web_search_results_json, status,
           model_id, reasoning_effort, provider_turn_id, provider_item_id,
-          provider_payload_json, error_code, error_message, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, params)
     } catch (e) {
       const types = params.map((p, i) => `[${i}]=${typeof p}(${p === undefined ? 'UNDEFINED' : p === null ? 'null' : String(p).slice(0, 30)})`)
@@ -205,6 +206,19 @@ export class MessageRepository {
     }
   }
 
+  updateWebSearchError(id: string, error: string): void {
+    const db = this.storage.database
+    try {
+      db.run(
+        `UPDATE messages SET web_search_error = ?, updated_at = ? WHERE id = ?`,
+        [error, Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateWebSearchError params:', { id: typeof id, error: typeof error, idVal: id, errorVal: error })
+      throw e
+    }
+  }
+
   private rowToMessage(row: unknown[]): Message {
     const reasoningJson = row[5] ? String(row[5]) : null
     const webSearchResultsJson = row[6] ? String(row[6]) : null
@@ -224,8 +238,9 @@ export class MessageRepository {
       providerPayloadJson: row[12] ? String(row[12]) : null,
       errorCode: row[13] ? String(row[13]) : null,
       errorMessage: row[14] ? String(row[14]) : null,
-      createdAt: Number(row[15]),
-      updatedAt: Number(row[16]),
+      webSearchError: row[15] ? String(row[15]) : null,
+      createdAt: Number(row[16]),
+      updatedAt: Number(row[17]),
     }
   }
 }

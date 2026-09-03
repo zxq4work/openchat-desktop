@@ -227,7 +227,6 @@ export function App() {
         callId: e.toolCallId ?? null,
         toolName: e.toolCallName ?? null,
         query,
-        error: null,
       })
     }))
 
@@ -257,7 +256,6 @@ export function App() {
         active: false,
         callId: null,
         query: null,
-        error: null,
         results: merged,
       })
     }))
@@ -308,14 +306,13 @@ export function App() {
           })
         : []
 
-      const prev = useChatStreamStore.getState().webSearchStatus
-      const merged = [...prev.results, ...results]
+      const prev2 = useChatStreamStore.getState().webSearchStatus
+      const merged2 = [...prev2.results, ...results]
       useChatStreamStore.getState().setWebSearchStatus({
         active: false,
         callId: null,
         query: null,
-        error: null,
-        results: merged,
+        results: merged2,
       })
     }))
 
@@ -344,7 +341,6 @@ export function App() {
         active: false,
         callId: null,
         query: null,
-        error: null,
         results: [],
       })
     }))
@@ -459,6 +455,7 @@ export function App() {
             webSearchResults: streamState.webSearchStatus.results.length > 0
               ? streamState.webSearchStatus.results
               : updated[lastAssistantIdx].webSearchResults,
+            webSearchError: streamState.webSearchStatus.error ?? updated[lastAssistantIdx].webSearchError,
             status: 'completed',
           }
           console.log('[App turn-completed] updated contentLen=%d', updated[lastAssistantIdx].content.length)

@@ -69,6 +69,10 @@ export class StorageService {
       this.db.run("ALTER TABLE messages ADD COLUMN web_search_results_json TEXT")
       changed = true
     }
+    if (!msgColumnNames.includes('web_search_error')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN web_search_error TEXT")
+      changed = true
+    }
 
     // 迁移：conversations 表 provider_config_id 列
     if (!convColumnNames.includes('provider_config_id')) {
@@ -278,6 +282,7 @@ export class StorageService {
         provider_payload_json TEXT,
         error_code TEXT,
         error_message TEXT,
+        web_search_error TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(conversation_id)

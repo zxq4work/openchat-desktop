@@ -67,6 +67,7 @@ export interface Message {
   content: string
   reasoningMeta: ReasoningMeta | null
   webSearchResults: WebSearchResultItem[] | null
+  webSearchError: string | null
   status: MessageStatus
   modelId: string | null
   reasoningEffort: string | null

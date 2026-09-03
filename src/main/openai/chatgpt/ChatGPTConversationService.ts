@@ -424,6 +424,7 @@ export class ChatGPTConversationService {
       content: text,
       reasoningMeta: null,
       webSearchResults: null,
+      webSearchError: null,
       status: 'completed',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -450,6 +451,7 @@ export class ChatGPTConversationService {
       content: '',
       reasoningMeta: null,
       webSearchResults: null,
+      webSearchError: null,
       status: 'pending',
       modelId: conversation.defaultModelId,
       reasoningEffort: conversation.defaultReasoningEffort,
@@ -735,11 +737,22 @@ export class ChatGPTConversationService {
           if (errorOutput && (errorOutput.includes('TOOL_LIMIT_EXCEEDED') || errorOutput.includes('DUPLICATE_QUERY'))) {
             return
           }
-          console.log('[WebSearch] search failed, callId=', callId, 'error=', errorOutput ?? 'unknown')
+          let userMessage = errorOutput ?? '搜索失败'
+          if (errorOutput) {
+            try {
+              const parsed = JSON.parse(errorOutput) as Record<string, unknown>
+              userMessage = (parsed.message as string) || (parsed.error as string) || errorOutput
+            } catch {
+              userMessage = errorOutput
+            }
+          }
+          console.log('[WebSearch] search failed, callId=', callId, 'error=', userMessage)
+          this.messages.updateWebSearchError(assistantMessageId, userMessage)
           this.emitStreamEvent({
             type: 'web-search-error',
             conversationId,
             toolCallId: callId,
+            toolCallError: userMessage,
           })
         }
       },
@@ -1277,10 +1290,17 @@ export class ChatGPTConversationService {
       })
     } catch (err) {
       console.error('[PreSearch] Search failed:', err instanceof Error ? err.message : String(err))
+      let preSearchError = err instanceof Error ? err.message : '搜索失败'
+      if (preSearchError.startsWith('SEARCH_')) {
+        const colonIdx = preSearchError.indexOf(':')
+        preSearchError = colonIdx > 0 ? preSearchError.slice(colonIdx + 2) : preSearchError
+      }
+      this.messages.updateWebSearchError(assistantMessageId, preSearchError)
       this.emitStreamEvent({
         type: 'web-search-error',
         conversationId,
         toolCallId: 'pre-search',
+        toolCallError: preSearchError,
       })
     }
 
