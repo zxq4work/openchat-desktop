@@ -134,6 +134,11 @@ When using web results, cite relevant source URLs in the final answer.
 
 ` + CODEX_SEARCH_MODE_SEMANTICS
 
+const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available for this request. Answer directly based on your training knowledge and the conversation context.
+- Do NOT output any search-related syntax (no <tool_call>, no <!-- START: WEB_SEARCH_CALL -->, no function calls).
+- Do NOT mention that search is "disabled" or "unavailable" — just answer the question directly.
+- If the user explicitly asks you to search or look something up, simply say you're unable to look that up right now and suggest they try enabling web search.`
+
 export interface StreamEvent {
   type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'web-search-call-started' | 'web-search-call-completed' | 'web-search-call-failed' | 'stream-reset'
   conversationId?: string
@@ -1391,6 +1396,15 @@ export class ChatGPTConversationService {
       .join('\n')
   }
 
+  // 检测历史中是否有过搜索（通过 providerPayloadJson 或 webSearchResults 判断）
+  private detectSearchWasEnabledInHistory(segmentMessages: Message[]): boolean {
+    return segmentMessages.some(
+      (m) =>
+        m.role === 'assistant' &&
+        (m.providerPayloadJson || (m.webSearchResults && m.webSearchResults.length > 0))
+    )
+  }
+
   // 判断是否需要搜索，是则提取 query；否则返回空字符串跳过搜索
   private async extractSearchQuery(
     adapter: ModelAdapter,
@@ -1474,7 +1488,8 @@ User message: ${userText}${contextHint}`
     segmentId: string,
     abortController: AbortController
   ): Promise<void> {
-    const request = this.buildCanonicalRequest(modelId, instructions, segmentId, '', effort, adapter.protocol)
+    const noSearchInstructions = instructions + '\n\n' + NO_SEARCH_CAPABILITY_NOTICE
+    const request = this.buildCanonicalRequest(modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true)
     await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
   }
 
@@ -1494,6 +1509,7 @@ User message: ${userText}${contextHint}`
     // 部分 Responses API 不支持 function calling，会以原始文本输出 <tool_call>，流式阶段需剥离
     let toolCallTextActive = false
     let toolCallTextBuffer = ''
+    let finalized = false
 
     const sanitizeDelta = (rawText: string): string => {
       let out = ''
@@ -1592,20 +1608,35 @@ User message: ${userText}${contextHint}`
           this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+          finalized = true
           break
 
         case 'error':
           this.messages.updateError(assistantMessageId, event.code, event.message)
           this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
+          finalized = true
           break
       }
     }
 
-    // 流结束但未收到 turn_completed（被中断或异常结束）
-    if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
+    // 流结束但未收到 turn_completed 或 error（被中断或异常结束）
+    if (!finalized && this.activeGeneration?.assistantMessageId === assistantMessageId) {
       if (abortController.signal.aborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
+      } else {
+        // 流异常终止：未收到 turn_completed 也未收到 error，且未被用户中断
+        // 有内容则标记为 completed，否则报错，避免 UI 永远停留在 streaming 状态
+        if (accumulatedContent.trim()) {
+          const directFlush = this.flushCitationBuffer(citationBuf)
+          if (directFlush) accumulatedContent += directFlush
+          this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+          this.messages.updateStatus(assistantMessageId, 'completed')
+          this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
+        } else {
+          this.messages.updateError(assistantMessageId, 'StreamFailed', '响应流意外中断')
+          this.emitStreamEvent({ type: 'error', conversationId, errorCode: 'StreamFailed', errorMessage: '响应流意外中断' })
+        }
       }
     }
   }
@@ -1616,7 +1647,8 @@ User message: ${userText}${contextHint}`
     segmentId: string,
     userText: string,
     effort: string,
-    targetProtocol?: ProviderProtocol
+    targetProtocol?: ProviderProtocol,
+    skipWebSearchHistory?: boolean
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
@@ -1637,7 +1669,7 @@ User message: ${userText}${contextHint}`
         // 按原始顺序收集的 tool items（function_call + function_call_output 交替）
         const orderedToolItems: Array<{ type: 'function_call'; call_id: string; name: string; namespace?: string; arguments: string } | { type: 'function_call_output'; call_id: string; output: string }> = []
 
-        if (msg.providerPayloadJson) {
+        if (msg.providerPayloadJson && !skipWebSearchHistory) {
           try {
             const payload = JSON.parse(msg.providerPayloadJson) as Record<string, unknown>
 
@@ -1768,17 +1800,43 @@ User message: ${userText}${contextHint}`
       }
     }
 
-    // 注入所有历史搜索的确定性来源上下文
+    // 注入所有历史搜索的确定性来源上下文（始终注入，即使当前请求不带 tools）
+    // 确保模型记住自己执行过搜索，避免关闭搜索后模型否认之前的搜索结果
     const allProvenances = resolveAllSearchProvenance(segmentMessages)
     if (allProvenances.length > 0) {
-      const ctx = buildAllProvenanceContext(allProvenances)
+      const ctx = buildAllProvenanceContext(allProvenances, skipWebSearchHistory)
       messages.push({ role: 'developer', content: ctx })
-      console.log('[Search Provenance] count=%d modes=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','))
+      console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), skipWebSearchHistory ? 'true' : 'false')
     }
 
     // 如果 userText 不在 messages 中，追加
     if (userText && !messages.some((m) => m.role === 'user' && m.content === userText)) {
       messages.push({ role: 'user', content: userText })
+    }
+
+    // 搜索开关状态切换提示：若本次请求的搜索能力与历史轮次不同，
+    // 注入一条 developer message 告知模型，避免它把能力变化误判为自己的失误
+    const currentlyDisabled = skipWebSearchHistory === true
+    const hadSearchEnabled = this.detectSearchWasEnabledInHistory(segmentMessages)
+    // 历史中是否出现过模型声称"没有搜索能力"的表述（曾因开关关闭而无法搜索）
+    const historyContainsNoSearchClaim = segmentMessages.some(
+      (m) => m.role === 'assistant' && /没有搜索|不能搜索|无法搜索|搜索功能|没有联网|无法联网|搜索.*关闭|关闭.*搜索|no search|can'?t search|cannot search/i.test(m.content)
+    )
+
+    // 本次关闭 + 历史开启过搜索 → 告知模型这是用户切换，不是它的失误
+    if (currentlyDisabled && hadSearchEnabled) {
+      messages.push({
+        role: 'developer',
+        content: 'NOTE: The user has just toggled web search OFF. In earlier turns you had web search tools, but for this turn they are gone. This is a user settings change, not a mistake on your part. Do NOT apologize, do NOT claim you "lied" or "made an error", and do NOT invent a self-contradictory explanation. Just answer using past search results or your own knowledge.',
+      })
+    }
+
+    // 本次开启 + 历史中出现过"不能搜索"的表述 → 告知模型搜索已恢复，别解释过去
+    if (!currentlyDisabled && historyContainsNoSearchClaim) {
+      messages.push({
+        role: 'developer',
+        content: 'NOTE: Web search was toggled off in earlier turns (which is why the model previously said it could not search), but the user has now toggled it back ON. Do NOT apologize, do NOT explain past inconsistency, and do NOT dwell on previous turns. You now have web search available again — use it when needed.',
+      })
     }
 
     return {

@@ -117,7 +117,7 @@ function isStandaloneByArgs(item: { type: 'function_call'; name: string; argumen
 }
 
 // 构建 transient developer context（所有历史搜索）
-export function buildAllProvenanceContext(provenances: SearchProvenance[]): string {
+export function buildAllProvenanceContext(provenances: SearchProvenance[], searchCurrentlyDisabled?: boolean): string {
   if (provenances.length === 0) return ''
 
   const entries = provenances.map((p, idx) => {
@@ -129,10 +129,14 @@ export function buildAllProvenanceContext(provenances: SearchProvenance[]): stri
 ${queriesStr}`
   }).join('\n')
 
+  const disabledNote = searchCurrentlyDisabled
+    ? '\n\nThe searches listed above are from earlier turns. For this current request you have NO web search tools available — do not emit any tool call syntax, and do not claim to have just searched. You may cite the past results above, but answer the current question directly. If asked to search again, simply say you cannot look that up right now.'
+    : ''
+
   return `<!-- OPENCHAT_SEARCH_PROVENANCE_V1 -->
 All completed searches in this conversation (in chronological order):
 
-${entries}
+${entries}${disabledNote}
 
 This metadata is deterministically derived from actual provider history.
 When answering questions about which search mechanism was used, treat this metadata as authoritative.
