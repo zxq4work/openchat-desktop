@@ -269,6 +269,111 @@ src/
 - `src/shared/constants/index.ts` 中的 `CODEX_VERSION` / `CODEX_TAG` / `CODEX_COMMIT`（移除后仅剩 `APP_NAME` / `APP_TITLE`）
 - `src/main/bootstrap/main.ts` 中的 `initializeAppServerProvider()` / `getAppServerMode()` / `getCodexBinaryPath()` / `getCodexHome()` / `getConfigPath()` 及相关 env 分支（`OPENCHAT_PROVIDER=appserver` / `OPENCHAT_APP_SERVER_MODE`）
 
+## Citation Streaming 清洗系统
+
+### 背景
+
+ChatGPT Hosted Search 在回答中注入内部 citation 标记，须在流式阶段和落库时清洗，避免泄漏到 UI。
+
+### 两种 citation 格式
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| PUA rich citation | `\uE200cite\uE202turn0search0\uE202turn0search1\uE201` | START(`\uE200`) + 家族名 + DELIM(`\uE202`) + 源列表 + END(`\uE201`) |
+| contentReference | `:contentReference[oaicite:2]{index=2}` | 内联引用标记 |
+
+### 核心文件
+
+| 文件 | 职责 |
+|------|------|
+| `src/main/services/ai/CitationParser.ts` | 完整文本清洗 + 流式缓冲（`CitationStreamBuffer`） |
+| `src/main/services/ai/CitationParser.test.ts` | 47 个单元测试（含逐字符不泄漏验证） |
+| `src/main/services/ai/CitationDebugTracker.ts` | 诊断工具：捕获真实 citation 原始格式、前后文、UI 泄漏检测 |
+| `src/main/openai/chatgpt/ChatGPTConversationService.ts` | 4 条流式路径全部接入清洗 + 诊断 |
+| `src/main/openai/chatgpt/transport/ChatGPTCodexClient.ts` | Mock 支持：关键词命中时返回 citation 格式用于回归测试 |
+| `src/main/storage/MessageRepository.ts` | `rowToMessage()` 读取旧数据时兼容清理 |
+
+### 架构
+
+```
+RAW SSE delta
+    ↓
+cleanDelta(citationBuf, rawDelta)          ← CitationDebugTracker.feedRaw() 最早诊断入口
+    ↓
+CitationStreamBuffer.feed()                ← 通用前缀 holdback + START/END 状态机
+    ↓
+只有 confirmed-safe text 才返回
+    ↓
+emitStreamEvent({ type: 'delta', text })   ← CitationDebugTracker.checkEmit() 泄漏哨兵
+    ↓
+UI
+    ↓
+stream end → flushCitationBuffer()         ← 释放缓冲区残余
+    ↓
+cleanFinalText(accumulatedContent)         ← 最终兜底清洗 + CitationDebugTracker.flush()
+    ↓
+Database
+```
+
+### CitationStreamBuffer 核心逻辑
+
+- **feed(chunk)**：拼接 buffer + chunk → `detectPartial()` 检测尾部是否为不完整 citation 前缀 → 是则缓存等待，否则 `cleanCitationText()` 清洗后输出
+- **flush()**：流结束时释放 buffer 残余，非 citation 文本原样返回（不吞掉用户正文）
+- **detectPartial()**：
+  - Rule 0: PUA START(`\uE200`) 无 END(`\uE201`) → 缓存
+  - Rule 1: `【` 无 `】` → 缓存
+  - Rule 2: `[` 后跟数字/`^` 无 `]` → 缓存（`\d+` 非 `\d*`，避免 `[` 单独匹配）
+  - Rule 3: `getPartialPrefixLength()` 通用前缀匹配 — 尾部等于 `':contentReference['` 的任意非空前缀 → 缓存
+  - Rule 4: 裸 `citeturn0sear...` 截断 → 缓存
+
+### cleanCitationText() 处理顺序
+
+1. Rich citation (PUA) — 必须最先，趁 PUA 分隔符还在时整体删除
+2. 中文括号 citation `【N†source】`
+3. ASCII 括号 citation `[N†source]`
+4. contentReference `:contentReference[oaicite:N]{index=N}`
+5. 脚注 `[^N]`
+6. Markdown 链接 citation `([text](url...turn0search...))`
+7. 裸 citation 块 `citeturn0search0...`（降级格式）
+8. 残余 PUA 字符清理
+
+### 4 条流式路径（全部经过 cleanDelta）
+
+| 路径 | 方法 | 搜索策略 |
+|------|------|----------|
+| 1 | `runGenerationWithCodexHostedSearch` | codex-hosted |
+| 2 | `runGenerationWithCodexStandaloneSearch` | codex-standalone |
+| 3 | `runGenerationWithTools` | openchat-custom (tools) |
+| 4 | `runGenerationDirectStream` | none / preSearch |
+
+### Mock 测试
+
+Mock 模式下（`OPENCHAT_PROVIDER_MOCK=true`），发送含 `citation`/`引用`/`cite`/`turn0`/`PUA` 关键词的消息，Mock 返回含两种 citation 格式的固定回答，用于回归验证。
+
+### CitationDebugTracker 诊断
+
+- 在 `cleanDelta()` 入口调用 `feedRaw()`，维护 512 字符滚动缓冲
+- 检测到 citation 起始（`\uE200` 无 `\uE201` 或 `:contentReference[` 未闭合）时进入捕获状态机
+- 完整捕获后一次性打印：type / path / raw / codepoints / cleaned / before / current / after
+- `checkEmit()` 在 UI emit 前检测泄漏（`[citation-ui-leak]`）
+- 裸 `cite` 孤儿追踪（`[citation-orphan-cite]`）
+- 仅命中时打印，普通 delta 无日志
+
+### 验证方式
+
+```bash
+# 单元测试
+npx vitest run src/main/services/ai/CitationParser.test.ts
+
+# Mock 模式回归测试
+OPENCHAT_PROVIDER_MOCK=true npm run dev
+# 发送 "返回cite格式的信息"，观察 UI 和日志
+
+# 真实搜索验证
+npm run dev
+# 触发联网搜索，观察 [citation-hit/] 日志和 UI
+```
+
 ## 验证命令（由用户执行）
 沙箱模式下 Claude Code 无法执行 npm/npx 等命令（`npx tsc --noEmit`、`npm install`、`npm run dev` 等会被拒绝或无法运行）。改动完成后由 Claude 列出需要验证的命令，**由用户在终端自行执行**，并把输出结果粘贴回来。
 

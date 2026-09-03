@@ -27,6 +27,8 @@ import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
 import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandaloneSearchClient'
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
+import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
+import { citationDebugTracker } from '../../services/ai/CitationDebugTracker'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
@@ -205,6 +207,10 @@ export class ChatGPTConversationService {
   }
 
   private emitStreamEvent(event: StreamEvent): void {
+    // 发送 UI 前检查是否仍有 citation 泄漏
+    if (event.type === 'delta' && event.text) {
+      citationDebugTracker.checkEmit(event.text)
+    }
     for (const handler of this.streamHandlers) {
       handler(event)
     }
@@ -681,6 +687,27 @@ export class ChatGPTConversationService {
     }
   }
 
+  // 对单个 delta 做 citation 清理，返回可安全输出的文本。
+  // 流式场景下可能缓存不完整 marker，仅返回已确认安全的文本。
+  private cleanDelta(citationBuf: CitationStreamBuffer, rawDelta: string): string {
+    if (!rawDelta) return ''
+    citationDebugTracker.feedRaw(rawDelta, 'cleanDelta')
+    return citationBuf.feed(rawDelta)
+  }
+
+  // 流结束时刷新 citation 缓冲区，返回残余文本。
+  private flushCitationBuffer(citationBuf: CitationStreamBuffer): string {
+    return citationBuf.flush()
+  }
+
+  // 对完整文本做 citation 清理（非流式场景）。
+  private cleanFinalText(text: string): string {
+    if (!text) return ''
+    citationDebugTracker.flush()
+    const { cleanText } = cleanCitationText(text)
+    return cleanText
+  }
+
   // Agentic Search：使用 ToolLoopController
   private async runGenerationWithTools(
     conversationId: string,
@@ -694,6 +721,7 @@ export class ChatGPTConversationService {
     abortController: AbortController
   ): Promise<void> {
     let accumulatedContent = ''
+    const citationBuf = new CitationStreamBuffer()
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
@@ -757,9 +785,11 @@ export class ChatGPTConversationService {
         }
       },
       onDelta: (text) => {
-        accumulatedContent += text
+        const cleanText = this.cleanDelta(citationBuf, text)
+        if (!cleanText) return
+        accumulatedContent += cleanText
         this.messages.updateContent(assistantMessageId, accumulatedContent)
-        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text })
+        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
       },
       onReasoningStarted: (itemId) => {
         reasoningStartedAt = Date.now()
@@ -814,7 +844,14 @@ export class ChatGPTConversationService {
     }
     // totalToolCalls === 0 → 模型直接回答，不改变 capability
 
-    this.messages.updateContent(assistantMessageId, result.finalText)
+    // 刷新 citation 缓冲区残余
+    const flushText = this.flushCitationBuffer(citationBuf)
+    if (flushText) {
+      accumulatedContent += flushText
+      this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: flushText })
+    }
+    const finalContent = this.cleanFinalText(accumulatedContent)
+    this.messages.updateContent(assistantMessageId, finalContent)
 
     this.messages.updateStatus(assistantMessageId, 'completed')
 
@@ -881,6 +918,7 @@ export class ChatGPTConversationService {
     abortController: AbortController
   ): Promise<void> {
     let accumulatedContent = ''
+    const citationBuf = new CitationStreamBuffer()
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
@@ -906,11 +944,14 @@ export class ChatGPTConversationService {
         if (abortController.signal.aborted) break
 
         switch (event.type) {
-          case 'delta':
-            accumulatedContent += event.text
+          case 'delta': {
+            const cleanText = this.cleanDelta(citationBuf, event.text)
+            if (!cleanText) break
+            accumulatedContent += cleanText
             this.messages.updateContent(assistantMessageId, accumulatedContent)
-            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: event.text })
+            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
             break
+          }
 
           case 'turn_started':
             if (event.turnId && !providerTurnId) {
@@ -1016,7 +1057,12 @@ export class ChatGPTConversationService {
       throw err
     }
 
-    this.messages.updateContent(assistantMessageId, accumulatedContent)
+    const hostedFlushText = this.flushCitationBuffer(citationBuf)
+    if (hostedFlushText) {
+      accumulatedContent += hostedFlushText
+      this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: hostedFlushText })
+    }
+    this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
     this.messages.updateStatus(assistantMessageId, 'completed')
 
     if (webSearchResults.length > 0) {
@@ -1053,6 +1099,7 @@ export class ChatGPTConversationService {
     abortController: AbortController
   ): Promise<void> {
     let accumulatedContent = ''
+    const citationBuf = new CitationStreamBuffer()
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
@@ -1104,9 +1151,11 @@ export class ChatGPTConversationService {
         }
       },
       onDelta: (text) => {
-        accumulatedContent += text
+        const cleanText = this.cleanDelta(citationBuf, text)
+        if (!cleanText) return
+        accumulatedContent += cleanText
         this.messages.updateContent(assistantMessageId, accumulatedContent)
-        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text })
+        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
       },
       onReasoningStarted: (itemId) => {
         reasoningStartedAt = Date.now()
@@ -1146,7 +1195,12 @@ export class ChatGPTConversationService {
     const result = await controller.run(request, abortController.signal, callbacks)
     console.log('[CodexStandalone] ToolLoop done finalTextLength=%d totalToolCalls=%d', result.finalText?.length ?? 0, result.totalToolCalls)
 
-    this.messages.updateContent(assistantMessageId, result.finalText)
+    const standaloneFlushText = this.flushCitationBuffer(citationBuf)
+    if (standaloneFlushText) {
+      accumulatedContent += standaloneFlushText
+      this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: standaloneFlushText })
+    }
+    this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
     this.messages.updateStatus(assistantMessageId, 'completed')
 
     // 持久化搜索结果
@@ -1433,6 +1487,7 @@ User message: ${userText}${contextHint}`
     abortController: AbortController
   ): Promise<void> {
     let accumulatedContent = ''
+    const citationBuf = new CitationStreamBuffer()
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
@@ -1481,7 +1536,8 @@ User message: ${userText}${contextHint}`
     for await (const event of adapter.stream(request, abortController.signal)) {
       switch (event.type) {
         case 'delta': {
-          const cleanText = sanitizeDelta(event.text)
+          const sanitized = sanitizeDelta(event.text)
+          const cleanText = this.cleanDelta(citationBuf, sanitized)
           if (cleanText) {
             accumulatedContent += cleanText
             this.messages.updateContent(assistantMessageId, accumulatedContent)
@@ -1525,7 +1581,15 @@ User message: ${userText}${contextHint}`
         }
 
         case 'turn_completed':
-          this.messages.updateContent(assistantMessageId, accumulatedContent)
+          // 刷新 citation 缓冲区残余
+          {
+            const directFlush = this.flushCitationBuffer(citationBuf)
+            if (directFlush) {
+              accumulatedContent += directFlush
+              this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: directFlush })
+            }
+          }
+          this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
           break

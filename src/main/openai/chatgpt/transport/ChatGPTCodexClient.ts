@@ -424,6 +424,22 @@ const MOCK_RESPONSES = [
   '根据你的需求，我推荐使用以下方案：\n\n| 方案 | 优点 | 缺点 |\n|------|------|------|\n| A | 简单易用 | 性能一般 |\n| B | 高性能 | 复杂度高 |\n\n综合考虑，方案A更适合你的场景。',
 ]
 
+// 命中关键词时返回的 citation 格式回答（复现 ChatGPT hosted search 的真实输出）
+// 包含 PUA rich citation 与 contentReference 两种真实格式
+const MOCK_CITATION_RESPONSE =
+  '以下是关于您问题的参考信息：\uE200cite\uE202turn0search0\uE202turn0search1\uE201\n\n测试引用：:contentReference[oaicite:2]{index=2}'
+
+// 从请求 input 中提取最后一条 user 消息文本
+function extractMockUserText(input: ProviderInputItem[]): string {
+  for (let i = input.length - 1; i >= 0; i--) {
+    const item = input[i]
+    if ('role' in item && item.role === 'user' && 'content' in item && typeof item.content === 'string') {
+      return item.content
+    }
+  }
+  return ''
+}
+
 export class MockChatGPTCodexClient implements ChatGPTCodexClient {
   async listModels(): Promise<ChatGPTModel[]> {
     return [
@@ -460,10 +476,19 @@ export class MockChatGPTCodexClient implements ChatGPTCodexClient {
     ]
   }
 
-  async *sendResponses(_request: ResponsesRequest, signal?: AbortSignal): AsyncIterable<ResponsesSSEEvent> {
+  async *sendResponses(request: ResponsesRequest, signal?: AbortSignal): AsyncIterable<ResponsesSSEEvent> {
     if (signal?.aborted) return
 
-    const responseText = MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)]
+    const userText = extractMockUserText(request.input)
+    const isCitationTest = /citation|引用|cite|turn0|PUA|\uE200/.test(userText)
+
+    const responseText = isCitationTest
+      ? MOCK_CITATION_RESPONSE
+      : MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)]
+
+    if (isCitationTest) {
+      console.log('[mock/citation-raw]', JSON.stringify(responseText))
+    }
 
     yield {
       type: 'response.created',

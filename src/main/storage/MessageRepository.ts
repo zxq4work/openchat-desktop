@@ -1,6 +1,7 @@
 import { StorageService } from './StorageService'
 import type { Message, MessageStatus, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
 import { MESSAGE_PAGE_SIZE } from '../../shared/constants'
+import { cleanCitationText } from '../services/ai/CitationParser'
 
 export class MessageRepository {
   private storage: StorageService
@@ -222,12 +223,15 @@ export class MessageRepository {
   private rowToMessage(row: unknown[]): Message {
     const reasoningJson = row[5] ? String(row[5]) : null
     const webSearchResultsJson = row[6] ? String(row[6]) : null
+    const rawContent = String(row[4])
+    // 兼容清理旧数据中的 citation marker
+    const cleanedContent = cleanCitationText(rawContent).cleanText
     return {
       id: String(row[0]),
       conversationId: String(row[1]),
       segmentId: String(row[2]),
       role: String(row[3]) as 'user' | 'assistant',
-      content: String(row[4]),
+      content: cleanedContent,
       reasoningMeta: reasoningJson ? JSON.parse(reasoningJson) as ReasoningMeta : null,
       webSearchResults: webSearchResultsJson ? JSON.parse(webSearchResultsJson) : null,
       status: String(row[7]) as MessageStatus,
