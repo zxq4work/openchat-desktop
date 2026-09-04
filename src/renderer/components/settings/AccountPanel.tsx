@@ -16,12 +16,17 @@ function formatRelativeTime(resetAt: number): string {
   const remainMs = resetAt * 1000 - now
   const remainMinutes = Math.max(0, Math.ceil(remainMs / 60000))
   const remainHours = Math.floor(remainMinutes / 60)
-  const remainMins = remainMinutes % 60
 
-  if (remainHours > 0) {
-    return `${remainHours}时${remainMins}分`
+  if (remainHours >= 24) {
+    const days = Math.floor(remainHours / 24)
+    const leftoverHours = remainHours % 24
+    return leftoverHours > 0 ? `${days}天${leftoverHours}时` : `${days}天`
   }
-  return `${remainMins}分`
+  if (remainHours > 0) {
+    const remainMins = remainMinutes % 60
+    return remainMins > 0 ? `${remainHours}时${remainMins}分` : `${remainHours}时`
+  }
+  return `${remainMinutes}分`
 }
 
 function formatAbsoluteTime(resetAt: number): string {
@@ -78,8 +83,11 @@ function renderUsageSection(
         )}
         {usage.resetAt != null && (
           <div className="usage-detail-row">
-            <span className="usage-detail-key">恢复</span>
-            <span className="usage-detail-value">{formatAbsoluteTime(usage.resetAt)}</span>
+            <span className="usage-detail-key">重置剩余时间</span>
+            <span className="usage-detail-value usage-detail-value-tooltip">
+              {formatRelativeTime(usage.resetAt)}
+              <span className="usage-detail-tooltip">{formatAbsoluteTime(usage.resetAt)}</span>
+            </span>
           </div>
         )}
         <button
