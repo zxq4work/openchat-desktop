@@ -86,6 +86,12 @@ export class StorageService {
       changed = true
     }
 
+    // 迁移：conversations 表 search_engine 列（自定义 Provider 搜索引擎：bing | baidu | google）
+    if (!convColumnNames.includes('search_engine')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN search_engine TEXT NOT NULL DEFAULT 'bing'")
+      changed = true
+    }
+
     // 迁移：provider_configs 表
     const tables = this.db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_configs'")
     if (!tables.length || !tables[0].values.length) {
@@ -244,6 +250,7 @@ export class StorageService {
         use_model_instructions INTEGER NOT NULL DEFAULT 1,
         web_search_enabled INTEGER NOT NULL DEFAULT 0,
         codex_search_mode TEXT NOT NULL DEFAULT 'hosted',
+        search_engine TEXT NOT NULL DEFAULT 'bing',
         provider_config_id TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL

@@ -39,7 +39,7 @@ export class ConversationRepository {
       SELECT id, title, system_prompt, system_prompt_revision,
              default_model_id, default_reasoning_effort,
              current_segment_id, use_model_instructions, web_search_enabled,
-             codex_search_mode, provider_config_id, created_at, updated_at
+             codex_search_mode, search_engine, provider_config_id, created_at, updated_at
       FROM conversations WHERE id = ?
     `, [id])
 
@@ -56,8 +56,8 @@ export class ConversationRepository {
         id, title, system_prompt, system_prompt_revision,
         default_model_id, default_reasoning_effort,
         current_segment_id, use_model_instructions, web_search_enabled,
-        codex_search_mode, provider_config_id, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        codex_search_mode, search_engine, provider_config_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.title,
@@ -69,6 +69,7 @@ export class ConversationRepository {
       conversation.useModelInstructions ? 1 : 0,
       conversation.webSearchEnabled ? 1 : 0,
       conversation.codexSearchMode,
+      conversation.searchEngine,
       conversation.providerConfigId ?? null,
       conversation.createdAt,
       conversation.updatedAt,
@@ -150,6 +151,14 @@ export class ConversationRepository {
     )
   }
 
+  updateSearchEngine(id: string, engine: 'bing' | 'baidu' | 'google'): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET search_engine = ?, updated_at = ? WHERE id = ?`,
+      [engine, Date.now(), id]
+    )
+  }
+
   remove(id: string): void {
     const db = this.storage.database
     db.run(`DELETE FROM conversations WHERE id = ?`, [id])
@@ -172,9 +181,10 @@ export class ConversationRepository {
       useModelInstructions: row[7] ? Number(row[7]) === 1 : false,
       webSearchEnabled: row[8] ? Number(row[8]) === 1 : false,
       codexSearchMode: (row[9] === 'standalone' ? 'standalone' : 'hosted') as 'hosted' | 'standalone',
-      providerConfigId: row[10] ? String(row[10]) : null,
-      createdAt: Number(row[11]),
-      updatedAt: Number(row[12]),
+      searchEngine: (row[10] === 'baidu' || row[10] === 'google' ? row[10] : 'bing') as 'bing' | 'baidu' | 'google',
+      providerConfigId: row[11] ? String(row[11]) : null,
+      createdAt: Number(row[12]),
+      updatedAt: Number(row[13]),
     }
   }
 }

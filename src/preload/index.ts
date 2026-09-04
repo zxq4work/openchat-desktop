@@ -24,6 +24,7 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
+  CONVERSATIONS_UPDATE_SEARCH_ENGINE: 'conversations:update-search-engine',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
   CHAT_SEND: 'chat:send',
@@ -52,6 +53,8 @@ const IPC_CHANNELS = {
   SETTINGS_SET_DEFAULT_WEB_SEARCH: 'settings:set-default-web-search',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
+  SETTINGS_GET_WEB_SEARCH_CONFIG: 'settings:get-web-search-config',
+  SETTINGS_SET_WEB_SEARCH_CONFIG: 'settings:set-web-search-config',
   DRAFT_GET: 'draft:get',
   DRAFT_SET: 'draft:set',
   DRAFT_DELETE: 'draft:delete',
@@ -89,8 +92,8 @@ const openchat = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_GET, id),
-    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean) =>
-      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId, webSearchEnabled),
+    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google') =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine),
     rename: (id: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_RENAME, id, title),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE, id),
@@ -107,6 +110,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_WEB_SEARCH, id, webSearchEnabled),
     updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE, id, mode),
+    updateSearchEngine: (id: string, engine: 'bing' | 'baidu' | 'google') =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_SEARCH_ENGINE, id, engine),
     updateProviderConfig: (id: string, providerConfigId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, id, providerConfigId),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
@@ -129,8 +134,10 @@ const openchat = {
     getDefaultWebSearch: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_DEFAULT_WEB_SEARCH) as Promise<boolean>,
     setDefaultWebSearch: (enabled: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_DEFAULT_WEB_SEARCH, enabled),
-    getWebSearchEngine: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE) as Promise<string>,
+    getWebSearchEngine: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_ENGINE) as Promise<'bing' | 'baidu' | 'google'>,
     setWebSearchEngine: (engine: string) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_ENGINE, engine),
+    getWebSearchConfig: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_CONFIG) as Promise<{ maxResults: number; maxToolRounds: number }>,
+    setWebSearchConfig: (config: { maxResults: number; maxToolRounds: number }) => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_CONFIG, config),
     getDraft: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_GET, conversationId) as Promise<string | null>,
     setDraft: (conversationId: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_SET, conversationId, text),
     deleteDraft: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.DRAFT_DELETE, conversationId),

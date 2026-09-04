@@ -13,6 +13,7 @@ import type {
   SegmentReason,
   MessageStatus,
 } from '../../shared/types/conversation'
+import type { WebSearchConfig } from '../../shared/types/settings'
 import { TITLE_MAX_LENGTH } from '../../shared/constants'
 
 export interface StreamEvent {
@@ -85,6 +86,7 @@ export class ConversationService {
       useModelInstructions: true,
       webSearchEnabled: false,
       codexSearchMode: 'hosted',
+      searchEngine: 'bing',
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
@@ -110,7 +112,8 @@ export class ConversationService {
     defaultReasoningEffort: string | null,
     systemPrompt = '',
     providerConfigId: string | null = null,
-    webSearchEnabled = false
+    webSearchEnabled = false,
+    searchEngine: 'bing' | 'baidu' | 'google' = 'bing'
   ): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
@@ -127,6 +130,7 @@ export class ConversationService {
       useModelInstructions: true,
       webSearchEnabled,
       codexSearchMode: 'hosted',
+      searchEngine,
       providerConfigId,
       createdAt: now,
       updatedAt: now,
@@ -253,6 +257,16 @@ export class ConversationService {
   async updateCodexSearchMode(id: string, mode: 'hosted' | 'standalone'): Promise<void> {
     this.conversations.updateCodexSearchMode(id, mode)
     await this.storage.save()
+  }
+
+  async updateSearchEngine(id: string, engine: 'bing' | 'baidu' | 'google'): Promise<void> {
+    this.conversations.updateSearchEngine(id, engine)
+    await this.storage.save()
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  updateWebSearchConfig(_config: WebSearchConfig): void {
+    // appserver 模式不使用此配置，仅为服务类型兼容
   }
 
   async updateProviderConfig(id: string, providerConfigId: string | null): Promise<void> {

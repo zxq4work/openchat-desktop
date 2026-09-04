@@ -13,3 +13,13 @@ export interface ProxyConfig {
 }
 
 export type WebSearchEngineType = 'bing' | 'baidu' | 'google'
+
+export interface WebSearchConfig {
+  maxResults: number
+  maxToolRounds: number
+}
+
+export const DEFAULT_WEB_SEARCH_CONFIG: WebSearchConfig = {
+  maxResults: 10,
+  maxToolRounds: 3,
+}

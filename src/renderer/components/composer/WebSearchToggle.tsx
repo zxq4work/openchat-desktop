@@ -2,6 +2,12 @@ import React from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useCodexUsageStore, isCodexExhausted } from '../../stores/codexUsageStore'
 
+const ENGINE_LABELS: Record<string, string> = {
+  bing: 'Bing',
+  baidu: '百度',
+  google: 'Google',
+}
+
 export function WebSearchToggle() {
   const activeConversation = useConversationStore((s) => s.activeConversation)
   const usage = useCodexUsageStore((s) => s.usage)
@@ -24,10 +30,11 @@ export function WebSearchToggle() {
     }
   }
 
+  const customEngineLabel = ENGINE_LABELS[activeConversation.searchEngine] ?? 'Bing'
   const title = isExhausted
     ? 'Codex 额度已用尽，恢复后可继续联网搜索'
     : activeConversation?.providerConfigId
-      ? (webSearchEnabled ? 'OpenChat 网页搜索（已开启）' : 'OpenChat 网页搜索')
+      ? (webSearchEnabled ? `OpenChat ${customEngineLabel}（已开启）` : `OpenChat ${customEngineLabel}`)
       : (webSearchEnabled
           ? (activeConversation.codexSearchMode === 'standalone' ? 'Codex Standalone（已开启）' : 'Codex Hosted（已开启）')
           : (activeConversation.codexSearchMode === 'standalone' ? 'Codex Standalone' : 'Codex Hosted'))

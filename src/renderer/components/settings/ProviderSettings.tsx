@@ -234,7 +234,8 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
           )}
         </div>
 
-        <div className="provider-form-field">
+        {/* 暂时隐藏：capabilities.toolCalling 当前未在生成流程中被读取，tools 能力靠运行时检测 */}
+        {/* <div className="provider-form-field">
           <label className="provider-label">Tools</label>
           <Dropdown
             className="provider-dropdown"
@@ -243,7 +244,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
             onChange={(value) => setToolCalling(value as 'auto' | 'enabled' | 'disabled')}
             ariaLabel="选择 Tools 模式"
           />
-        </div>
+        </div> */}
 
         <div className="dialog-actions">
           <button className="btn-cancel" onClick={props.onClose}>取消</button>
@@ -347,7 +348,7 @@ export function ProviderSettings() {
               </div>
               <div className="provider-card-meta">
                 <span className="provider-card-url">{p.baseUrl}</span>
-                <span className="provider-card-tool-mode">Tools: {TOOL_CALLING_LABELS[p.toolCalling] ?? p.toolCalling}</span>
+                {/* <span className="provider-card-tool-mode">Tools: {TOOL_CALLING_LABELS[p.toolCalling] ?? p.toolCalling}</span> */}
               </div>
               <div className="provider-card-models">
                 {p.models.length > 0 ? (

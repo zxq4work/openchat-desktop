@@ -18,10 +18,13 @@ import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
 import { WebSearchService } from '../../web-search/WebSearchService'
+import { getSearchEngine } from '../../web-search/SearchEngineFactory'
 import { ProviderConfigService } from '../../providers/ProviderConfigService'
 import { ChatGPTCodexAdapter } from '../../providers/ChatGPTCodexAdapter'
 import type { ModelAdapter } from '../../../shared/types/provider'
 import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
+import type { WebSearchConfig } from '../../../shared/types/settings'
+import { DEFAULT_WEB_SEARCH_CONFIG } from '../../../shared/types/settings'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
@@ -170,6 +173,7 @@ export class ChatGPTConversationService {
   private webSearchService: WebSearchService
   private providerConfigService: ProviderConfigService
   private usageService: ChatGPTUsageService
+  private webSearchConfig: WebSearchConfig
 
   // 全局只允许一个 active generation
   private activeGeneration: {
@@ -192,7 +196,8 @@ export class ChatGPTConversationService {
     usageService: ChatGPTUsageService,
     toolRegistry: ToolRegistry,
     webSearchService: WebSearchService,
-    providerConfigService: ProviderConfigService
+    providerConfigService: ProviderConfigService,
+    webSearchConfig?: WebSearchConfig
   ) {
     this.storage = storage
     this.conversations = new ConversationRepository(storage)
@@ -205,6 +210,7 @@ export class ChatGPTConversationService {
     this.webSearchService = webSearchService
     this.providerConfigService = providerConfigService
     this.usageService = usageService
+    this.webSearchConfig = webSearchConfig ?? { ...DEFAULT_WEB_SEARCH_CONFIG }
   }
 
   onStreamEvent(handler: (event: StreamEvent) => void): void {
@@ -234,6 +240,7 @@ export class ChatGPTConversationService {
       useModelInstructions: true,
       webSearchEnabled: false,
       codexSearchMode: 'hosted',
+      searchEngine: 'bing',
       providerConfigId: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
@@ -254,7 +261,7 @@ export class ChatGPTConversationService {
     return { conversation, segments, messages }
   }
 
-  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false): Conversation {
+  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false, searchEngine: 'bing' | 'baidu' | 'google' = 'bing'): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
     const segmentId = randomUUID()
@@ -270,6 +277,7 @@ export class ChatGPTConversationService {
       useModelInstructions: true,
       webSearchEnabled,
       codexSearchMode: 'hosted',
+      searchEngine,
       providerConfigId,
       createdAt: now,
       updatedAt: now,
@@ -495,7 +503,8 @@ export class ChatGPTConversationService {
       conversation.providerConfigId,
       abortController,
       conversation.webSearchEnabled,
-      conversation.codexSearchMode
+      conversation.codexSearchMode,
+      conversation.searchEngine
     )
 
     return { userMessage, assistantMessage }
@@ -565,7 +574,8 @@ export class ChatGPTConversationService {
     providerConfigId: string | null,
     abortController: AbortController,
     webSearchEnabled: boolean,
-    codexSearchMode: 'hosted' | 'standalone'
+    codexSearchMode: 'hosted' | 'standalone',
+    searchEngine: 'bing' | 'baidu' | 'google'
   ): Promise<void> {
     console.log('[runGeneration] entry conversationId=%s modelId=%s providerConfigId=%s webSearch=%s', conversationId, modelId, providerConfigId ?? 'codex', webSearchEnabled)
     try {
@@ -600,9 +610,15 @@ export class ChatGPTConversationService {
         : searchStrategy === 'codex-standalone'
           ? 'codex-standalone'
           : searchStrategy === 'openchat-custom'
-            ? (this.webSearchService.getEngineName())
+            ? searchEngine
             : 'none'
       console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', searchStrategy, engineLabel)
+
+      // 自定义 Provider 时切换到当前会话的搜索引擎偏好
+      const prevEngine = this.webSearchService.getEngineName()
+      if (searchStrategy === 'openchat-custom' && searchEngine !== prevEngine) {
+        this.webSearchService.setEngine(getSearchEngine(searchEngine), searchEngine)
+      }
 
       switch (searchStrategy) {
         case 'codex-hosted':
@@ -731,7 +747,9 @@ export class ChatGPTConversationService {
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
 
-    const controller = new ToolLoopController(adapter, this.toolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId })
+    const controller = new ToolLoopController(adapter, this.toolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
+      maxRounds: this.webSearchConfig.maxToolRounds,
+    })
 
     const callbacks: ToolLoopCallbacks = {
       onToolCall: (toolCall: CanonicalToolCall) => {
@@ -1125,7 +1143,9 @@ export class ChatGPTConversationService {
     )
     standaloneToolRegistry.register('run', webRunTool)
 
-    const controller = new ToolLoopController(adapter, standaloneToolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId })
+    const controller = new ToolLoopController(adapter, standaloneToolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
+      maxRounds: this.webSearchConfig.maxToolRounds,
+    })
 
     const callbacks: ToolLoopCallbacks = {
       onToolCall: (toolCall: CanonicalToolCall) => {
@@ -1920,6 +1940,16 @@ User message: ${userText}${contextHint}`
   async updateCodexSearchMode(id: string, mode: 'hosted' | 'standalone'): Promise<void> {
     this.conversations.updateCodexSearchMode(id, mode)
     await this.storage.save()
+  }
+
+  async updateSearchEngine(id: string, engine: 'bing' | 'baidu' | 'google'): Promise<void> {
+    this.conversations.updateSearchEngine(id, engine)
+    await this.storage.save()
+  }
+
+  updateWebSearchConfig(config: WebSearchConfig): void {
+    this.webSearchConfig = config
+    this.webSearchService.setMaxResults(config.maxResults)
   }
 
   async updateProviderConfig(id: string, providerConfigId: string | null): Promise<void> {

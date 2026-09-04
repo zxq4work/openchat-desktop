@@ -797,6 +797,11 @@ textarea {
   scrollbar-width: none;
 }
 
+.message-thinking-live-text--active {
+  max-height: none;
+  overflow-y: visible;
+}
+
 .message-thinking-live-text::-webkit-scrollbar {
   display: none;
 }
@@ -1984,6 +1989,56 @@ textarea {
   color: var(--text-muted);
   margin-top: 6px;
   line-height: 1.5;
+}
+
+.search-config-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 240px;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.search-config-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-color);
+  outline: none;
+  cursor: pointer;
+}
+
+.search-config-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.search-config-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.search-config-slider-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  min-width: 20px;
+  text-align: right;
 }
 
 /* ========================================

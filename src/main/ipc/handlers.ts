@@ -10,7 +10,8 @@ import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredent
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
 import type { CodexUsageView } from '../../shared/types/usage'
 import type { CustomProviderConfig } from '../../shared/types/provider'
-import type { WebSearchEngineType } from '../../shared/types/settings'
+import type { WebSearchEngineType, WebSearchConfig } from '../../shared/types/settings'
+import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { getSearchEngine } from '../web-search/SearchEngineFactory'
 import type { SearchEngine } from '../web-search/WebSearchService'
 import { googleSearchBrowser } from '../web-search/GoogleSearchBrowserService'
@@ -45,7 +46,7 @@ interface Services {
   conversationService: {
     listConversations: () => Conversation[]
     getConversation: (id: string) => { conversation: Conversation; segments: ContextSegment[]; messages: Message[] } | null
-    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null, webSearchEnabled?: boolean) => Conversation
+    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google') => Conversation
     renameConversation: (id: string, title: string) => void
     removeConversation: (id: string) => Promise<void>
     removeAllConversations: () => Promise<void>
@@ -55,6 +56,8 @@ interface Services {
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
     updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') => Promise<void>
+    updateSearchEngine: (id: string, engine: 'bing' | 'baidu' | 'google') => Promise<void>
+    updateWebSearchConfig: (config: WebSearchConfig) => void
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message } | null>
@@ -63,7 +66,13 @@ interface Services {
   } | null
   credentialManager: OAuthCredentialManager | null
   usageService: ChatGPTUsageService | null
-  webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine, engineName?: string) => void; getEngineName: () => string } | null
+  webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine, engineName?: string) => void; getEngineName: () => string; setMaxResults: (n: number) => void } | null
+  webSearchConfig: WebSearchConfig | null
+}
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.max(min, Math.min(max, Math.round(value)))
 }
 
 async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
@@ -204,6 +213,31 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     }
   })
 
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_WEB_SEARCH_CONFIG, (): WebSearchConfig => {
+    const raw = services.settingsRepository?.get('web_search_config') ?? null
+    if (!raw) return { ...DEFAULT_WEB_SEARCH_CONFIG }
+    try {
+      const parsed = JSON.parse(raw) as Partial<WebSearchConfig>
+      return {
+        maxResults: clampInt(parsed.maxResults, 3, 20, DEFAULT_WEB_SEARCH_CONFIG.maxResults),
+        maxToolRounds: clampInt(parsed.maxToolRounds, 2, 10, DEFAULT_WEB_SEARCH_CONFIG.maxToolRounds),
+      }
+    } catch {
+      return { ...DEFAULT_WEB_SEARCH_CONFIG }
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_WEB_SEARCH_CONFIG, (_event, config: WebSearchConfig): void => {
+    const normalized: WebSearchConfig = {
+      maxResults: clampInt(config?.maxResults, 3, 20, DEFAULT_WEB_SEARCH_CONFIG.maxResults),
+      maxToolRounds: clampInt(config?.maxToolRounds, 2, 10, DEFAULT_WEB_SEARCH_CONFIG.maxToolRounds),
+    }
+    services.settingsRepository?.set('web_search_config', JSON.stringify(normalized))
+    // 同步到运行时 WebSearchService 与 ToolLoop 默认值
+    services.webSearchConfig = normalized
+    services.conversationService?.updateWebSearchConfig(normalized)
+  })
+
   // ===== Composer drafts =====
   ipcMain.handle(IPC_CHANNELS.DRAFT_GET, (_event, conversationId: string): string | null => {
     return services.settingsRepository?.get(`draft_${conversationId}`) ?? null
@@ -271,8 +305,8 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     return services.conversationService?.getConversation(id) ?? null
   })
 
-  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean): Conversation | null => {
-    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId, webSearchEnabled) ?? null
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google'): Conversation | null => {
+    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine) ?? null
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_RENAME, (_event, id: string, title: string): void => {
@@ -316,6 +350,10 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE, async (_event, id: string, mode: 'hosted' | 'standalone'): Promise<void> => {
     await services.conversationService?.updateCodexSearchMode(id, mode)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_SEARCH_ENGINE, async (_event, id: string, engine: 'bing' | 'baidu' | 'google'): Promise<void> => {
+    await services.conversationService?.updateSearchEngine(id, engine)
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, (_event, id: string): ContextSegment | null => {

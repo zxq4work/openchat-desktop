@@ -14,6 +14,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   const [summaryExpanded, setSummaryExpanded] = useState(false)
   const [searchExpanded, setSearchExpanded] = useState(false)
   const liveTextRef = useRef<HTMLDivElement>(null)
+  // 流式结束前，思考内容始终展开，不允许折叠切换
+  const summaryExpandedEffective = isStreaming ? true : summaryExpanded
 
   const webSearch = streamState.webSearchStatus
   const showWebSearch = isStreaming && webSearch.active && webSearch.callId !== null
@@ -70,8 +72,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
         <div className="message-thinking">
           <div
             className="message-thinking-header"
-            onClick={() => hasSummary && setSummaryExpanded(!summaryExpanded)}
-            style={hasSummary ? { cursor: 'pointer' } : undefined}
+            onClick={() => !isStreaming && hasSummary && setSummaryExpanded(!summaryExpanded)}
+            style={hasSummary && !isStreaming ? { cursor: 'pointer' } : undefined}
           >
             <span className="message-thinking-icon">
               {thinkingActive ? '\u25CF' : '\u2713'}
@@ -85,7 +87,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             {hasSummary && (
               <span className="message-thinking-arrow">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  {summaryExpanded ? (
+                  {summaryExpandedEffective ? (
                     <path d="M3 5L6 8L9 5" />
                   ) : (
                     <path d="M5 3L8 6L5 9" />
@@ -94,14 +96,17 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
               </span>
             )}
           </div>
-          {/* 思考中：实时展示思考内容（始终展开） */}
+          {/* 思考中：实时展示思考内容（始终展开），无 max-height 限制，由外层消息列表控制滚动 */}
           {thinkingActive && reasoningLiveText && (
             <div className="message-thinking-content">
-              <div className="message-thinking-live-text" ref={liveTextRef}>{reasoningLiveText}</div>
+              <div
+                className="message-thinking-live-text message-thinking-live-text--active"
+                ref={liveTextRef}
+              >{reasoningLiveText}</div>
             </div>
           )}
-          {/* 思考结束：折叠为推理摘要，点击展开 */}
-          {!thinkingActive && hasSummary && summaryExpanded && (
+          {/* 思考结束：折叠为推理摘要，点击展开；流式期间始终展开 */}
+          {!thinkingActive && hasSummary && summaryExpandedEffective && (
             <div className="message-thinking-content">
               <div className="message-thinking-summary-title">推理摘要</div>
               <div className="message-thinking-summary-content">

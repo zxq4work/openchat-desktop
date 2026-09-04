@@ -26,6 +26,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_USE_MODEL_INSTRUCTIONS: 'conversations:update-use-model-instructions',
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
+  CONVERSATIONS_UPDATE_SEARCH_ENGINE: 'conversations:update-search-engine',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
 
   // Chat
@@ -59,6 +60,8 @@ export const IPC_CHANNELS = {
   SETTINGS_SET_DEFAULT_WEB_SEARCH: 'settings:set-default-web-search',
   SETTINGS_GET_WEB_SEARCH_ENGINE: 'settings:get-web-search-engine',
   SETTINGS_SET_WEB_SEARCH_ENGINE: 'settings:set-web-search-engine',
+  SETTINGS_GET_WEB_SEARCH_CONFIG: 'settings:get-web-search-config',
+  SETTINGS_SET_WEB_SEARCH_CONFIG: 'settings:set-web-search-config',
 
   // Composer draft (per conversation)
   DRAFT_GET: 'draft:get',

@@ -11,7 +11,6 @@ interface CacheEntry {
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const EMPTY_CACHE_TTL_MS = 30 * 1000
-const MAX_RESULTS = 10
 const MAX_SNIPPET_LENGTH = 150
 
 function normalizeQuery(query: string): string {
@@ -22,16 +21,22 @@ export class WebSearchService {
   private engine: SearchEngine
   private engineName: string
   private cache: Map<string, CacheEntry> = new Map()
+  private maxResults: number
 
-  constructor(engine: SearchEngine, engineName = 'unknown') {
+  constructor(engine: SearchEngine, engineName = 'unknown', maxResults = 10) {
     this.engine = engine
     this.engineName = engineName
+    this.maxResults = maxResults
   }
 
   setEngine(engine: SearchEngine, engineName?: string): void {
     this.engine = engine
     if (engineName) this.engineName = engineName
     this.cache.clear()
+  }
+
+  setMaxResults(n: number): void {
+    this.maxResults = Math.max(1, Math.min(50, Math.round(n)))
   }
 
   getEngineName(): string {
@@ -47,7 +52,7 @@ export class WebSearchService {
 
     try {
       const raw = await this.engine.search(query, signal)
-      const results = raw.slice(0, MAX_RESULTS).map((r, i) => ({
+      const results = raw.slice(0, this.maxResults).map((r, i) => ({
         index: i + 1,
         title: r.title,
         url: r.url,

@@ -37,7 +37,8 @@ import { WebSearchTool } from '../tools/WebSearchTool'
 import { WebFetchTool } from '../tools/WebFetchTool'
 import { WebSearchService } from '../web-search/WebSearchService'
 import { getSearchEngine } from '../web-search/SearchEngineFactory'
-import type { WebSearchEngineType } from '../../shared/types/settings'
+import type { WebSearchEngineType, WebSearchConfig } from '../../shared/types/settings'
+import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
@@ -73,6 +74,7 @@ const services = {
   webFetchService: null as WebFetchService | null,
   providerConfigRepository: null as ProviderConfigRepository | null,
   providerConfigService: null as ProviderConfigService | null,
+  webSearchConfig: null as WebSearchConfig | null,
 }
 
 function getAppServerMode(): AppServerMode {
@@ -174,7 +176,22 @@ async function initializeChatGPTProvider(): Promise<void> {
   // 读取持久化的搜索引擎设置，默认 bing
   const rawEngine = settingsRepo.get('web_search_engine')
   const engineType: WebSearchEngineType = rawEngine === 'baidu' || rawEngine === 'bing' || rawEngine === 'google' ? rawEngine : 'bing'
-  const webSearchService = new WebSearchService(getSearchEngine(engineType), engineType)
+
+  // 读取持久化的搜索配置（最大结果数、最大工具轮数）
+  const rawSearchConfig = settingsRepo.get('web_search_config')
+  let webSearchConfig: WebSearchConfig = { ...DEFAULT_WEB_SEARCH_CONFIG }
+  if (rawSearchConfig) {
+    try {
+      const parsed = JSON.parse(rawSearchConfig) as Partial<WebSearchConfig>
+      webSearchConfig = {
+        maxResults: typeof parsed.maxResults === 'number' ? parsed.maxResults : DEFAULT_WEB_SEARCH_CONFIG.maxResults,
+        maxToolRounds: typeof parsed.maxToolRounds === 'number' ? parsed.maxToolRounds : DEFAULT_WEB_SEARCH_CONFIG.maxToolRounds,
+      }
+    } catch { /* keep default */ }
+  }
+  services.webSearchConfig = webSearchConfig
+
+  const webSearchService = new WebSearchService(getSearchEngine(engineType), engineType, webSearchConfig.maxResults)
   const webFetchService = new WebFetchService()
   toolRegistry.register('openchat_web_search', new WebSearchTool(webSearchService))
   toolRegistry.register('openchat_web_fetch', new WebFetchTool(webFetchService))
@@ -195,7 +212,8 @@ async function initializeChatGPTProvider(): Promise<void> {
     usageService,
     toolRegistry,
     webSearchService,
-    providerConfigService
+    providerConfigService,
+    webSearchConfig
   )
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
 

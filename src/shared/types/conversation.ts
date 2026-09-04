@@ -9,6 +9,7 @@ export interface Conversation {
   useModelInstructions: boolean
   webSearchEnabled: boolean
   codexSearchMode: 'hosted' | 'standalone'
+  searchEngine: 'bing' | 'baidu' | 'google'
   providerConfigId: string | null
   createdAt: number
   updatedAt: number

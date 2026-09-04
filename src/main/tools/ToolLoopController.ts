@@ -13,6 +13,11 @@ const MAX_WEB_SEARCH_CALLS_PER_TURN = 10
 const MAX_WEB_FETCH_CALLS_PER_TURN = 10
 const MAX_WEB_RUN_CALLS_PER_TURN = 10
 
+export interface ToolLoopConfig {
+  maxRounds?: number
+  maxSearchCalls?: number
+}
+
 export interface ToolLoopCallbacks {
   onToolCall: (toolCall: CanonicalToolCall) => void
   onToolResult: (callId: string, toolName: string, success: boolean, rawResults?: unknown[], errorOutput?: string) => void
@@ -48,12 +53,14 @@ export class ToolLoopController {
   private toolRegistry: ToolRegistry
   private toolExclude: string[]
   private executionContext: ToolExecutionContext
+  private config: ToolLoopConfig
 
-  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry, toolExclude?: string[], executionContext?: ToolExecutionContext) {
+  constructor(adapter: ModelAdapter, toolRegistry: ToolRegistry, toolExclude?: string[], executionContext?: ToolExecutionContext, config?: ToolLoopConfig) {
     this.adapter = adapter
     this.toolRegistry = toolRegistry
     this.toolExclude = toolExclude ?? []
     this.executionContext = executionContext ?? {}
+    this.config = config ?? {}
   }
 
   async run(
@@ -74,8 +81,11 @@ export class ToolLoopController {
 
     let messages: CanonicalMessage[] = initialRequest.messages.slice()
     let round = 0
+    const maxRounds = this.config.maxRounds ?? MAX_TOOL_ROUNDS
+    this.config.maxRounds = maxRounds
+    this.config.maxSearchCalls = this.config.maxSearchCalls ?? MAX_WEB_SEARCH_CALLS_PER_TURN
 
-    while (round <= MAX_TOOL_ROUNDS) {
+    while (round <= maxRounds) {
       if (signal.aborted) break
 
       const registryTools = this.toolRegistry.getDefinitions(this.toolExclude)
@@ -197,8 +207,8 @@ export class ToolLoopController {
       }
 
       // 已达最大轮数：追加提示消息强制模型输出最终回答，不依赖 tool_choice:'none'（部分模型忽略此参数）
-      if (round >= MAX_TOOL_ROUNDS) {
-        console.log('[ToolLoop] Reached MAX_TOOL_ROUNDS, sending wrap-up request')
+      if (round >= maxRounds) {
+        console.log('[ToolLoop] Reached maxRounds=%d, sending wrap-up request', maxRounds)
         messages.push({
           role: 'user',
           content: 'Please provide your final answer now based on the search results above. Do not use any tools.',
@@ -278,7 +288,7 @@ export class ToolLoopController {
           callbacks.onToolResult(tc.id, tc.name, false, undefined, skippedResult.output)
           continue
         }
-        if (searchCallCount > MAX_WEB_SEARCH_CALLS_PER_TURN) {
+        if (searchCallCount > (this.config.maxSearchCalls ?? MAX_WEB_SEARCH_CALLS_PER_TURN)) {
           console.log('[ToolLoop] Max web_search calls reached')
           const skippedResult: CanonicalToolResult = {
             callId: tc.id,
