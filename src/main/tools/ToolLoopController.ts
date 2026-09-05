@@ -78,6 +78,7 @@ export class ToolLoopController {
     let webRunCallCount = 0
     const executedQueries = new Set<string>()
     let searchProviderChallenge = false
+    let searchFailed = false
 
     let messages: CanonicalMessage[] = initialRequest.messages.slice()
     let round = 0
@@ -179,13 +180,19 @@ export class ToolLoopController {
         signal,
         callbacks,
         toolCallHistory,
-        searchProviderChallenge
+        searchProviderChallenge,
+        searchFailed
       )
       totalToolCalls += toolCalls.length
 
       // 检测到搜索引擎验证，后续轮次不再搜索
       if (!searchProviderChallenge && toolResults.some((tr) => tr.isError && tr.output.includes('SEARCH_PROVIDER_CHALLENGE'))) {
         searchProviderChallenge = true
+      }
+
+      // 搜索一旦失败（超时、限流、JS错误等），后续轮次不再重试搜索
+      if (!searchFailed && toolResults.some((tr) => tr.isError && tr.name === 'openchat_web_search')) {
+        searchFailed = true
       }
 
       if (signal.aborted) break
@@ -269,7 +276,8 @@ export class ToolLoopController {
     signal: AbortSignal,
     callbacks: ToolLoopCallbacks,
     toolCallHistory: ToolCallHistoryEntry[],
-    searchProviderChallenge: boolean
+    searchProviderChallenge: boolean,
+    searchFailed: boolean
   ): Promise<CanonicalToolResult[]> {
     const toolResults: CanonicalToolResult[] = []
 
@@ -282,6 +290,18 @@ export class ToolLoopController {
             callId: tc.id,
             name: tc.name,
             output: JSON.stringify({ error: 'SEARCH_PROVIDER_CHALLENGE', message: '搜索已被禁用，当前网络环境触发搜索引擎验证' }),
+            isError: true,
+          }
+          toolResults.push(skippedResult)
+          callbacks.onToolResult(tc.id, tc.name, false, undefined, skippedResult.output)
+          continue
+        }
+        if (searchFailed) {
+          console.log('[ToolLoop] Skipping web_search due to previous failure')
+          const skippedResult: CanonicalToolResult = {
+            callId: tc.id,
+            name: tc.name,
+            output: JSON.stringify({ error: 'SEARCH_FAILED', message: '搜索已失败，后续轮次不再重试' }),
             isError: true,
           }
           toolResults.push(skippedResult)
@@ -412,7 +432,8 @@ export class ToolLoopController {
         if (result.isError) {
           try {
             const parsed = JSON.parse(result.output) as Record<string, unknown>
-            errorOutput = (parsed.message as string) || (parsed.error as string) || result.output
+            // 优先使用 error code，确保 guard 检查能匹配（如 SEARCH_TIMEOUT、TOOL_LIMIT_EXCEEDED）
+            errorOutput = (parsed.error as string) || (parsed.message as string) || result.output
           } catch {
             errorOutput = result.output
           }

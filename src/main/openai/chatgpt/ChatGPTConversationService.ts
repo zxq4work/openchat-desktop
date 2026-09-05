@@ -784,8 +784,8 @@ export class ChatGPTConversationService {
             webSearchResults: rawResults,
           })
         } else {
-          // 超限/重复查询是护栏拦截，不是真正的搜索失败，不提示用户
-          if (errorOutput && (errorOutput.includes('TOOL_LIMIT_EXCEEDED') || errorOutput.includes('DUPLICATE_QUERY'))) {
+          // 超限/重复查询/搜索失败跳过是护栏拦截，不是真正的搜索失败，不提示用户
+          if (errorOutput && (errorOutput.includes('TOOL_LIMIT_EXCEEDED') || errorOutput.includes('DUPLICATE_QUERY') || errorOutput.includes('SEARCH_FAILED'))) {
             return
           }
           let userMessage = errorOutput ?? '搜索失败'
