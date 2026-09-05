@@ -21,7 +21,7 @@ mac:
   icon: icon.icns
   target:
     - dmg
-    - zip
+    # - zip
   artifactName: ${productName}-${version}-mac.${ext}
   category: public.app-category.productivity
 

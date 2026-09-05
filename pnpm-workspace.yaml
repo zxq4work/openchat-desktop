@@ -1,4 +1,2 @@
-allowBuilds:
-  electron: true
-  esbuild: true
-saveExact: true
+packages:
+  - '.'

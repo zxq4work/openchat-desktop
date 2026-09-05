@@ -17,14 +17,14 @@
     "test:watch": "vitest",
     "start": "electron .",
     "prepackage": "npm run build",
-    "package": "electron-builder",
-    "package:win": "npm run build && electron-builder --win",
-    "package:win:nsis": "npm run build && electron-builder --win nsis",
-    "package:win:portable": "npm run build && electron-builder --win portable",
-    "package:win:portable:legacy-mac": "npm run build && node scripts/package-win-portable-legacy-mac.js",
-    "package:win:zip": "npm run build && electron-builder --win zip",
-    "package:mac": "npm run build && electron-builder --mac",
-    "package:linux": "npm run build && electron-builder --linux"
+    "package": "node scripts/check-pnpm.js && electron-builder",
+    "package:win": "node scripts/check-pnpm.js && npm run build && electron-builder --win",
+    "package:win:nsis": "node scripts/check-pnpm.js && npm run build && electron-builder --win nsis",
+    "package:win:portable": "node scripts/check-pnpm.js && npm run build && electron-builder --win portable",
+    "package:win:portable:legacy-mac": "node scripts/check-pnpm.js && npm run build && node scripts/package-win-portable-legacy-mac.js",
+    "package:win:zip": "node scripts/check-pnpm.js && npm run build && electron-builder --win zip",
+    "package:mac": "node scripts/check-pnpm.js && npm run build && electron-builder --mac",
+    "package:linux": "node scripts/check-pnpm.js && npm run build && electron-builder --linux"
   },
   "dependencies": {
     "cheerio": "1.0.0-rc.12",
@@ -57,5 +57,9 @@
   "engines": {
     "node": "16.17.1",
     "npm": "8.15.0"
+  },
+  "packageManager": "pnpm@10.15.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
   }
 }
