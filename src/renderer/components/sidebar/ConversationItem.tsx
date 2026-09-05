@@ -88,7 +88,11 @@ export function ConversationItem({ summary, active }: Props) {
           onClick={handleMenu}
           title="更多操作"
         >
-          ⋮
+          <svg width="4" height="16" viewBox="0 0 4 16" fill="currentColor" aria-hidden="true">
+            <circle cx="2" cy="3" r="1.25" />
+            <circle cx="2" cy="8" r="1.25" />
+            <circle cx="2" cy="13" r="1.25" />
+          </svg>
         </button>
         {menuOpen && (
           <div className="conversation-dropdown">
