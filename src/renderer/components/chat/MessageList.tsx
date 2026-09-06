@@ -54,7 +54,7 @@ export function MessageList() {
   useEffect(() => {
     pinnedRef.current = true
     scrollToBottom()
-  }, [messages.length, segments.length])
+  }, [messages, segments.length])
 
   // 监听用户滚动，判断是否贴底
   useEffect(() => {

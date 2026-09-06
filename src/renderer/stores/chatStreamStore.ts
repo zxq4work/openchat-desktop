@@ -24,6 +24,8 @@ interface ChatStreamState {
   reasoningElapsedSeconds: number
   reasoningText: string
   error: string | null
+  errorCode: string | null
+  errorMessage: string | null
   webSearchStatus: WebSearchStatus
 
   setStatus: (status: StreamStatus) => void
@@ -37,6 +39,7 @@ interface ChatStreamState {
   setReasoningElapsedSeconds: (seconds: number) => void
   setReasoningText: (text: string) => void
   setError: (error: string | null) => void
+  setStreamError: (code: string | null, message: string | null) => void
   setWebSearchStatus: (status: Partial<WebSearchStatus>) => void
   reset: () => void
 }
@@ -53,6 +56,8 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   reasoningElapsedSeconds: 0,
   reasoningText: '',
   error: null,
+  errorCode: null,
+  errorMessage: null,
   webSearchStatus: { active: false, callId: null, toolName: null, query: null, error: null, results: [] },
 
   setStatus: (status) => set({ status }),
@@ -66,6 +71,7 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   setReasoningElapsedSeconds: (seconds) => set({ reasoningElapsedSeconds: seconds }),
   setReasoningText: (text) => set({ reasoningText: text }),
   setError: (error) => set({ error }),
+  setStreamError: (errorCode, errorMessage) => set({ errorCode, errorMessage }),
   setWebSearchStatus: (status) => set((s) => ({ webSearchStatus: { ...s.webSearchStatus, ...status } })),
   reset: () =>
     set({
@@ -80,6 +86,8 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
       reasoningElapsedSeconds: 0,
       reasoningText: '',
       error: null,
+      errorCode: null,
+      errorMessage: null,
       webSearchStatus: { active: false, callId: null, toolName: null, query: null, error: null, results: [] },
     }),
 }))

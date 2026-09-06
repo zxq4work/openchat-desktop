@@ -492,20 +492,26 @@ export class ChatGPTConversationService {
     }
     console.log('[SendMessage] SET activeGeneration assistantMessageId=%s', assistantMessage.id)
 
-    void this.runGeneration(
-      conversationId,
-      segment.systemPromptSnapshot,
-      conversation.useModelInstructions,
-      modelId,
-      effortValue,
-      assistantMessage.id,
-      text,
-      conversation.providerConfigId,
-      abortController,
-      conversation.webSearchEnabled,
-      conversation.codexSearchMode,
-      conversation.searchEngine
-    )
+    // 延迟到下一个宏任务执行 runGeneration，确保 sendMessage 的 IPC 响应
+    // 先于错误事件到达渲染进程。否则当 runGeneration 同步抛出（如 Invalid URL）
+    // 时，渲染进程会先收到 error 事件，此时 activeMessages 尚未追加消息，
+    // onChatError 找不到 assistant 消息而跳过状态更新，导致 UI 一直显示"生成中..."
+    setImmediate(() => {
+      void this.runGeneration(
+        conversationId,
+        segment.systemPromptSnapshot,
+        conversation.useModelInstructions,
+        modelId,
+        effortValue,
+        assistantMessage.id,
+        text,
+        conversation.providerConfigId,
+        abortController,
+        conversation.webSearchEnabled,
+        conversation.codexSearchMode,
+        conversation.searchEngine
+      )
+    })
 
     return { userMessage, assistantMessage }
   }

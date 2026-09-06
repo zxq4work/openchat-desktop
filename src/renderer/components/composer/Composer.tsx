@@ -106,6 +106,7 @@ export function Composer() {
 
     // 清除上一个请求的残留错误
     setError(null)
+    useChatStreamStore.getState().setStreamError(null, null)
 
     const conversationId = activeConversation.id
     const messageText = text.trim()
@@ -129,18 +130,36 @@ export function Composer() {
 
     try {
       const result = await window.openchat.chat.send(conversationId, messageText)
-      console.log('[Composer] chat.send resolved, before setStatus=streaming, current status=%s streamingId=%s', useChatStreamStore.getState().status, useChatStreamStore.getState().streamingConversationId)
-      setStatus('streaming')
-      // 立即把 user/assistant 消息追加到 activeMessages，并设置 activeAssistantMessageId，
-      // 保证旧会话（消息多、get 慢）下流式事件到达时组件已就绪，无需等 conversations.get 返回
+      const streamState = useChatStreamStore.getState()
+      console.log('[Composer] chat.send resolved, status=%s streamingId=%s pendingError=%s', streamState.status, streamState.streamingConversationId, streamState.errorCode ?? 'null')
+
       if (result) {
+        // 若错误已在 await 期间到达（同步 IPC 回调优先于 microtask），
+        // 在追加前就把错误应用到 assistant 消息，确保一次性渲染 + 正确滚动
+        const assistantMsg = (streamState.errorCode || streamState.errorMessage)
+          ? {
+              ...result.assistantMessage,
+              status: 'failed' as const,
+              errorCode: streamState.errorCode,
+              errorMessage: streamState.errorMessage,
+            }
+          : result.assistantMessage
+
         useConversationStore.getState().setActiveMessages([
           ...useConversationStore.getState().activeMessages,
           result.userMessage,
-          result.assistantMessage,
+          assistantMsg,
         ])
-        setActiveAssistantMessage(result.assistantMessage.id)
+        setActiveAssistantMessage(assistantMsg.id)
       }
+
+      if (streamState.errorCode || streamState.errorMessage) {
+        useChatStreamStore.getState().setStreamError(null, null)
+        return
+      }
+
+      // 无错误，正常进入 streaming
+      setStatus('streaming')
 
       // 只刷新侧边栏列表（会话标题可能已更新）
       // 注意：流式期间不再 conversations.get 全量刷新，避免旧会话大消息列表

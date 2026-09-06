@@ -370,7 +370,8 @@ export function App() {
       if (eventConvId && eventConvId !== activeConvId) {
         console.log('[App chat-error] SKIP message update: event conv %s != active conv %s', eventConvId, activeConvId)
       } else {
-        // 标记最后一条 assistant 消息为失败，不重新加载消息列表（避免竞态抖动）
+        // 标记当前进行中的 assistant 消息为失败（status 为 pending 的才属于本次发送，
+        // 避免把历史已 completed 的消息误标为 failed）
         const messages = useConversationStore.getState().activeMessages
         const lastAssistantIdx = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -378,7 +379,7 @@ export function App() {
           }
           return -1
         })()
-        if (lastAssistantIdx >= 0) {
+        if (lastAssistantIdx >= 0 && messages[lastAssistantIdx].status !== 'completed' && messages[lastAssistantIdx].status !== 'failed') {
           const updated = [...messages]
           updated[lastAssistantIdx] = {
             ...updated[lastAssistantIdx],
@@ -389,6 +390,13 @@ export function App() {
           useConversationStore.getState().setActiveMessages(updated)
         }
       }
+
+      // 始终暂存错误信息到 store：当错误事件先于消息追加（handleSend 的 await 续体
+      // 是 microtask，晚于同步的 IPC 事件回调）时，handleSend 恢复后据此标记新消息
+      useChatStreamStore.getState().setStreamError(
+        e.errorCode ?? 'StreamFailed',
+        e.errorMessage ?? 'Unknown error'
+      )
 
       // 只清除流式状态，不 reset（保留 webSearchStatus 等）
       useChatStreamStore.getState().setStatus('idle')
