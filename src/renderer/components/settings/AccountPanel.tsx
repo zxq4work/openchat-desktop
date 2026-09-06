@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useAuthStore } from '../../stores/authStore'
 import { useCodexUsageStore } from '../../stores/codexUsageStore'
 import type { CodexUsageView } from '../../../shared/types/usage'
@@ -57,7 +57,14 @@ function renderUsageSection(
     return (
       <div className="usage-summary">
         <span className="usage-label">Codex</span>
-        <span className="usage-state-unavailable">状态未知</span>
+        <span className="usage-state-unavailable">{refreshing ? '查询中...' : '状态未知'}</span>
+        <button
+          className="usage-refresh-btn"
+          onClick={onRefresh}
+          disabled={refreshing}
+        >
+          {refreshing ? '刷新中...' : '刷新'}
+        </button>
       </div>
     )
   }
@@ -195,6 +202,15 @@ export function AccountPanel() {
       setRefreshing(false)
     }
   }
+
+  // 打开设置界面时，若之前因网络问题未获取到用量数据，自动重试一次
+  useEffect(() => {
+    const state = useCodexUsageStore.getState().usage.state
+    if (state === 'unavailable') {
+      void handleRefreshUsage()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleLogin = async () => {
     setStatus('logging-in')

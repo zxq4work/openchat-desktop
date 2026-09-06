@@ -4,6 +4,7 @@ import { createRequest } from '../httpsClient'
 import type { ChatGPTUsageResponse } from '../../../../shared/types/usage'
 
 const BASE_URL = 'https://chatgpt.com'
+const REQUEST_TIMEOUT_MS = 10_000
 
 /**
  * 负责 GET /backend-api/wham/usage
@@ -106,7 +107,15 @@ export class ChatGPTUsageClient {
         }
       )
 
+      let cleaned = false
       let abortHandler: (() => void) | null = null
+
+      const timeoutId = setTimeout(() => {
+        cleanup()
+        request.destroy(new Error('Request timed out'))
+        reject(new Error('Request timed out'))
+      }, REQUEST_TIMEOUT_MS)
+
       if (signal) {
         if (signal.aborted) {
           reject(new Error('Aborted'))
@@ -120,6 +129,9 @@ export class ChatGPTUsageClient {
       }
 
       const cleanup = () => {
+        if (cleaned) return
+        cleaned = true
+        clearTimeout(timeoutId)
         if (abortHandler && signal) {
           signal.removeEventListener('abort', abortHandler)
           abortHandler = null
