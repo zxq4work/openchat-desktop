@@ -11,6 +11,7 @@ interface UiState {
   sidebarCollapsed: boolean
   settingsDialogOpen: boolean
   conversationSettingsOpen: boolean
+  conversationSettingsTargetId: string | null
   modelPickerOpen: boolean
   effortPickerOpen: boolean
   searchVisible: boolean
@@ -26,6 +27,7 @@ interface UiState {
   clearToast: () => void
   setSettingsDialogOpen: (open: boolean) => void
   setConversationSettingsOpen: (open: boolean) => void
+  setConversationSettingsTargetId: (id: string | null) => void
   setModelPickerOpen: (open: boolean) => void
   setEffortPickerOpen: (open: boolean) => void
   openSearch: () => void
@@ -41,6 +43,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   sidebarCollapsed: false,
   settingsDialogOpen: false,
   conversationSettingsOpen: false,
+  conversationSettingsTargetId: null,
   modelPickerOpen: false,
   effortPickerOpen: false,
   searchVisible: false,
@@ -56,6 +59,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   clearToast: () => set({ toast: null }),
   setSettingsDialogOpen: (open) => set({ settingsDialogOpen: open }),
   setConversationSettingsOpen: (open) => set({ conversationSettingsOpen: open }),
+  setConversationSettingsTargetId: (id) => set({ conversationSettingsTargetId: id }),
   setModelPickerOpen: (open) => set({ modelPickerOpen: open }),
   setEffortPickerOpen: (open) => set({ effortPickerOpen: open }),
 

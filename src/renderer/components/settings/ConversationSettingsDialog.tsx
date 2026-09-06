@@ -1,27 +1,43 @@
 import React, { useState, useEffect } from 'react'
+import type { Conversation } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useDialogStack } from '../../hooks/useDialogStack'
 
 export function ConversationSettingsDialog() {
-  const conversation = useConversationStore((s) => s.activeConversation)
+  const targetId = useUiStore((s) => s.conversationSettingsTargetId)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation)
   const setSummaries = useConversationStore((s) => s.setSummaries)
   const setConversationSettingsOpen = useUiStore((s) => s.setConversationSettingsOpen)
 
   useDialogStack(() => setConversationSettingsOpen(false))
 
-  const [title, setTitle] = useState(conversation?.title ?? '')
-  const [role, setRole] = useState(conversation?.systemPrompt ?? '')
-  const [useModelInstructions, setUseModelInstructions] = useState(conversation?.useModelInstructions ?? true)
+  const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [title, setTitle] = useState('')
+  const [role, setRole] = useState('')
+  const [useModelInstructions, setUseModelInstructions] = useState(true)
 
   useEffect(() => {
-    if (conversation) {
-      setTitle(conversation.title ?? '')
-      setRole(conversation.systemPrompt ?? '')
-      setUseModelInstructions(conversation.useModelInstructions ?? true)
+    if (!targetId) return
+    // 如果是当前激活的会话，数据已在 store 中，无需查询
+    const activeConv = useConversationStore.getState().activeConversation
+    if (activeConv && activeConv.id === targetId) {
+      setConversation(activeConv)
+      setTitle(activeConv.title ?? '')
+      setRole(activeConv.systemPrompt ?? '')
+      setUseModelInstructions(activeConv.useModelInstructions ?? true)
+      return
     }
-  }, [conversation?.id])
+    window.openchat.conversations.get(targetId).then((data) => {
+      if (data) {
+        setConversation(data.conversation)
+        setTitle(data.conversation.title ?? '')
+        setRole(data.conversation.systemPrompt ?? '')
+        setUseModelInstructions(data.conversation.useModelInstructions ?? true)
+      }
+    })
+  }, [targetId])
 
   const handleSave = async () => {
     if (!conversation) return
@@ -37,17 +53,18 @@ export function ConversationSettingsDialog() {
       await window.openchat.conversations.updateUseModelInstructions(conversation.id, useModelInstructions)
     }
 
-    const data = await window.openchat.conversations.get(conversation.id)
-    if (data) {
-      setActiveConversation(data.conversation)
-      useConversationStore.getState().setActiveSegments(data.segments)
+    // 如果是当前激活的会话，更新 store 中的 conversation 数据
+    if (activeConversationId === conversation.id) {
+      const data = await window.openchat.conversations.get(conversation.id)
+      if (data) {
+        setActiveConversation(data.conversation)
+        useConversationStore.getState().setActiveSegments(data.segments)
+      }
     }
     const list = await window.openchat.conversations.list()
     setSummaries(list)
     setConversationSettingsOpen(false)
   }
-
-  if (!conversation) return null
 
   return (
     <div className="dialog-overlay">

@@ -639,7 +639,7 @@ export function App() {
     <div className="app-container">
       <Sidebar />
       <ChatView />
-      {conversationSettingsOpen && activeConversationId && <ConversationSettingsDialog />}
+      {conversationSettingsOpen && <ConversationSettingsDialog />}
       {settingsDialogOpen && <SettingsDialog />}
       {toast && <div className="toast">{toast}</div>}
     </div>
