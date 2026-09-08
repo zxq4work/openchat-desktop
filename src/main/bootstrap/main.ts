@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain, dialog, nativeTheme } from 'electron'
+import { app, BrowserWindow, Menu, shell, ipcMain, dialog } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
 import { AppServerProcess, AppServerMode } from '../openai/AppServerProcess'
@@ -12,7 +12,7 @@ import { StorageService } from '../storage/StorageService'
 import { SettingsRepository } from '../storage/SettingsRepository'
 import { ConversationService } from '../conversation/ConversationService'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
-import { APP_NAME, APP_TITLE } from '../../shared/constants'
+import { APP_NAME, APP_TITLE, MIN_SPLASH_TOTAL_VISIBLE_MS, SPLASH_FADE_MS } from '../../shared/constants'
 import { registerIpcHandlers } from '../ipc/handlers'
 
 // ChatGPT Direct Provider
@@ -42,12 +42,34 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
-import { createSplashHtml } from '../splash/splash-template'
+import { getBootBackgroundColor } from './BootPreferences'
+
+// ── 启动日志 ──
+const bootStartNs = process.hrtime.bigint()
+function bootMs(): number { return Number((process.hrtime.bigint() - bootStartNs) / BigInt(1_000_000)) }
+function bootLog(msg: string): void { console.log(`[boot +${bootMs()}ms] ${msg}`) }
+
+// ── Splash 参数 ──
+const SPLASH_HOLD_BEFORE_FADE_MS = Math.max(0, MIN_SPLASH_TOTAL_VISIBLE_MS - SPLASH_FADE_MS)
 
 let mainWindow: BrowserWindow | null = null
-let splashWindow: BrowserWindow | null = null
-let splashClosed = false
-let splashShownAt = 0
+let isAppQuitting = false
+
+// ── Splash 状态（每个 MainWindow 生命周期） ──
+let splashShownTs: number | null = null
+let appReadyReceived = false
+let rendererReadyFallbackElapsed = false   // 5s 兜底触发，允许绕过 APP_READY 继续
+let rendererFailed = false                 // renderer 加载失败/crash，禁止结束 Splash
+let servicesReady = false
+let splashFinishScheduled = false
+let splashFinishSent = false
+let splashHoldTimer: ReturnType<typeof setTimeout> | null = null
+let splashFallbackTimer: ReturnType<typeof setTimeout> | null = null
+let useOpacityGate = false                 // 本次 createWindow 是否使用 opacity gate
+let windowShownForOpacityGate = false      // ready-to-show 后 show 已发生（opacity=0）
+let opacityGateRendererReady = false       // renderer 已注册 onWindowShown listener
+let opacityGateReleased = false            // 已 setOpacity(1)，防重复
+let opacityGateWatchdog: ReturnType<typeof setTimeout> | null = null
 
 const services = {
   appServerProcess: null as AppServerProcess | null,
@@ -291,186 +313,273 @@ async function initializeServices(): Promise<void> {
   }
 }
 
-function createSplashWindow(): void {
-  const isDev = !!process.env.VITE_DEV_SERVER_URL
-  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+// ── Splash 状态机 ──
 
-  console.log('[splash] mode:', isDev ? 'development' : 'production')
-  console.log('[splash] theme:', theme)
-
-  splashWindow = new BrowserWindow({
-    width: 400,
-    height: 360,
-    frame: false,
-    resizable: false,
-    center: true,
-    show: false,
-    skipTaskbar: true,
-    backgroundColor: theme === 'dark' ? '#0F172A' : '#F7F8FC',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-
-  // 诊断事件
-  splashWindow.webContents.on(
-    'did-fail-load',
-    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      console.error('[splash] did-fail-load', {
-        errorCode,
-        errorDescription,
-        validatedURL,
-        isMainFrame,
-      })
-    }
-  )
-
-  splashWindow.webContents.on('did-finish-load', () => {
-    console.log('[splash] did-finish-load')
-  })
-
-  splashWindow.webContents.on('dom-ready', () => {
-    console.log('[splash] dom-ready')
-  })
-
-  splashWindow.webContents.on(
-    'console-message',
-    (_event, level, message, line, sourceId) => {
-      console.log('[splash console]', { level, message, line, sourceId })
-    }
-  )
-
-  splashWindow.webContents.on(
-    'render-process-gone',
-    (_event, details) => {
-      console.error('[splash] render-process-gone', details)
-    }
-  )
-
-  splashWindow.once('ready-to-show', () => {
-    splashShownAt = Date.now()
-    splashWindow?.show()
-  })
-
-  const html = createSplashHtml(theme)
-  const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
-
-  splashWindow.loadURL(url).then(() => {
-    console.log('[splash] loadURL success')
-  }).catch((error) => {
-    console.error('[splash] loadURL failed:', error)
-  })
+function clearSplashHoldTimer(): void {
+  if (splashHoldTimer) { clearTimeout(splashHoldTimer); splashHoldTimer = null }
 }
 
-function showMainWindow(): void {
-  if (!mainWindow) return
+function clearSplashFallbackTimer(): void {
+  if (splashFallbackTimer) { clearTimeout(splashFallbackTimer); splashFallbackTimer = null }
+}
 
-  // 主窗口显示与 Splash 关闭同步执行，确保 Splash 完整展示最短 500ms。
-  // 若先 show 主窗口再延迟关闭 Splash，主窗口会立即遮挡 Splash，
-  // 导致 Splash 的 500ms 延迟「看不见」，表现为一闪而过。
-  const finish = () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
+function clearOpacityGateWatchdog(): void {
+  if (opacityGateWatchdog) { clearTimeout(opacityGateWatchdog); opacityGateWatchdog = null }
+}
 
-    if (splashWindow && !splashClosed) {
-      splashClosed = true
-      splashWindow.close()
-      splashWindow = null
-    }
-  }
+function resetSplashBootState(): void {
+  clearSplashHoldTimer()
+  clearSplashFallbackTimer()
+  clearOpacityGateWatchdog()
+  splashShownTs = null
+  appReadyReceived = false
+  rendererReadyFallbackElapsed = false
+  rendererFailed = false
+  // servicesReady 是 App 级状态，services 只初始化一次，不随窗口重置
+  splashFinishScheduled = false
+  splashFinishSent = false
+  useOpacityGate = false
+  windowShownForOpacityGate = false
+  opacityGateRendererReady = false
+  opacityGateReleased = false
+}
 
-  if (splashWindow && !splashClosed) {
-    const elapsed = Date.now() - splashShownAt
-    const minDelay = 500
-    const delay = Math.max(0, minDelay - elapsed)
-    setTimeout(finish, delay)
+function sendFinishSplash(): void {
+  if (splashFinishSent) return
+  if (rendererFailed) return
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+  splashFinishSent = true
+  clearSplashHoldTimer()
+  clearSplashFallbackTimer()
+  clearOpacityGateWatchdog()
+  bootLog('splash finish sent')
+  win.webContents.send(IPC_CHANNELS.BOOT_FINISH_SPLASH)
+}
+
+function tryScheduleSplashFinish(): void {
+  // Renderer 条件：APP_READY 正常到达 OR 5s 兜底已触发
+  if (!appReadyReceived && !rendererReadyFallbackElapsed) return
+  if (rendererFailed) return
+  if (!servicesReady) return
+  if (splashShownTs === null) return
+  if (splashFinishScheduled) return
+
+  const elapsed = performance.now() - splashShownTs
+  const remainingHoldMs = Math.max(0, SPLASH_HOLD_BEFORE_FADE_MS - elapsed)
+
+  splashFinishScheduled = true
+  bootLog(`splash elapsed=${Math.round(elapsed)}ms remainingHold=${Math.round(remainingHoldMs)}ms`)
+
+  if (remainingHoldMs === 0) {
+    sendFinishSplash()
   } else {
-    finish()
+    splashHoldTimer = setTimeout(sendFinishSplash, remainingHoldMs)
   }
 }
 
 function handleInitFailure(err: unknown): void {
   console.error('OpenChat initialization failed:', err)
-
-  if (splashWindow && !splashClosed) {
-    splashClosed = true
-    splashWindow.close()
-    splashWindow = null
+  clearSplashHoldTimer()
+  clearSplashFallbackTimer()
+  clearOpacityGateWatchdog()
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show()
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
   }
-
-  // 显示主窗口，让用户看到错误状态
-  if (mainWindow) {
-    showMainWindow()
-  } else {
-    createWindow()
-    showMainWindow()
-  }
-
   dialog.showErrorBox('启动失败', `OpenChat Desktop 初始化失败，请重试。\n${err}`)
 }
 
+// Renderer 加载失败 / crash / OOM / killed 时的统一处理。
+// 不能调用 sendFinishSplash()——那会让 Splash 消失后露出空白窗口。
+// 这里保留 Splash（或直接弹出错误框），让用户看到明确错误而非白屏。
+function handleRendererFailure(reason: string): void {
+  // Splash 已完成则不属于启动失败，不弹错误框（App 已正常运行后 renderer crash 由 Electron 默认处理）
+  if (splashFinishSent) {
+    console.error(`Renderer failure after splash finish: ${reason}`)
+    return
+  }
+  console.error(`Renderer failure: ${reason}`)
+
+  // 不再结束 Splash，避免白屏。清理 Splash 相关 timer，防止后续误触发。
+  clearSplashHoldTimer()
+  clearSplashFallbackTimer()
+  clearOpacityGateWatchdog()
+
+  // 标记 renderer 已失败，使任何后续 tryScheduleSplashFinish 不再推进
+  rendererFailed = true
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show()
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+
+  dialog.showErrorBox('渲染进程异常', `OpenChat 界面加载失败，请重启应用。\n${reason}`)
+}
+
+// ── APP_READY handler（全局只注册一次） ──
+
+function handleAppReady(event: Electron.IpcMainEvent): void {
+  // 校验 sender 是当前 mainWindow 的 webContents，避免旧窗口残留信号
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    return
+  }
+  if (appReadyReceived) return
+  appReadyReceived = true
+  bootLog('app ready')
+  tryScheduleSplashFinish()
+}
+
+// 全局只注册一次，不随 MainWindow 创建而重复注册
+ipcMain.on(IPC_CHANNELS.APP_READY, handleAppReady)
+
+// BOOT_SPLASH_PAINTED：Renderer 在 opacity=0 窗口里完成 Splash 首帧 paint 后发送。
+// 收到后 setOpacity(1) 让 Splash 真正可见，然后记录 splashShownTs 开始计时。
+ipcMain.on(IPC_CHANNELS.BOOT_SPLASH_PAINTED, (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return
+  if (!useOpacityGate) return
+  if (opacityGateReleased) return
+  if (rendererFailed) return
+
+  opacityGateReleased = true
+  clearOpacityGateWatchdog()
+
+  mainWindow.setOpacity(1)
+  splashShownTs = performance.now()
+  bootLog('splash visible (opacity gate released)')
+  tryScheduleSplashFinish()
+})
+
+// BOOT_OPACITY_GATE_READY：renderer 已注册好 onWindowShown listener，握手完成一半
+ipcMain.on(IPC_CHANNELS.BOOT_OPACITY_GATE_READY, (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return
+  if (!useOpacityGate) return
+  if (opacityGateRendererReady) return
+
+  opacityGateRendererReady = true
+  bootLog('opacity gate renderer ready')
+  tryNotifyOpacityGateWindowShown()
+})
+
+function tryNotifyOpacityGateWindowShown(): void {
+  if (!useOpacityGate) return
+  if (!windowShownForOpacityGate) return
+  if (!opacityGateRendererReady) return
+  if (opacityGateReleased) return
+
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return
+
+  win.webContents.send(IPC_CHANNELS.BOOT_WINDOW_SHOWN)
+  bootLog('opacity gate window-shown sent')
+}
+
+// ── 窗口创建 ──
+
 function createWindow(): void {
+  resetSplashBootState()
+
+  const backgroundColor = getBootBackgroundColor()
+
+  // 诊断：opacity=0 消除 show/compositor 交接白闪
+  useOpacityGate = process.platform === 'darwin'
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    title: APP_TITLE,
-    show: false,
-    autoHideMenuBar: true,
+    width: 1200, height: 800, minWidth: 900, minHeight: 600,
+    title: APP_TITLE, show: false, backgroundColor, autoHideMenuBar: true,
+    opacity: useOpacityGate ? 0 : 1,
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
+      nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
       preload: path.join(__dirname, '../../preload/index.js'),
     },
   })
 
   mainWindow.once('ready-to-show', () => {
-    // Electron 层面首帧已渲染。不直接显示主窗口——真正的“准备完成”
-    // 以渲染进程发送 APP_READY 为准（见下方 IPC 监听），此处仅作为
-    // 兜底：5 秒后仍未收到 APP_READY 则强制显示，避免永久卡在 Splash。
+    mainWindow?.show()
+    if (useOpacityGate) {
+      windowShownForOpacityGate = true
+      bootLog('window shown (opacity gate)')
+      tryNotifyOpacityGateWindowShown()
+    }
   })
 
-  // 超时 fallback：5 秒后 APP_READY 仍未到达，强制显示主窗口
-  const readyFallback = setTimeout(() => {
-    if (mainWindow && !mainWindow.isVisible() && !splashClosed) {
-      console.warn('[splash] main renderer ready timeout (5s), showing main window anyway')
-      showMainWindow()
+  // 非 opacity gate 时，show 事件即 Splash 真正可见
+  if (!useOpacityGate) {
+    mainWindow.once('show', () => {
+      splashShownTs = performance.now()
+      bootLog('window shown')
+      tryScheduleSplashFinish()
+    })
+  }
+
+  // macOS 关闭窗口时改为 hide，而非 destroy。
+  // 这样 Dock 再次点击时直接 show 原窗口，不重新 createWindow / load / mount。
+  // Cmd+Q 或 before-quit 时 isAppQuitting=true，放行真正的销毁。
+  mainWindow.on('close', (event) => {
+    if (process.platform === 'darwin' && !isAppQuitting) {
+      event.preventDefault()
+      mainWindow?.hide()
+      bootLog('window hidden (macOS close → hide)')
     }
+  })
+
+  // 5 秒兜底：APP_READY 信号异常时绕过 Renderer 条件继续。
+  // 不直接 sendFinishSplash——仅标记 fallback 已触发，然后走 tryScheduleSplashFinish。
+  // 若此时 services 尚未 ready，标记保留，services 完成后 trySchedule 会自然推进。
+  // 注意：rendererFailed 时不会推进（tryScheduleSplashFinish 中有守卫）。
+  splashFallbackTimer = setTimeout(() => {
+    splashFallbackTimer = null
+    const win = mainWindow
+    if (!win || win.isDestroyed() || splashFinishSent || rendererFailed) return
+    rendererReadyFallbackElapsed = true
+    bootLog('5s fallback: renderer condition bypassed')
+    tryScheduleSplashFinish()
   }, 5000)
 
-  // 注册 APP_READY handler（全局只注册一次）
-  ipcMain.once(IPC_CHANNELS.APP_READY, () => {
-    console.log('[splash] main renderer ready')
-    clearTimeout(readyFallback)
-    showMainWindow()
+  // opacity gate watchdog：防止握手失败导致窗口永久透明。
+  if (useOpacityGate) {
+    opacityGateWatchdog = setTimeout(() => {
+      opacityGateWatchdog = null
+      if (opacityGateReleased || rendererFailed) return
+      const win = mainWindow
+      if (!win || win.isDestroyed()) return
+      console.error('[boot] opacity gate timeout, releasing gate')
+      opacityGateReleased = true
+      win.setOpacity(1)
+      if (splashShownTs === null) {
+        splashShownTs = performance.now()
+      }
+      tryScheduleSplashFinish()
+    }, 3000)
+  }
+
+  // Renderer 加载失败：页面无法加载时触发。仅处理 main frame，并过滤 ERR_ABORTED(-3)
+  // 等非真实加载失败（如用户主动取消、导航中断等）。
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    // ERR_ABORTED(-3): 页面导航被取消（如 loadFile 前 loadURL 被中断），非真实错误
+    if (errorCode === -3) return
+    bootLog(`renderer did-fail-load: ${errorCode} ${errorDescription}`)
+    handleRendererFailure(`页面加载失败 (${errorCode}: ${errorDescription})`)
+  })
+
+  // Renderer 进程 crash / killed / OOM。正常退出时忽略。
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    if (isAppQuitting) return
+    bootLog(`renderer render-process-gone: reason=${details.reason}`)
+    handleRendererFailure(`渲染进程异常 (${details.reason})`)
   })
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    const isReloadShortcut =
-      input.type === 'keyDown' &&
-      input.key.toLowerCase() === 'r' &&
-      (input.control || input.meta)
-
-    if (isReloadShortcut) {
+    if (input.type === 'keyDown' && input.key.toLowerCase() === 'r' && (input.control || input.meta)) {
       event.preventDefault()
       mainWindow?.webContents.send(IPC_CHANNELS.SHORTCUT_NEW_TOPIC)
     }
   })
-
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    const isNewShortcut =
-      input.type === 'keyDown' &&
-      input.key.toLowerCase() === 'n' &&
-      (input.control || input.meta)
-
-    if (isNewShortcut) {
+    if (input.type === 'keyDown' && input.key.toLowerCase() === 'n' && (input.control || input.meta)) {
       event.preventDefault()
       mainWindow?.webContents.send(IPC_CHANNELS.SHORTCUT_NEW_CONVERSATION)
     }
@@ -479,53 +588,40 @@ function createWindow(): void {
   if (!app.isPackaged) {
     mainWindow.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'F12') {
-        event.preventDefault()
-        mainWindow?.webContents.toggleDevTools()
+        event.preventDefault(); mainWindow?.webContents.toggleDevTools()
       }
     })
   }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://') || url.startsWith('http://')) {
-      shell.openExternal(url)
-    }
+    if (url.startsWith('https://') || url.startsWith('http://')) { shell.openExternal(url) }
     return { action: 'deny' }
   })
-
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const currentUrl = mainWindow?.webContents.getURL()
     if (currentUrl && url !== currentUrl) {
       event.preventDefault()
-      if (url.startsWith('https://') || url.startsWith('http://')) {
-        shell.openExternal(url)
-      }
+      if (url.startsWith('https://') || url.startsWith('http://')) { shell.openExternal(url) }
     }
   })
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
-  if (devServerUrl) {
-    mainWindow.loadURL(devServerUrl)
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html'))
-  }
+  if (devServerUrl) { mainWindow.loadURL(devServerUrl) }
+  else { mainWindow.loadFile(path.join(__dirname, '../../renderer/index.html')) }
 }
 
-app.whenReady().then(async () => {
-  // 1. 先显示 Splash Window
-  createSplashWindow()
+// ── 应用入口 ──
 
-  // 2. 后台初始化所有服务
+app.whenReady().then(async () => {
+  createWindow()
   try {
     await initializeServices()
     registerIpcHandlers(services, () => mainWindow)
     Menu.setApplicationMenu(null)
-  } catch (err) {
-    handleInitFailure(err)
-    return
-  }
-
-  // 3. 创建主窗口（show: false）
-  createWindow()
+    servicesReady = true
+    bootLog('services ready')
+    tryScheduleSplashFinish()
+  } catch (err) { handleInitFailure(err); return }
 
   app.on('activate', () => {
     // macOS Dock 点击 — 如果已有主窗口则显示，否则恢复（不重播 Splash）
@@ -535,32 +631,31 @@ app.whenReady().then(async () => {
       mainWindow.focus()
     } else {
       createWindow()
-      showMainWindow()
     }
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  // macOS 隐藏窗口时不会触发此事件（close→hide 被 preventDefault 了），
+  // 真正 quit 时才会走到这里（isAppQuitting=true，窗口正常销毁）
+  if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('browser-window-created', (_event, window) => {
   window.on('closed', () => {
-    if (window === splashWindow) {
-      splashWindow = null
-    }
     if (window === mainWindow) {
+      clearSplashHoldTimer()
+      clearSplashFallbackTimer()
+      clearOpacityGateWatchdog()
       mainWindow = null
     }
   })
 })
 
-app.on('will-quit', () => {
-  services.appServerProcess?.stop()
-  services.mockAuthServer?.stop()
-  services.storage?.close()
+app.on('will-quit', () => { services.appServerProcess?.stop(); services.mockAuthServer?.stop(); services.storage?.close() })
+
+app.on('before-quit', () => {
+  isAppQuitting = true
 })
 
 export { services }

@@ -298,7 +298,7 @@ export class ConversationService {
     return newSegment
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message } | null> {
+  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null> {
     if (this.activeGeneration) {
       throw new Error('已有正在进行的生成')
     }
@@ -339,6 +339,8 @@ export class ConversationService {
       role: 'user',
       content: text,
       reasoningMeta: null,
+      reasoningText: null,
+      reasoningDisplayMode: 'none',
       webSearchResults: null,
       webSearchError: null,
       status: 'completed',
@@ -368,6 +370,8 @@ export class ConversationService {
       role: 'assistant',
       content: '',
       reasoningMeta: null,
+      reasoningText: null,
+      reasoningDisplayMode: 'summary',
       webSearchResults: null,
       webSearchError: null,
       status: 'pending',
@@ -402,7 +406,7 @@ export class ConversationService {
       this.activeGeneration.turnId = turnId
       this.messages.updateProviderIds(assistantMessage.id, turnId, '')
       this.messages.updateStatus(assistantMessage.id, 'streaming')
-      return { userMessage, assistantMessage }
+      return { userMessage, assistantMessage, reasoningDisplayMode: 'summary' }
     } catch (err) {
       this.messages.updateError(
         assistantMessage.id,

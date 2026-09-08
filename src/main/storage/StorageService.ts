@@ -46,6 +46,46 @@ export class StorageService {
       this.db.run("ALTER TABLE messages ADD COLUMN reasoning_json TEXT")
       changed = true
     }
+    if (!columnNames.includes('reasoning_text')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN reasoning_text TEXT")
+      changed = true
+    }
+    if (!columnNames.includes('reasoning_display_mode')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN reasoning_display_mode TEXT NOT NULL DEFAULT 'none'")
+      changed = true
+    }
+
+    // Backfill 旧数据（幂等，每次迁移都执行）：列已存在但值为 'none' 的旧消息
+    // 需要根据 reasoning_text / reasoning_json 推断正确 displayMode。
+    // 不能放在上面的 if 里——列可能在更早的版本已创建，导致 backfill 永远不执行。
+    this.db.run(`
+      UPDATE messages SET reasoning_display_mode = 'live'
+      WHERE reasoning_text IS NOT NULL AND reasoning_text != ''
+        AND reasoning_display_mode = 'none'
+    `)
+    // summary backfill 需要逐个检查 reasoning_json 是否有实际 summary 内容，
+    // 不能简单用 reasoning_json IS NOT NULL 判断（可能为 {} 或 available=false）。
+    // 必须解析 JSON 确认 summary 数组非空。
+    const summaryBackfillResult = this.db.exec(
+      `SELECT id, reasoning_json FROM messages WHERE reasoning_display_mode = 'none' AND reasoning_json IS NOT NULL AND reasoning_json != ''`
+    )
+    if (summaryBackfillResult.length > 0 && summaryBackfillResult[0].values.length > 0) {
+      const stmt = this.db.prepare("UPDATE messages SET reasoning_display_mode = 'summary' WHERE id = ?")
+      for (const row of summaryBackfillResult[0].values) {
+        const id = String(row[0])
+        const json = String(row[1])
+        try {
+          const parsed = JSON.parse(json) as { available?: boolean; summary?: string[] }
+          const hasSummary = parsed.summary && Array.isArray(parsed.summary) && parsed.summary.length > 0 && parsed.summary.some((s: string) => s.trim().length > 0)
+          if (hasSummary) {
+            stmt.run([id])
+          }
+        } catch {
+          // 无效 JSON，跳过
+        }
+      }
+      stmt.free()
+    }
 
     // 迁移：conversations 表 use_model_instructions 列
     const convCols = this.db.exec("PRAGMA table_info(conversations)")
@@ -280,6 +320,8 @@ export class StorageService {
         role TEXT NOT NULL,
         content TEXT NOT NULL,
         reasoning_json TEXT,
+        reasoning_text TEXT,
+        reasoning_display_mode TEXT NOT NULL DEFAULT 'none',
         web_search_results_json TEXT,
         status TEXT NOT NULL,
         model_id TEXT,

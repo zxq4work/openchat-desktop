@@ -127,6 +127,7 @@ export function Composer() {
     window.openchat.settings.deleteDraft(conversationId)
     setStatus('starting')
     useChatStreamStore.getState().setStreamingConversationId(conversationId)
+    useChatStreamStore.getState().setReasoningDisplayMode('none')
 
     try {
       const result = await window.openchat.chat.send(conversationId, messageText)
@@ -134,6 +135,9 @@ export function Composer() {
       console.log('[Composer] chat.send resolved, status=%s streamingId=%s pendingError=%s', streamState.status, streamState.streamingConversationId, streamState.errorCode ?? 'null')
 
       if (result) {
+        // 从 Provider 返回的 reasoningDisplayMode 锁定整条 turn，之后不再变化
+        useChatStreamStore.getState().setReasoningDisplayMode(result.reasoningDisplayMode)
+
         // 若错误已在 await 期间到达（同步 IPC 回调优先于 microtask），
         // 在追加前就把错误应用到 assistant 消息，确保一次性渲染 + 正确滚动
         const assistantMsg = (streamState.errorCode || streamState.errorMessage)

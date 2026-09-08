@@ -596,29 +596,38 @@ textarea {
    Message List
    ======================================== */
 
-.message-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 20px 28px;
+.message-list-viewport {
   position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.message-list {
+  height: 100%;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 24px 20px 28px;
 }
 
 .scroll-to-bottom-btn {
-  position: sticky;
-  bottom: 0;
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
-  margin: 0 auto;
   border: 1px solid var(--border-color);
   border-radius: 50%;
   background: var(--bg-secondary);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: var(--theme-transition);
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 10;
 }
 
 .scroll-to-bottom-btn:hover {
@@ -806,6 +815,52 @@ textarea {
   display: none;
 }
 
+/* Live Reasoning Panel: fixed height, internal scroll */
+.message-thinking-live-panel {
+  position: relative;
+  padding: 0;
+}
+
+.message-thinking-live-scroll {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 14px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.message-thinking-scroll-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 13px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  z-index: 1;
+  transition: var(--theme-transition);
+}
+
+.message-thinking-scroll-btn:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
 /* ========================================
    Context Boundary
    ======================================== */
@@ -950,49 +1005,8 @@ textarea {
    Web Search Status (AssistantMessage)
    ======================================== */
 
-.message-web-search {
-  margin: 6px 0 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-md);
-  background: var(--accent-light);
-  font-size: 12px;
-  color: var(--accent);
-  transition: var(--theme-transition);
-}
-
-.message-web-search-icon {
-  flex-shrink: 0;
-  opacity: 0.8;
-  animation: webSearchPulse 1.4s ease-in-out infinite;
-}
-
-.message-web-search-query {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.message-web-search-error {
-  margin: 6px 0 10px;
-  padding: 8px 14px;
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius-md);
-  background: var(--danger-bg);
-  font-size: 12px;
-  color: var(--danger);
-}
-
-@keyframes webSearchPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
-/* 搜索参考页面列表 */
-.message-search-results {
+/* 搜索结果默认折叠，不自动展开 */
+.message-search-activity {
   margin: 6px 0 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
@@ -1001,33 +1015,72 @@ textarea {
   transition: var(--theme-transition);
 }
 
-.message-search-results-header {
+/* 统一搜索状态行：running/completed/error 共用同一 DOM 节点，
+   只更新 icon/text/color，不 mount/unmount */
+.message-search-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  height: 32px;
+  padding: 0 14px;
   font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
+  color: var(--accent);
+  background: var(--accent-light);
+  border: none;
+  border-radius: 0;
   user-select: none;
+  transition: var(--theme-transition);
 }
 
-.message-search-results-header:hover {
+.message-search-status:hover {
+  filter: brightness(0.95);
+}
+
+.message-search-status--done:hover {
   background: var(--accent-light);
   color: var(--accent);
 }
 
-.message-search-results-icon {
-  font-size: 13px;
+.message-search-status--running .message-search-status-icon {
+  animation: webSearchPulse 1.4s ease-in-out infinite;
 }
 
-.message-search-results-arrow {
+.message-search-status-icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.message-search-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-search-status-arrow {
   margin-left: auto;
   color: var(--text-muted);
   display: flex;
   align-items: center;
 }
 
+/* 搜索错误状态 */
+.message-search-status--error {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+/* 搜索完成状态 */
+.message-search-status--done {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+@keyframes webSearchPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* 搜索参考页面列表 */
 .message-search-results-list {
   list-style: none;
   padding: 0;

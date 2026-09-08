@@ -60,6 +60,8 @@ export interface WebSearchResultItem {
   sourceType?: 'web' | 'api'
 }
 
+export type ReasoningDisplayMode = 'none' | 'summary' | 'live'
+
 export interface Message {
   id: string
   conversationId: string
@@ -67,6 +69,8 @@ export interface Message {
   role: 'user' | 'assistant'
   content: string
   reasoningMeta: ReasoningMeta | null
+  reasoningText: string | null
+  reasoningDisplayMode: ReasoningDisplayMode
   webSearchResults: WebSearchResultItem[] | null
   webSearchError: string | null
   status: MessageStatus

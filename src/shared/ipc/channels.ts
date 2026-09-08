@@ -94,6 +94,11 @@ export const IPC_CHANNELS = {
 
   // App
   APP_READY: 'app:ready',
+  BOOT_FINISH_SPLASH: 'boot:finish-splash',
+  BOOT_SET_THEME: 'boot:set-theme',
+  BOOT_WINDOW_SHOWN: 'boot:window-shown',
+  BOOT_SPLASH_PAINTED: 'boot:splash-painted',
+  BOOT_OPACITY_GATE_READY: 'boot:opacity-gate-ready',
 
   // Google Search Session
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',

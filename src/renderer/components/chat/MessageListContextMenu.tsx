@@ -32,12 +32,27 @@ export function MessageListContextMenu({ visible, x, y, onClose }: Props) {
     onClose()
   }
 
-  const handleSearchInBrowser = () => {
+  const handleSearchInBrowser = async () => {
     const selection = window.getSelection()
     const text = selection?.toString().trim()
-    if (text) {
-      window.openchat.openExternal(text)
+    if (!text) {
+      onClose()
+      return
     }
+    const engine = await window.openchat.settings.getWebSearchEngine()
+    const query = encodeURIComponent(text)
+    let url: string
+    switch (engine) {
+      case 'baidu':
+        url = `https://www.baidu.com/s?wd=${query}`
+        break
+      case 'google':
+        url = `https://www.google.com/search?q=${query}`
+        break
+      default:
+        url = `https://www.bing.com/search?q=${query}`
+    }
+    window.openchat.openExternal(url)
     onClose()
   }
 

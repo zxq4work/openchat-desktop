@@ -3,11 +3,191 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" />
   <title>OpenChat Desktop</title>
+  <style>
+    /* ========== Boot Splash ========== */
+    /* 纯静态 CSS，不依赖 React、不依赖外部资源、不依赖网络。
+       页面解析到 #boot-splash 后即可直接绘制首帧，避免白屏。
+       颜色复用主界面 Design Tokens（见 global.css）。
+       主题优先级：用户 data-theme 设置 > 系统 prefers-color-scheme > light 默认。 */
+
+    html, body {
+      margin: 0; padding: 0;
+      height: 100%;
+      background: var(--splash-bg);
+    }
+
+    :root {
+      color-scheme: light;
+      --splash-bg: #F7F8FC;
+      --splash-text: #1F2937;
+      --splash-text-secondary: #6B7280;
+      --splash-text-muted: #9CA3AF;
+      --splash-border: #E5E7EB;
+      --splash-accent: #4A90E2;
+      --splash-accent-shadow: rgba(74, 144, 226, 0.25);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --splash-bg: #0F172A;
+        --splash-text: #E5E7EB;
+        --splash-text-secondary: #94A3B8;
+        --splash-text-muted: #64748B;
+        --splash-border: #243247;
+        --splash-accent: #60A5FA;
+        --splash-accent-shadow: rgba(96, 165, 250, 0.25);
+      }
+    }
+
+    :root[data-theme='light'] {
+      --splash-bg: #F7F8FC;
+      --splash-text: #1F2937;
+      --splash-text-secondary: #6B7280;
+      --splash-text-muted: #9CA3AF;
+      --splash-border: #E5E7EB;
+      --splash-accent: #4A90E2;
+      --splash-accent-shadow: rgba(74, 144, 226, 0.25);
+    }
+
+    :root[data-theme='dark'] {
+      --splash-bg: #0F172A;
+      --splash-text: #E5E7EB;
+      --splash-text-secondary: #94A3B8;
+      --splash-text-muted: #64748B;
+      --splash-border: #243247;
+      --splash-accent: #60A5FA;
+      --splash-accent-shadow: rgba(96, 165, 250, 0.25);
+    }
+
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      padding: 32px;
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--splash-bg);
+      color: var(--splash-text);
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      user-select: none;
+      -webkit-user-select: none;
+      opacity: 1;
+      /* Keep in sync with SPLASH_FADE_MS in src/shared/constants/index.ts */
+      transition: opacity 130ms ease-out;
+    }
+
+    .splash-logo {
+      width: 72px;
+      height: 72px;
+      border-radius: 20px;
+      background: var(--splash-accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      box-shadow: 0 8px 24px var(--splash-accent-shadow);
+    }
+    .splash-logo-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      animation: splashDot 1.2s ease-in-out infinite;
+    }
+    .splash-logo-dot:nth-child(2) { animation-delay: 0.18s; }
+    .splash-logo-dot:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes splashDot {
+      0%, 60%, 100% { opacity: 0.4; transform: translateY(0); }
+      30% { opacity: 1; transform: translateY(-5px); }
+    }
+
+    .splash-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--splash-text);
+      letter-spacing: 0.2px;
+    }
+    .splash-subtitle {
+      font-size: 13px;
+      color: var(--splash-text-secondary);
+      line-height: 1.5;
+    }
+    .splash-progress {
+      width: 140px;
+      height: 3px;
+      border-radius: 2px;
+      background: var(--splash-border);
+      overflow: hidden;
+      margin-top: 6px;
+    }
+    .splash-progress-bar {
+      width: 40%;
+      height: 100%;
+      border-radius: 2px;
+      background: var(--splash-accent);
+      animation: splashProgress 1.4s ease-in-out infinite;
+    }
+    @keyframes splashProgress {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+    .splash-version {
+      font-size: 11px;
+      color: var(--splash-text-muted);
+      letter-spacing: 0.3px;
+    }
+
+    /* 减弱动画偏好：关闭 Splash 动画与淡出过渡 */
+    /* @media (prefers-reduced-motion: reduce) {
+      #boot-splash {
+        transition: none;
+      }
+      .splash-logo-dot,
+      .splash-progress-bar {
+        animation: none;
+      }
+      .splash-logo-dot { opacity: 1; }
+    } */
+
+    /* ========== App Ready 切换 ========== */
+    #root {
+      visibility: hidden;
+    }
+    html.app-ready #root {
+      visibility: visible;
+    }
+    html.app-ready #boot-splash {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    </style>
 </head>
 <body>
+  <div id="boot-splash">
+    <div class="splash-logo">
+      <div class="splash-logo-dot"></div>
+      <div class="splash-logo-dot"></div>
+      <div class="splash-logo-dot"></div>
+    </div>
+    <div class="splash-title">OpenChat Desktop</div>
+    <div class="splash-subtitle">正在启动...</div>
+    <div class="splash-progress"><div class="splash-progress-bar"></div></div>
+    <div class="splash-version" id="splash-version">v0.1.0</div>
+  </div>
+
   <div id="root"></div>
-  <script type="module" src="./app/main.tsx"></script>
+  <script type="module" src="./app/bootstrap.ts"></script>
 </body>
 </html>

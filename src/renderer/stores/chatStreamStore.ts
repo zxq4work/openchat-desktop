@@ -1,7 +1,10 @@
 import { create } from 'zustand'
-import type { ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
+import type { ReasoningMeta, ReasoningDisplayMode, WebSearchResultItem } from '../../shared/types/conversation'
 
 export type StreamStatus = 'idle' | 'starting' | 'streaming' | 'stopping'
+
+// ReasoningDisplayMode re-exported from shared types for convenience
+export type { ReasoningDisplayMode }
 
 export interface WebSearchStatus {
   active: boolean
@@ -18,6 +21,7 @@ interface ChatStreamState {
   streamingConversationId: string | null
   status: StreamStatus
   bufferedText: string
+  reasoningDisplayMode: ReasoningDisplayMode
   reasoningStatus: 'idle' | 'thinking' | 'completed'
   reasoningStartedAt: number | null
   reasoningMeta: ReasoningMeta | null
@@ -33,6 +37,7 @@ interface ChatStreamState {
   setActiveAssistantMessage: (messageId: string | null) => void
   setStreamingConversationId: (id: string | null) => void
   setBufferedText: (text: string) => void
+  setReasoningDisplayMode: (mode: ReasoningDisplayMode) => void
   setReasoningStatus: (status: 'idle' | 'thinking' | 'completed') => void
   setReasoningStartedAt: (timestamp: number | null) => void
   setReasoningMeta: (meta: ReasoningMeta | null) => void
@@ -50,6 +55,7 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   streamingConversationId: null,
   status: 'idle',
   bufferedText: '',
+  reasoningDisplayMode: 'none',
   reasoningStatus: 'idle',
   reasoningStartedAt: null,
   reasoningMeta: null,
@@ -65,6 +71,7 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
   setActiveAssistantMessage: (messageId) => set({ activeAssistantMessageId: messageId }),
   setStreamingConversationId: (id) => set({ streamingConversationId: id }),
   setBufferedText: (text) => set({ bufferedText: text }),
+  setReasoningDisplayMode: (mode) => set({ reasoningDisplayMode: mode }),
   setReasoningStatus: (status) => set({ reasoningStatus: status }),
   setReasoningStartedAt: (timestamp) => set({ reasoningStartedAt: timestamp }),
   setReasoningMeta: (meta) => set({ reasoningMeta: meta }),
@@ -80,6 +87,7 @@ export const useChatStreamStore = create<ChatStreamState>((set) => ({
       streamingConversationId: null,
       status: 'idle',
       bufferedText: '',
+      reasoningDisplayMode: 'none',
       reasoningStatus: 'idle',
       reasoningStartedAt: null,
       reasoningMeta: null,

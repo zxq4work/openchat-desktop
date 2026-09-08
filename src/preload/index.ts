@@ -73,6 +73,11 @@ const IPC_CHANNELS = {
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
   APP_READY: 'app:ready',
+  BOOT_FINISH_SPLASH: 'boot:finish-splash',
+  BOOT_SET_THEME: 'boot:set-theme',
+  BOOT_WINDOW_SHOWN: 'boot:window-shown',
+  BOOT_SPLASH_PAINTED: 'boot:splash-painted',
+  BOOT_OPACITY_GATE_READY: 'boot:opacity-gate-ready',
 } as const
 
 const openchat = {
@@ -262,6 +267,19 @@ const openchat = {
 
   app: {
     notifyReady: () => ipcRenderer.send(IPC_CHANNELS.APP_READY),
+    onFinishSplash: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on(IPC_CHANNELS.BOOT_FINISH_SPLASH, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BOOT_FINISH_SPLASH, handler)
+    },
+    setBootTheme: (theme: 'light' | 'dark' | 'system') => ipcRenderer.invoke(IPC_CHANNELS.BOOT_SET_THEME, theme),
+    onWindowShown: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on(IPC_CHANNELS.BOOT_WINDOW_SHOWN, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BOOT_WINDOW_SHOWN, handler)
+    },
+    notifySplashPainted: () => ipcRenderer.send(IPC_CHANNELS.BOOT_SPLASH_PAINTED),
+    notifyOpacityGateReady: () => ipcRenderer.send(IPC_CHANNELS.BOOT_OPACITY_GATE_READY),
   },
 }
 

@@ -386,7 +386,7 @@ export class ChatGPTConversationService {
     return newSegment
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message }> {
+  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' }> {
     console.log('[SendMessage] entry conversationId=%s activeGeneration=%s', conversationId, this.activeGeneration ? `set(conv=${this.activeGeneration.conversationId})` : 'null')
     if (this.activeGeneration) {
       console.log('[SendMessage] BLOCKED: activeGeneration still set')
@@ -423,6 +423,18 @@ export class ChatGPTConversationService {
       effort = null
     }
 
+    // 根据 Provider 协议在发送前确定 reasoningDisplayMode，整条 turn 生命周期不可变：
+    // - chatgpt_codex（Codex 原生）：只返回 summary，永远 summary
+    // - chat_completions（Qwen/DeepSeek 等）：通过 reasoning_content 返回实时 delta，live
+    // - responses（第三方 Responses API）：返回 reasoning_text delta，live
+    // - 无推理能力的 provider：none
+    const reasoningDisplayMode: 'none' | 'summary' | 'live' =
+      !adapter.capabilities.reasoning
+        ? 'none'
+        : adapter.protocol === 'chatgpt_codex'
+          ? 'summary'
+          : 'live'
+
     const effortValue = effort ?? ''
 
     const usageState = this.usageService.getState()
@@ -442,6 +454,8 @@ export class ChatGPTConversationService {
       role: 'user',
       content: text,
       reasoningMeta: null,
+      reasoningText: null,
+      reasoningDisplayMode: 'none',
       webSearchResults: null,
       webSearchError: null,
       status: 'completed',
@@ -469,6 +483,8 @@ export class ChatGPTConversationService {
       role: 'assistant',
       content: '',
       reasoningMeta: null,
+      reasoningText: null,
+      reasoningDisplayMode,
       webSearchResults: null,
       webSearchError: null,
       status: 'pending',
@@ -513,7 +529,7 @@ export class ChatGPTConversationService {
       )
     })
 
-    return { userMessage, assistantMessage }
+    return { userMessage, assistantMessage, reasoningDisplayMode }
   }
 
   private resolveAdapter(providerConfigId: string | null): ModelAdapter {
@@ -704,6 +720,7 @@ export class ChatGPTConversationService {
       }
     } finally {
       console.log('[runGeneration] FINALLY: assistantMessageId=%s activeGenerationAssistantMessageId=%s', assistantMessageId, this.activeGeneration?.assistantMessageId ?? 'null')
+      this.messages.flushPendingReasoningText(assistantMessageId)
       if (this.activeGeneration?.assistantMessageId === assistantMessageId) {
         this.activeGeneration = null
         console.log('[runGeneration] FINALLY: cleared activeGeneration')
@@ -752,6 +769,7 @@ export class ChatGPTConversationService {
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
+    let reasoningTextAccum = ''
 
     const controller = new ToolLoopController(adapter, this.toolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
       maxRounds: this.webSearchConfig.maxToolRounds,
@@ -825,6 +843,8 @@ export class ChatGPTConversationService {
         this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
       },
       onReasoningDelta: (text) => {
+        reasoningTextAccum += text
+        this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
         this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text })
       },
       onReasoningCompleted: (itemId, summary) => {
@@ -882,6 +902,7 @@ export class ChatGPTConversationService {
     const finalContent = this.cleanFinalText(accumulatedContent)
     this.messages.updateContent(assistantMessageId, finalContent)
 
+    this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
     // 持久化搜索结果
@@ -951,6 +972,7 @@ export class ChatGPTConversationService {
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
+    let reasoningTextAccum = ''
     const webSearchResults: Array<{ title: string | null; url: string | null; snippet: string | null; sourceType?: 'web' | 'api' }> = []
     const webSearchCallItems: Array<{ id: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }> = []
 
@@ -996,6 +1018,8 @@ export class ChatGPTConversationService {
             break
 
           case 'reasoning_delta':
+            reasoningTextAccum += event.text || ''
+            this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
             this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text: event.text })
             break
 
@@ -1092,6 +1116,7 @@ export class ChatGPTConversationService {
       this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: hostedFlushText })
     }
     this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+    this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
     if (webSearchResults.length > 0) {
@@ -1132,6 +1157,7 @@ export class ChatGPTConversationService {
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
+    let reasoningTextAccum = ''
 
     // 先构建 canonical request 以获取对话历史，传给 web.run 工具
     const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
@@ -1193,6 +1219,8 @@ export class ChatGPTConversationService {
         this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
       },
       onReasoningDelta: (text) => {
+        reasoningTextAccum += text
+        this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
         this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text })
       },
       onReasoningCompleted: (itemId, summary) => {
@@ -1232,6 +1260,7 @@ export class ChatGPTConversationService {
       this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: standaloneFlushText })
     }
     this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+    this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
     // 持久化搜索结果
@@ -1532,6 +1561,7 @@ User message: ${userText}${contextHint}`
     let providerTurnId: string | null = null
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
+    let reasoningTextAccum = ''
     // 部分 Responses API 不支持 function calling，会以原始文本输出 <tool_call>，流式阶段需剥离
     let toolCallTextActive = false
     let toolCallTextBuffer = ''
@@ -1602,6 +1632,8 @@ User message: ${userText}${contextHint}`
           break
 
         case 'reasoning_delta':
+          reasoningTextAccum += event.text || ''
+          this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
           this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text: event.text })
           break
 
@@ -1632,6 +1664,7 @@ User message: ${userText}${contextHint}`
             }
           }
           this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+          this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
           finalized = true
@@ -1657,6 +1690,7 @@ User message: ${userText}${contextHint}`
           const directFlush = this.flushCitationBuffer(citationBuf)
           if (directFlush) accumulatedContent += directFlush
           this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+          this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
         } else {

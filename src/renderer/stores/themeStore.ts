@@ -41,6 +41,8 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
       localStorage.setItem(STORAGE_KEY, mode)
     }
     set({ mode, resolved: resolveTheme(mode) })
+    // 同步到主进程 boot-preferences.json，确保下次冷启动 BrowserWindow 首帧背景色一致
+    window.openchat.app.setBootTheme(mode).catch(() => {})
   },
 
   cycle: () => {

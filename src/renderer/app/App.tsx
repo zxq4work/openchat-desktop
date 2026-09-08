@@ -15,6 +15,7 @@ import { presentSearchResults } from '../packages/SearchResultPresenter'
 import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
+import { finishBootSplash } from './boot-splash'
 
 export function App() {
   const setAuthStatus = useAuthStore((s) => s.setStatus)
@@ -33,20 +34,21 @@ export function App() {
     }
   }, [toast, clearToast])
 
-  // 首帧渲染完成后通知主进程关闭 Splash 并显示主窗口。
-  // 使用双 rAF 确保至少一帧已绘制，避免主窗口 show 时出现白屏。
+  // React 首次渲染完成后立即通知主进程（APP_READY）。
+  // 主进程根据 Splash 已显示时长决定何时回发 FINISH_SPLASH。
   useEffect(() => {
     let cancelled = false
-    const raf2 = () => {
-      if (!cancelled) window.openchat.app.notifyReady()
-    }
-    const raf1 = () => {
-      if (!cancelled) requestAnimationFrame(raf2)
-    }
-    const id = requestAnimationFrame(raf1)
+
+    window.openchat.app.notifyReady()
+
+    const cleanupFinish = window.openchat.app.onFinishSplash(() => {
+      if (cancelled) return
+      finishBootSplash()
+    })
+
     return () => {
       cancelled = true
-      cancelAnimationFrame(id)
+      cleanupFinish()
     }
   }, [])
 
@@ -360,9 +362,9 @@ export function App() {
         clearInterval(reasoningElapsedTimer)
         reasoningElapsedTimer = null
       }
-      accumulatedText = ''
-      pendingDeltas.length = 0
-      reasoningTextAccum = ''
+
+      // 先持久化 reasoningText 到消息，再清空——与 completion 路径一致
+      const finalReasoningText = reasoningTextAccum || useChatStreamStore.getState().reasoningText
 
       // 仅当事件所属会话正是当前激活会话时才更新 activeMessages
       const activeConvId = useConversationStore.getState().activeConversationId
@@ -381,9 +383,11 @@ export function App() {
         })()
         if (lastAssistantIdx >= 0 && messages[lastAssistantIdx].status !== 'completed' && messages[lastAssistantIdx].status !== 'failed') {
           const updated = [...messages]
+          const streamState = useChatStreamStore.getState()
           updated[lastAssistantIdx] = {
             ...updated[lastAssistantIdx],
             status: 'failed',
+            reasoningText: finalReasoningText || streamState.reasoningText || updated[lastAssistantIdx].reasoningText,
             errorCode: e.errorCode ?? 'StreamFailed',
             errorMessage: e.errorMessage ?? 'Unknown error',
           }
@@ -399,6 +403,9 @@ export function App() {
       )
 
       // 只清除流式状态，不 reset（保留 webSearchStatus 等）
+      accumulatedText = ''
+      pendingDeltas.length = 0
+      reasoningTextAccum = ''
       useChatStreamStore.getState().setStatus('idle')
       useChatStreamStore.getState().setStreamingConversationId(null)
       useChatStreamStore.getState().setActiveAssistantMessage(null)
@@ -430,8 +437,14 @@ export function App() {
       if (pendingDeltas.length > 0) {
         accumulatedText += pendingDeltas.join('')
         pendingDeltas.length = 0
-        useChatStreamStore.getState().setBufferedText(accumulatedText)
       }
+
+      // Completion handoff: 先提交 message.content + status='completed'
+      // 到 conversationStore（同一 setActiveMessages 原子写入），
+      // rawContent 以 message.status 为准，一旦 completed 就不再拼 bufferedText。
+      // 然后再清 bufferedText + reset，避免依赖 React batching 的 set 调用顺序。
+      const finalContent = accumulatedText
+      const finalReasoningText = reasoningTextAccum || useChatStreamStore.getState().reasoningText
 
       // 仅当事件所属会话正是当前激活会话时才更新 activeMessages，
       // 防止用户在流式期间切换到其他会话后，已完成事件错误地写入当前会话
@@ -458,8 +471,9 @@ export function App() {
           const updated = [...messages]
           updated[lastAssistantIdx] = {
             ...updated[lastAssistantIdx],
-            content: accumulatedText || updated[lastAssistantIdx].content,
+            content: finalContent || updated[lastAssistantIdx].content,
             reasoningMeta: streamState.reasoningMeta ?? updated[lastAssistantIdx].reasoningMeta,
+            reasoningText: finalReasoningText || streamState.reasoningText || updated[lastAssistantIdx].reasoningText,
             webSearchResults: streamState.webSearchStatus.results.length > 0
               ? streamState.webSearchStatus.results
               : updated[lastAssistantIdx].webSearchResults,
@@ -471,6 +485,8 @@ export function App() {
         }
       }
 
+      // 清理流式状态：message 已 commit，清 bufferedText 和 reset
+      useChatStreamStore.getState().setBufferedText('')
       accumulatedText = ''
       pendingDeltas.length = 0
       reasoningTextAccum = ''

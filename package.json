@@ -22,6 +22,7 @@
     "package:win:nsis": "node scripts/check-pnpm.js && npm run build && electron-builder --win nsis",
     "package:win:portable": "node scripts/check-pnpm.js && npm run build && electron-builder --win portable",
     "package:win:portable:legacy-mac": "node scripts/check-pnpm.js && npm run build && node scripts/package-win-portable-legacy-mac.js",
+    "package:win:nsis:legacy-mac": "node scripts/check-pnpm.js && npm run build && node scripts/package-win-nsis-legacy-mac.js",
     "package:win:zip": "node scripts/check-pnpm.js && npm run build && electron-builder --win zip",
     "package:mac": "node scripts/check-pnpm.js && npm run build && electron-builder --mac",
     "package:linux": "node scripts/check-pnpm.js && npm run build && electron-builder --linux"

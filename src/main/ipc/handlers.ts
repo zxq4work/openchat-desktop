@@ -15,6 +15,7 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { getSearchEngine } from '../web-search/SearchEngineFactory'
 import type { SearchEngine } from '../web-search/WebSearchService'
 import { googleSearchBrowser } from '../web-search/GoogleSearchBrowserService'
+import { writeBootTheme, type BootTheme } from '../bootstrap/BootPreferences'
 
 interface Services {
   appServerProcess: { isRunning: boolean } | null
@@ -60,7 +61,7 @@ interface Services {
     updateWebSearchConfig: (config: WebSearchConfig) => void
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
-    sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message } | null>
+    sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
@@ -425,6 +426,11 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
   // ===== Shell =====
   ipcMain.handle(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, (_event, url: string): void => {
     shell.openExternal(url)
+  })
+
+  // ===== Boot Theme 同步（下次冷启动首帧背景色） =====
+  ipcMain.handle(IPC_CHANNELS.BOOT_SET_THEME, (_event, theme: BootTheme): void => {
+    writeBootTheme(theme)
   })
 
   // ===== Google Search Session =====
