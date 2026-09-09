@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { processLaTeX } from './latex'
+import { processLaTeX, fixCJKBold } from './latex'
 
 describe('processLaTeX', () => {
   // Case 1: 块级公式 \[...\]
@@ -135,5 +135,89 @@ describe('processLaTeX', () => {
     const input = '**Judith Grimes（茱蒂丝·格莱姆斯）**是美剧'
     const result = processLaTeX(input)
     expect(result).toBe('**Judith Grimes（茱蒂丝·格莱姆斯）\u200B**是美剧')
+  })
+
+  // ===== 回归测试：无 delimiter 的 LaTeX 命令（processLaTeX 应原样保留） =====
+
+  it('preserves \\lfloor without explicit delimiters', () => {
+    const input = '\\lfloor13(m+1)/5\\rfloor\\\\'
+    const result = processLaTeX(input)
+    expect(result).toBe('\\lfloor13(m+1)/5\\rfloor\\\\')
+  })
+
+  it('preserves \\lfloor K/4 \\rfloor', () => {
+    const input = '\\lfloor K/4 \\rfloor\\\\'
+    const result = processLaTeX(input)
+    expect(result).toBe('\\lfloor K/4 \\rfloor\\\\')
+  })
+
+  it('preserves \\lfloor J/4 \\rfloor', () => {
+    const input = '\\lfloor J/4 \\rfloor\\\\'
+    const result = processLaTeX(input)
+    expect(result).toBe('\\lfloor J/4 \\rfloor\\\\')
+  })
+
+  it('preserves -2J without delimiters', () => {
+    const input = '-2J\\\\'
+    const result = processLaTeX(input)
+    expect(result).toBe('-2J\\\\')
+  })
+
+  it('preserves \\sqrt{x} without delimiters', () => {
+    const input = '\\sqrt{x}'
+    const result = processLaTeX(input)
+    expect(result).toBe('\\sqrt{x}')
+  })
+
+  it('preserves $x$ inline math', () => {
+    const input = '$x$'
+    const result = processLaTeX(input)
+    expect(result).toBe('$x$')
+  })
+
+  it('preserves $x+y$ inline math', () => {
+    const input = '$x+y$'
+    const result = processLaTeX(input)
+    expect(result).toBe('$x+y$')
+  })
+
+  it('preserves $\\frac{1}{2}$ inline math', () => {
+    const input = '$\\frac{1}{2}$'
+    const result = processLaTeX(input)
+    expect(result).toBe('$\\frac{1}{2}$')
+  })
+
+  it('preserves $\\text{中文}$ inline math', () => {
+    const input = '$\\text{中文}$'
+    const result = processLaTeX(input)
+    expect(result).toBe('$\\text{中文}$')
+  })
+
+  it('converts \\[x^2+y^2\\] to $$ block', () => {
+    const input = '\\[x^2+y^2\\]'
+    const result = processLaTeX(input)
+    expect(result).toBe('\n$$\nx^2+y^2\n$$\n')
+  })
+
+  it('preserves LaTeX inside code blocks', () => {
+    const input = '```\n\\lfloor13(m+1)/5\\rfloor\n```'
+    const result = processLaTeX(input)
+    expect(result).toBe('```\n\\lfloor13(m+1)/5\\rfloor\n```')
+  })
+
+  it('preserves Chinese markdown table with mixed math', () => {
+    const input = '| 名称 | 公式 |\n| --- | --- |\n| 求和 | $\\sum_{i=1}^{n} x_i$ |\n| 分数 | $\\frac{a}{b}$ |'
+    const result = processLaTeX(input)
+    expect(result).toContain('$\\sum_{i=1}^{n} x_i$')
+    expect(result).toContain('$\\frac{a}{b}$')
+    expect(result).toContain('| 名称 | 公式 |')
+  })
+
+  it('does not escape $中文$ as LaTeX math when CJK only', () => {
+    // processLaTeX 本身不处理 $ 语义，$中文$ 会原样保留
+    // 由 remark-math 决定是否渲染为数学公式，但 processLaTeX 不应修改
+    const input = '$星期四$'
+    const result = processLaTeX(input)
+    expect(result).toBe('$星期四$')
   })
 })

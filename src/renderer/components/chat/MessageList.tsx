@@ -5,10 +5,9 @@ import { MessageItem } from './MessageItem'
 import { ContextBoundary } from './ContextBoundary'
 import { MessageListContextMenu } from './MessageListContextMenu'
 import { ScrollContainerContext, type ScrollFollowMode } from './ScrollContainerContext'
+import { probeLayoutRead, isConversationSwitchDiagActive } from '../../packages/layoutReadDiag'
 
-// 距离底部的阈值：用于判断"是否贴底"（仅影响按钮显示与 FOLLOWING 判定）
 const PINNED_THRESHOLD = 80
-// 显示"回到底部"按钮的距离阈值
 const SHOW_BUTTON_THRESHOLD = 300
 
 export function MessageList() {
@@ -34,21 +33,32 @@ export function MessageList() {
     setContextMenu({ visible: false, x: 0, y: 0 })
   }, [])
 
-  // 滚动跟随状态机：FOLLOWING / READING_HISTORY / MANUAL_PAUSED
+  // 滚动跟随状态机：FOLLOWING / READING_HISTORY
   const followModeRef = useRef<ScrollFollowMode>('FOLLOWING')
-  // 是否接近底部：仅用于 UI 按钮显示与 FOLLOWING 判定，不单独决定是否自动滚动
   const pinnedRef = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
-  // 程序滚动目标：scrollToBottom 在设置 scrollTop 前记录目标位置，
-  // handleScroll 通过比较实际 scrollTop 与目标来区分程序滚动和用户滚动。
+  // 程序滚动目标：设置 scrollTop 前记录目标位置，handleScroll 比较实际值区分程序/用户滚动
   const programmaticScrollTargetRef = useRef<number | null>(null)
 
   const scrollToBottom = () => {
+    if (isConversationSwitchDiagActive()) {
+      // 诊断消融：会话切换窗口内跳过自动触底 geometry read/write
+      return
+    }
     const list = listRef.current
     if (!list) return
-    const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight)
-    if (Math.abs(list.scrollTop - maxScrollTop) <= 1) return
+    let t0 = performance.now()
+    const scrollHeight = list.scrollHeight
+    probeLayoutRead(t0, 'MessageList.scrollToBottom', 'scrollHeight')
+    t0 = performance.now()
+    const clientHeight = list.clientHeight
+    probeLayoutRead(t0, 'MessageList.scrollToBottom', 'clientHeight')
+    const maxScrollTop = Math.max(0, scrollHeight - clientHeight)
+    t0 = performance.now()
+    const scrollTop = list.scrollTop
+    probeLayoutRead(t0, 'MessageList.scrollToBottom', 'scrollTop')
+    if (Math.abs(scrollTop - maxScrollTop) <= 1) return
     programmaticScrollTargetRef.current = maxScrollTop
     list.scrollTop = maxScrollTop
   }
@@ -80,12 +90,22 @@ export function MessageList() {
 
   // messages/segments 变化时统一走 tryAutoScroll
   useEffect(() => {
+    if (isConversationSwitchDiagActive()) return
     if (followModeRef.current === 'FOLLOWING' && pinnedRef.current) {
       scrollToBottom()
     } else {
       const list = listRef.current
       if (list) {
-        const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+        let t0 = performance.now()
+        const scrollHeight = list.scrollHeight
+        probeLayoutRead(t0, 'MessageList.msgsEffect', 'scrollHeight')
+        t0 = performance.now()
+        const scrollTop = list.scrollTop
+        probeLayoutRead(t0, 'MessageList.msgsEffect', 'scrollTop')
+        t0 = performance.now()
+        const clientHeight = list.clientHeight
+        probeLayoutRead(t0, 'MessageList.msgsEffect', 'clientHeight')
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight
         setShowScrollToBottom(distanceFromBottom >= SHOW_BUTTON_THRESHOLD)
       }
     }
@@ -111,12 +131,7 @@ export function MessageList() {
 
   // 用户滚动意图时间戳（ms）：wheel/touchmove/滚动键 标记 now()，
   // handleScroll 消费一次后清零，超过 250ms 自动失效。
-  // 短期意图窗口确保：未产生 scroll 的输入不会残留脏状态，
-  // 且 DOM/reasoning 被动 scroll 永远不能使用过期的用户意图恢复 FOLLOWING。
   const userScrollIntentUntilRef = useRef(0)
-
-  // 滚动条拖动状态：true 期间产生的 scroll 视为真实用户滚动。
-  // 仅通过 pointerdown 在 scrollbar gutter 区域命中时设置，pointerup/cancel 时恢复。
   const scrollbarDraggingRef = useRef(false)
 
   // 监听用户滚动：区分程序滚动与用户滚动
@@ -124,9 +139,6 @@ export function MessageList() {
     const list = listRef.current
     if (!list) return
 
-    // wheel / touchmove / 滚动键：标记用户滚动意图，250ms 窗口内持续有效，
-    // 新的用户输入会刷新时间。不在 scroll 事件里清零——一个手势可能产生多个连续
-    // scroll 事件，只有成功 resumeFollowing() 时才立即清零。
     const markIntent = () => { userScrollIntentUntilRef.current = performance.now() + 250 }
     const onWheel = markIntent
     const onTouchMove = markIntent
@@ -138,21 +150,25 @@ export function MessageList() {
         markIntent()
       }
     }
-    // 滚动条拖动检测：仅当 pointerdown 落在 scrollbar gutter 区域内时才标记。
-    // 不监听整个容器的 pointerdown，避免普通点击消息正文制造假滚动意图。
     const onPointerDown = (e: PointerEvent) => {
-      const scrollbarWidth = list.offsetWidth - list.clientWidth
-      if (scrollbarWidth <= 0) return // macOS overlay scrollbar 无法可靠检测，不做危险猜测
+      let t0 = performance.now()
+      const offsetWidth = list.offsetWidth
+      probeLayoutRead(t0, 'MessageList.onPointerDown', 'offsetWidth')
+      t0 = performance.now()
+      const clientWidth = list.clientWidth
+      probeLayoutRead(t0, 'MessageList.onPointerDown', 'clientWidth')
+      const scrollbarWidth = offsetWidth - clientWidth
+      if (scrollbarWidth <= 0) return
+      t0 = performance.now()
       const rect = list.getBoundingClientRect()
+      probeLayoutRead(t0, 'MessageList.onPointerDown', 'getBoundingClientRect')
       const isInScrollbarGutter = e.clientX - rect.left >= rect.width - scrollbarWidth
       if (isInScrollbarGutter) {
         scrollbarDraggingRef.current = true
       }
     }
     const onPointerUp = () => { scrollbarDraggingRef.current = false }
-    // 使用 document 级 pointerup/cancel + window blur 作为清理手段，
-    // 覆盖用户拖动滚动条后鼠标移出 MessageList、移出窗口、切换应用等场景。
-    // 不能只依赖 list 上的 pointerup——若鼠标在容器外释放，事件不会冒泡到 list。
+
     list.addEventListener('wheel', onWheel, { passive: true })
     list.addEventListener('touchmove', onTouchMove, { passive: true })
     list.addEventListener('pointerdown', onPointerDown)
@@ -164,11 +180,23 @@ export function MessageList() {
     const handleScroll = () => {
       const target = programmaticScrollTargetRef.current
       if (target !== null) {
-        const isProgrammatic = Math.abs(list.scrollTop - target) <= 1
+        let t0 = performance.now()
+        const scrollTop = list.scrollTop
+        probeLayoutRead(t0, 'MessageList.handleScroll', 'scrollTop')
+        const isProgrammatic = Math.abs(scrollTop - target) <= 1
         programmaticScrollTargetRef.current = null
         if (isProgrammatic) return
       }
-      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+      let t0 = performance.now()
+      const scrollHeight = list.scrollHeight
+      probeLayoutRead(t0, 'MessageList.handleScroll', 'scrollHeight')
+      t0 = performance.now()
+      const scrollTop = list.scrollTop
+      probeLayoutRead(t0, 'MessageList.handleScroll', 'scrollTop')
+      t0 = performance.now()
+      const clientHeight = list.clientHeight
+      probeLayoutRead(t0, 'MessageList.handleScroll', 'clientHeight')
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight
       const nearBottom = distanceFromBottom < PINNED_THRESHOLD
       const hasRecentIntent = userScrollIntentUntilRef.current > performance.now()
       const isScrollbarDrag = scrollbarDraggingRef.current
@@ -176,15 +204,11 @@ export function MessageList() {
       pinnedRef.current = nearBottom
       setShowScrollToBottom(distanceFromBottom >= SHOW_BUTTON_THRESHOLD)
 
-      // 用户主动向上滚动（远离底部）→ 进入阅读历史模式
       if (!nearBottom && followModeRef.current === 'FOLLOWING') {
         followModeRef.current = 'READING_HISTORY'
       }
-      // 只有近期用户滚动意图 + 滚回底部才恢复 FOLLOWING。
-      // DOM 收缩/ResizeObserver/reasoning 产生的被动 scroll 没有 intent，不恢复。
       if (nearBottom && followModeRef.current === 'READING_HISTORY' && (hasRecentIntent || isScrollbarDrag)) {
         followModeRef.current = 'FOLLOWING'
-        // 成功恢复后立即清零意图，避免残留
         userScrollIntentUntilRef.current = 0
         scrollbarDraggingRef.current = false
       }
@@ -210,12 +234,22 @@ export function MessageList() {
 
     const isStreaming = streamStatus === 'streaming' || streamStatus === 'starting'
     const observer = new ResizeObserver(() => {
+      if (isConversationSwitchDiagActive()) return
       if (isStreaming && followModeRef.current === 'FOLLOWING' && pinnedRef.current) {
         scrollToBottom()
         setShowScrollToBottom(false)
         return
       }
-      const distanceFromBottom = list.scrollHeight - list.scrollTop - list.clientHeight
+      let t0 = performance.now()
+      const scrollHeight = list.scrollHeight
+      probeLayoutRead(t0, 'MessageList.resizeObserver', 'scrollHeight')
+      t0 = performance.now()
+      const scrollTop = list.scrollTop
+      probeLayoutRead(t0, 'MessageList.resizeObserver', 'scrollTop')
+      t0 = performance.now()
+      const clientHeight = list.clientHeight
+      probeLayoutRead(t0, 'MessageList.resizeObserver', 'clientHeight')
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight
       pinnedRef.current = distanceFromBottom < PINNED_THRESHOLD
       setShowScrollToBottom(distanceFromBottom >= SHOW_BUTTON_THRESHOLD)
     })
@@ -224,7 +258,7 @@ export function MessageList() {
     return () => observer.disconnect()
   }, [streamStatus])
 
-  // 在 segment 边界处插入分割线
+  // segment 边界
   const segmentBoundaries = new Set<number>()
   let currentSegmentId = ''
   for (let i = 0; i < messages.length; i++) {
@@ -234,7 +268,6 @@ export function MessageList() {
     }
   }
 
-  // 当前 segment 是否需要在末尾显示边界（无消息或最后一条消息不属于当前 segment）
   const currentSegment = activeConversation
     ? segments.find((s) => s.id === activeConversation.currentSegmentId)
     : null

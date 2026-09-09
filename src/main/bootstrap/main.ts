@@ -585,7 +585,8 @@ function createWindow(): void {
     }
   })
 
-  if (!app.isPackaged) {
+  // 临时允许 F12 打开 DevTools 查看性能日志（含生产构建，测试完还原为 !app.isPackaged）
+  {
     mainWindow.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'F12') {
         event.preventDefault(); mainWindow?.webContents.toggleDevTools()

@@ -9,6 +9,7 @@ import { ProviderSettings } from './ProviderSettings'
 import { DefaultModelSettings } from './DefaultModelSettings'
 import { WebSearchEngineSettings } from './WebSearchEngineSettings'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { hastCacheClear } from '../../packages/markdownHastCache'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -26,6 +27,7 @@ export function SettingsDialog() {
   const handleClearAll = async () => {
     await window.openchat.conversations.removeAll()
     useConversationStore.getState().clearAll()
+    hastCacheClear()
     setConfirmOpen(false)
     setSettingsDialogOpen(false)
     useUiStore.getState().showToast('所有会话已清空')

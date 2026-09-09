@@ -18,6 +18,7 @@ interface ConversationState {
   setActiveConversation: (conversation: Conversation | null) => void
   setActiveMessages: (messages: Message[]) => void
   setActiveSegments: (segments: ContextSegment[]) => void
+  activateConversation: (id: string | null, conversation: Conversation | null, messages: Message[], segments: ContextSegment[]) => void
   clearAll: () => void
 }
 
@@ -33,5 +34,7 @@ export const useConversationStore = create<ConversationState>((set) => ({
   setActiveConversation: (conversation) => set({ activeConversation: conversation }),
   setActiveMessages: (messages) => set({ activeMessages: messages }),
   setActiveSegments: (segments) => set({ activeSegments: segments }),
+  activateConversation: (id, conversation, messages, segments) =>
+    set({ activeConversationId: id, activeConversation: conversation, activeMessages: messages, activeSegments: segments }),
   clearAll: () => set({ summaries: [], activeConversationId: null, activeConversation: null, activeMessages: [], activeSegments: [] }),
 }))

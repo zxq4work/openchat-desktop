@@ -6,9 +6,20 @@ import remarkMath from 'remark-math'
 import remarkBreaks from 'remark-breaks'
 import rehypeKatex from 'rehype-katex'
 import { processLaTeX } from '../packages/latex'
+import { compileMarkdownToHast } from '../packages/markdownCompiler'
+import { renderHastToReact } from '../packages/markdownHastRenderer'
+import { hastCacheGet, hastCacheSet } from '../packages/markdownHastCache'
+import { KATEX_OPTIONS } from '../packages/katexOptions'
+
+// Feature flag: 关闭后 100% 恢复原始 ReactMarkdown 路径
+const ENABLE_MARKDOWN_HAST_CACHE = true
 
 interface MarkdownRendererProps {
   children: string
+  // 可选：传入 message.id 用于缓存 key；不传则不走缓存
+  messageId?: string
+  // 可选：标记是否为 settled (completed/stopped/failed) 的 assistant 消息
+  settled?: boolean
 }
 
 function extractTextContent(node: React.ReactNode): string {
@@ -89,27 +100,74 @@ const components: Components = {
   a: LinkRenderer,
 }
 
-export const MarkdownRenderer = React.memo(function MarkdownRenderer({
+// ReactMarkdown fallback 子组件：独立 useMemo，符合 Hook 规则
+const ReactMarkdownFallback = React.memo(function ReactMarkdownFallback({
   children,
-}: MarkdownRendererProps) {
+}: {
+  children: string
+}) {
   const processedText = useMemo(() => {
     if (!children) return ''
     return processLaTeX(children)
   }, [children])
 
-  if (!processedText) {
-    return null
-  }
+  if (!processedText) return null
 
   return (
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, KATEX_OPTIONS] as any]}
         components={components}
       >
         {processedText}
       </ReactMarkdown>
     </div>
   )
+})
+
+// 临时诊断：标记应用级首次 Markdown/KaTeX 渲染
+let mdColdStartDone = false
+
+export const MarkdownRenderer = React.memo(function MarkdownRenderer({
+  children,
+  messageId,
+  settled,
+}: MarkdownRendererProps) {
+  if (!children) {
+    return null
+  }
+
+  if (!mdColdStartDone) {
+    mdColdStartDone = true
+    console.log('[perf] md-cold-start')
+  }
+
+  // HAST cache 路径：仅在 feature flag 开启 + settled + 有 messageId 时生效
+  // processLaTeX 由 compileMarkdownToHast 内部调用（cache miss = 1次，cache hit = 0次）
+  if (ENABLE_MARKDOWN_HAST_CACHE && settled && messageId) {
+    // 缓存命中：render-ready HAST → 直接 toJsxRuntime，无需 processLaTeX
+    const cachedHast = hastCacheGet(messageId, children)
+    if (cachedHast) {
+      return (
+        <div className="markdown-body">
+          {renderHastToReact(cachedHast, components)}
+        </div>
+      )
+    }
+
+    // 缓存未命中：编译（含 processLaTeX）→ post-transform → render-ready HAST → 写入缓存
+    const hast = compileMarkdownToHast(children)
+    hastCacheSet(messageId, children, hast)
+
+    return (
+      <div className="markdown-body">
+        {renderHastToReact(hast, components)}
+      </div>
+    )
+  }
+
+  // 原始 ReactMarkdown 路径（streaming / flag 关闭 / 无 messageId）
+  // processLaTeX 在子组件的 useMemo 中调用，仅 1 次
+  return <ReactMarkdownFallback>{children}</ReactMarkdownFallback>
 })

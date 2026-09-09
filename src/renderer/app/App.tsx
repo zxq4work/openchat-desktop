@@ -1,4 +1,6 @@
 import React, { useEffect, useCallback } from 'react'
+import { createRoot } from 'react-dom/client'
+import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useAuthStore } from '../stores/authStore'
 import { useModelStore } from '../stores/modelStore'
 import { useConversationStore } from '../stores/conversationStore'
@@ -16,6 +18,7 @@ import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 import { finishBootSplash } from './boot-splash'
+import { hastCacheStats, hastCacheResetStats, hastCacheClear } from '../packages/markdownHastCache'
 
 export function App() {
   const setAuthStatus = useAuthStore((s) => s.setStatus)
@@ -33,6 +36,66 @@ export function App() {
       return () => clearTimeout(timer)
     }
   }, [toast, clearToast])
+
+  // Markdown/KaTeX 预热：应用生命周期仅执行一次，挂载代表性 Markdown 到离屏节点，
+  // 触发 react-markdown / remark / rehype-katex / KaTeX / CSS / font 的首次执行路径。
+  useEffect(() => {
+    const host = document.createElement('div')
+    host.style.position = 'fixed'
+    host.style.left = '-10000px'
+    host.style.top = '-10000px'
+    host.style.width = '700px'
+    host.style.opacity = '0'
+    host.style.pointerEvents = 'none'
+    document.body.appendChild(host)
+
+    const root = createRoot(host)
+    let cleanedUp = false
+
+    const warmupMarkdown = [
+      '# 预热标题',
+      '',
+      '**加粗** 与 *斜体* 文本，`inline code`。',
+      '',
+      '| 列A | 列B |',
+      '| --- | --- |',
+      '| 1 | 2 |',
+      '| 3 | 4 |',
+      '',
+      '```js',
+      'const x = 1 + 2;',
+      'console.log(x);',
+      '```',
+      '',
+      '行内公式 $x$ 与 $\\frac{1}{2}$，以及 $\\sqrt{x}$。',
+      '',
+      '块级公式：',
+      '',
+      '$$',
+      '\\frac{a}{b} + \\sqrt{c} = \\sum_{i=1}^{n} x_i',
+      '$$',
+    ].join('\n')
+
+    root.render(<MarkdownRenderer>{warmupMarkdown}</MarkdownRenderer>)
+
+    const cleanup = () => {
+      if (cleanedUp) return
+      cleanedUp = true
+      try { root.unmount() } catch {}
+      host.remove()
+    }
+
+    const raf1 = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        cleanup()
+      })
+    })
+
+    return () => {
+      cancelAnimationFrame(raf1)
+      cleanup()
+    }
+  }, [])
 
   // React 首次渲染完成后立即通知主进程（APP_READY）。
   // 主进程根据 Splash 已显示时长决定何时回发 FINISH_SPLASH。
@@ -94,6 +157,8 @@ export function App() {
         })
       } else if (status === 'logged-out') {
         setAccount(null, null, null, null)
+        // 用户登出：清空 HAST 缓存，旧缓存内容属于前一会话
+        hastCacheClear()
       }
     })
 
@@ -507,6 +572,39 @@ export function App() {
       }
     }
   }, [])
+
+  // 性能诊断：longtask 监听
+  useEffect(() => {
+    if (typeof PerformanceObserver === 'undefined') return
+    try {
+      const obs = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration > 50) {
+            console.log('[perf] longtask|duration=%dms startTime=%dms name=%s',
+              Math.round(entry.duration), Math.round(entry.startTime),
+              entry.name)
+          }
+        }
+      })
+      obs.observe({ type: 'longtask', buffered: true })
+      return () => obs.disconnect()
+    } catch {
+      // longtask not supported
+    }
+  }, [])
+
+  // 性能诊断：会话切换后输出 Markdown HAST cache 统计
+  useEffect(() => {
+    if (!activeConversationId) return
+    // 延迟输出：等待 React 渲染完成（缓存写入在渲染中进行）
+    const timer = setTimeout(() => {
+      const stats = hastCacheStats()
+      console.log('[perf] markdown-cache|size=%d hit=%d miss=%d',
+        stats.size, stats.hitCount, stats.missCount)
+      hastCacheResetStats()
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [activeConversationId])
 
   // 主题初始化与系统主题变化监听
   useEffect(() => {

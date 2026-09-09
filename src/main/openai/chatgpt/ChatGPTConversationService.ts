@@ -252,11 +252,21 @@ export class ChatGPTConversationService {
     segments: ContextSegment[]
     messages: Message[]
   } | null {
+    const t0 = performance.now()
+
+    const t1 = performance.now()
     const conversation = this.conversations.getById(id)
+    const t2 = performance.now()
     if (!conversation) return null
 
     const segments = this.segments.getByConversationId(id)
+    const t3 = performance.now()
     const messages = this.messages.getByConversationId(id)
+    const t4 = performance.now()
+
+    console.log('[perf] getConversation sql|conv=%dms segments=%dms messages=%dms total=%dms count=%d',
+      Math.round(t2 - t1), Math.round(t3 - t2), Math.round(t4 - t3), Math.round(t4 - t0),
+      messages.length)
 
     return { conversation, segments, messages }
   }

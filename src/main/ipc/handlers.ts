@@ -303,7 +303,12 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_GET, (_event, id: string) => {
-    return services.conversationService?.getConversation(id) ?? null
+    const t0 = performance.now()
+    const result = services.conversationService?.getConversation(id) ?? null
+    const t1 = performance.now()
+    console.log('[perf] ipc CONVERSATIONS_GET total=%dms msgs=%d',
+      Math.round(t1 - t0), result?.messages?.length ?? 0)
+    return result
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google'): Conversation | null => {

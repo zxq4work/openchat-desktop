@@ -4,6 +4,7 @@ import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useModelStore } from '../../stores/modelStore'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { ScrollContainerContext } from './ScrollContainerContext'
+import { probeLayoutRead } from '../../packages/layoutReadDiag'
 
 interface Props {
   message: Message
@@ -99,7 +100,16 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   const handleReasoningPanelScroll = useCallback(() => {
     const panel = reasoningPanelRef.current
     if (!panel) return
-    const dist = panel.scrollHeight - panel.scrollTop - panel.clientHeight
+    let t0 = performance.now()
+    const scrollHeight = panel.scrollHeight
+    probeLayoutRead(t0, 'AssistantMessage.reasoningScroll', 'scrollHeight')
+    t0 = performance.now()
+    const scrollTop = panel.scrollTop
+    probeLayoutRead(t0, 'AssistantMessage.reasoningScroll', 'scrollTop')
+    t0 = performance.now()
+    const clientHeight = panel.clientHeight
+    probeLayoutRead(t0, 'AssistantMessage.reasoningScroll', 'clientHeight')
+    const dist = scrollHeight - scrollTop - clientHeight
     reasoningPinnedRef.current = dist < 40
     setShowReasoningScrollBtn(dist >= 120)
     if (dist >= 40) {
@@ -111,17 +121,27 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
     const panel = reasoningPanelRef.current
     if (!panel) return
     reasoningPinnedRef.current = true
-    panel.scrollTop = panel.scrollHeight
+    let t0 = performance.now()
+    const scrollHeight = panel.scrollHeight
+    probeLayoutRead(t0, 'AssistantMessage.scrollReasoningToBottom', 'scrollHeight')
+    panel.scrollTop = scrollHeight
     setShowReasoningScrollBtn(false)
   }, [])
 
   // Live reasoning 自动跟随：内容增长时若贴底则滚到底部
+  // 前置条件全部满足才允许读取 geometry，避免历史消息 mount / 折叠态触发 Forced Reflow
   useEffect(() => {
-    if (reasoningDisplayMode !== 'live' || !reasoningPinnedRef.current) return
+    if (!isStreaming) return
+    if (reasoningDisplayMode !== 'live') return
+    if (!livePanelExpanded) return
+    if (!reasoningPinnedRef.current) return
     const panel = reasoningPanelRef.current
     if (!panel) return
-    panel.scrollTop = panel.scrollHeight
-  }, [liveReasoningText, reasoningDisplayMode])
+    let t0 = performance.now()
+    const scrollHeight = panel.scrollHeight
+    probeLayoutRead(t0, 'AssistantMessage.liveFollow', 'scrollHeight')
+    panel.scrollTop = scrollHeight
+  }, [isStreaming, reasoningDisplayMode, livePanelExpanded, liveReasoningText])
 
   const statusBadge = message.status === 'streaming' ? '生成中...' :
     message.status === 'stopped' ? '已停止' :
@@ -175,47 +195,48 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
           </div>
 
           <div className="reasoning-body">
-            {/* Live Reasoning Panel: reasoningDisplayMode 不变，用 display 控制可见性 */}
-            <div
-              className="message-thinking-content message-thinking-live-panel"
-              style={{ display: reasoningDisplayMode === 'live' && livePanelExpanded ? undefined : 'none' }}
-            >
+            {/* Live Reasoning Panel: live 模式下始终挂载（保持 DOM 生命周期 / scrollTop），折叠用 display:none */}
+            {reasoningDisplayMode === 'live' && (
               <div
-                className="message-thinking-live-scroll"
-                ref={reasoningPanelRef}
-                onScroll={handleReasoningPanelScroll}
-              >{liveReasoningText}</div>
-              {showReasoningScrollBtn && (
-                <button
-                  className="message-thinking-scroll-btn"
-                  onClick={scrollReasoningToBottom}
-                  aria-label="查看最新思考"
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M8 3v10" />
-                    <path d="M3 8l5 5 5-5" />
-                  </svg>
-                  <span>最新思考</span>
-                </button>
-              )}
-            </div>
-
-            {/* Codex Summary Panel */}
-            <div
-              className="message-thinking-content"
-              style={{ display: reasoningDisplayMode === 'summary' && hasSummary && summaryExpandedEffective ? undefined : 'none' }}
-            >
-              <div className="message-thinking-summary-title">推理摘要</div>
-              <div className="message-thinking-summary-content">
-                {reasoningMeta && (
-                  <MarkdownRenderer>{
-                    isCodex
-                      ? reasoningMeta.summary.map((s) => `- ${s}`).join('\n')
-                      : reasoningMeta.summary.join('\n\n')
-                  }</MarkdownRenderer>
+                className="message-thinking-content message-thinking-live-panel"
+                style={livePanelExpanded ? undefined : { display: 'none' }}
+              >
+                <div
+                  className="message-thinking-live-scroll"
+                  ref={reasoningPanelRef}
+                  onScroll={handleReasoningPanelScroll}
+                >{liveReasoningText}</div>
+                {showReasoningScrollBtn && (
+                  <button
+                    className="message-thinking-scroll-btn"
+                    onClick={scrollReasoningToBottom}
+                    aria-label="查看最新思考"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M8 3v10" />
+                      <path d="M3 8l5 5 5-5" />
+                    </svg>
+                    <span>最新思考</span>
+                  </button>
                 )}
               </div>
-            </div>
+            )}
+
+            {/* Codex Summary Panel: 仅在 summary 模式 + 有摘要 + 展开时挂载 Markdown，折叠时不挂载 */}
+            {reasoningDisplayMode === 'summary' && hasSummary && summaryExpandedEffective && (
+              <div className="message-thinking-content">
+                <div className="message-thinking-summary-title">推理摘要</div>
+                <div className="message-thinking-summary-content">
+                  {reasoningMeta && (
+                    <MarkdownRenderer>{
+                      isCodex
+                        ? reasoningMeta.summary.map((s) => `- ${s}`).join('\n')
+                        : reasoningMeta.summary.join('\n\n')
+                    }</MarkdownRenderer>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -309,7 +330,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
 
       <div className="message-content">
         {rawContent ? (
-          <MarkdownRenderer>{rawContent}</MarkdownRenderer>
+          <MarkdownRenderer messageId={message.id} settled={isMessageSettled}>{rawContent}</MarkdownRenderer>
         ) : isStreaming ? (
           <div>...</div>
         ) : null}

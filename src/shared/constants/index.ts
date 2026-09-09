@@ -13,9 +13,6 @@ export const EFFORT_LABELS: Record<string, string> = {
 // 流式刷新间隔（毫秒）
 export const STREAM_FLUSH_MS = 40
 
-// 消息分页默认数量
-export const MESSAGE_PAGE_SIZE = 100
-
 // 会话标题最大字符数
 export const TITLE_MAX_LENGTH = 40
 

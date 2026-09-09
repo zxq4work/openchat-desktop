@@ -1,6 +1,5 @@
 import { StorageService } from './StorageService'
 import type { Message, MessageStatus, ReasoningDisplayMode, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
-import { MESSAGE_PAGE_SIZE } from '../../shared/constants'
 import { cleanCitationText } from '../services/ai/CitationParser'
 
 export class MessageRepository {
@@ -10,22 +9,16 @@ export class MessageRepository {
     this.storage = storage
   }
 
-  getByConversationId(conversationId: string, limit = MESSAGE_PAGE_SIZE, offset = 0): Message[] {
+  getByConversationId(conversationId: string): Message[] {
     const db = this.storage.database
-    // 先取最新的 N 条，再按 created_at ASC 排序，保证 UI 显示顺序正确
-    // 子查询：ORDER BY created_at DESC 取最新，外层 ORDER BY created_at ASC 恢复时间顺序
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, reasoning_text, reasoning_display_mode, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
              provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
-      FROM (
-        SELECT * FROM messages
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-      )
+      FROM messages
+      WHERE conversation_id = ?
       ORDER BY created_at ASC
-    `, [conversationId, limit, offset])
+    `, [conversationId])
 
     if (!result.length || !result[0].values.length) return []
 
