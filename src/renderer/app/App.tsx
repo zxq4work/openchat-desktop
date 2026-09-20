@@ -18,6 +18,11 @@ import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS } from '../../shared/constants'
 import { finishBootSplash } from './boot-splash'
+import {
+  DIAG_ENABLE_CONVERSATION_KEEP_ALIVE,
+  keepAliveRotateIn,
+  type PaneEntry,
+} from '../packages/conversationKeepAlive'
 import { hastCacheStats, hastCacheResetStats, hastCacheClear } from '../packages/markdownHastCache'
 
 export function App() {
@@ -742,6 +747,28 @@ export function App() {
     if (conv) {
       const list = await window.openchat.conversations.list()
       useConversationStore.getState().setSummaries(list)
+
+      // Keep-alive：新会话作为 current，旧 current 若 settled 降为 previous
+      if (DIAG_ENABLE_CONVERSATION_KEEP_ALIVE) {
+        const prevId = useConversationStore.getState().activeConversationId
+        const prevConv = useConversationStore.getState().activeConversation
+        const prevMsgs = useConversationStore.getState().activeMessages
+        const prevSegs = useConversationStore.getState().activeSegments
+        const streamConvId = useChatStreamStore.getState().streamingConversationId
+        const prevSettled = prevId != null && prevId !== streamConvId
+
+        const prevSnapshot: PaneEntry | null = (prevId && prevConv)
+          ? {
+              conversationId: prevId,
+              conversation: prevConv,
+              messages: prevMsgs,
+              segments: prevSegs,
+            }
+          : null
+
+        keepAliveRotateIn(conv.id, prevSettled, prevSnapshot)
+      }
+
       useConversationStore.getState().setActiveConversationId(conv.id)
       useConversationStore.getState().setActiveConversation(conv)
       useConversationStore.getState().setActiveMessages([])

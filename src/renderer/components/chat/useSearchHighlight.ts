@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useUiStore, type SearchMatch } from '../../stores/uiStore'
+import { useConversationStore } from '../../stores/conversationStore'
 
 let isApplying = false
 let isSelecting = false
@@ -70,8 +71,22 @@ function highlightText(root: HTMLElement, query: string, matches: SearchMatch[],
   }
 }
 
+function getActivePaneMessageList(): HTMLElement | null {
+  // Keep-alive 模式下同时存在多个 .message-list，必须限定到 active pane
+  // data-conversation-pane 加在 .message-list-viewport 上，.message-list 是其子元素
+  const activeId = useConversationStore.getState().activeConversationId
+  if (activeId) {
+    // active pane 必须命中；未挂载时返回 null，不回退到任意 .message-list（避免命中 hidden pane）
+    return document.querySelector<HTMLElement>(
+      `[data-conversation-pane="${activeId}"] .message-list`
+    )
+  }
+  // 非 keep-alive 模式：无 pane id 时取第一个
+  return document.querySelector<HTMLElement>('.message-list')
+}
+
 function applyHighlights(query: string, matches: SearchMatch[], currentMatchIdx: number, scrollToMatch: boolean): void {
-  const container = document.querySelector('.message-list')
+  const container = getActivePaneMessageList()
   if (!container) return
 
   isApplying = true
@@ -114,8 +129,10 @@ export function useSearchHighlight(): void {
   }, [searchQuery, searchMatches, currentMatchIndex])
 
   // 监听 React 流式渲染导致的 DOM 替换，自动重新应用高亮（不滚动）
+  // Keep-alive 下 A→B 后 A DOM 保留，observer 必须随 activeConversationId 切换到新 active pane
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
   useEffect(() => {
-    const container = document.querySelector('.message-list')
+    const container = getActivePaneMessageList()
     if (!container) return
 
     let rafId: number | null = null
@@ -139,9 +156,11 @@ export function useSearchHighlight(): void {
 
     return () => {
       observerRef.current?.disconnect()
+      observerRef.current = null
       if (rafId != null) cancelAnimationFrame(rafId)
-      const c = document.querySelector('.message-list')
+      // 清理时只清当前 active pane（与 observe 目标一致）
+      const c = getActivePaneMessageList()
       if (c) clearHighlights(c as HTMLElement)
     }
-  }, [])
+  }, [activeConversationId])
 }

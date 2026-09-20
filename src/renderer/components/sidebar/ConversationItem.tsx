@@ -3,7 +3,16 @@ import { createPortal } from 'react-dom'
 import type { ConversationSummary } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
-import { markConversationSwitch } from '../../packages/layoutReadDiag'
+import { markConversationSwitch, switchTimingBegin, switchTimingMark } from '../../packages/layoutReadDiag'
+import { useChatStreamStore } from '../../stores/chatStreamStore'
+import {
+  DIAG_ENABLE_CONVERSATION_KEEP_ALIVE,
+  keepAliveIsCached,
+  keepAliveGetPreviousEntry,
+  keepAliveRotateIn,
+  keepAliveEvictDeleted,
+  type PaneEntry,
+} from '../../packages/conversationKeepAlive'
 
 interface Props {
   summary: ConversationSummary
@@ -50,9 +59,92 @@ export function ConversationItem({ summary, active }: Props) {
   const handleClick = async () => {
     const t0 = performance.now()
     markConversationSwitch()
+
+    // Keep-alive：检查目标会话是否在 previous 缓存中
+    if (DIAG_ENABLE_CONVERSATION_KEEP_ALIVE && keepAliveIsCached(summary.id)) {
+      const cached = keepAliveGetPreviousEntry()!
+      console.log('[keepalive] cache hit id=%s', summary.id.slice(0, 8))
+      // 分阶段埋点：起点 = cache hit 命中
+      switchTimingBegin(summary.id, t0)
+
+      // 旧 current（现在 active 的会话）的数据从 store 取最新值，降为 previous
+      const prevId = useConversationStore.getState().activeConversationId
+      const prevConv = useConversationStore.getState().activeConversation
+      const prevMsgs = useConversationStore.getState().activeMessages
+      const prevSegs = useConversationStore.getState().activeSegments
+      const streamConvId = useChatStreamStore.getState().streamingConversationId
+      const prevSettled = prevId != null && prevId !== streamConvId
+
+      const prevSnapshot: PaneEntry | null = (prevId && prevConv)
+        ? {
+            conversationId: prevId,
+            conversation: prevConv,
+            messages: prevMsgs,
+            segments: prevSegs,
+          }
+        : null
+
+      // rotateIn：旧 current(B) 降为 previous，旧 previous(A) evict，新 current=A
+      // 注意：cached(A) 的数据来自 previous snapshot，但 A 成为 current 后从 store 读
+      // 所以这里把 cached 数据写回 store
+      keepAliveRotateIn(summary.id, prevSettled, prevSnapshot)
+
+      // DOM identity 验证：切换前抓 A 的 message DOM 引用，切换后确认仍是同一实例
+      const paneBefore = document.querySelector<HTMLElement>(
+        `[data-conversation-pane="${summary.id}"] .message-list [data-message-id]`
+      )
+
+      // 原子写入 store：用缓存数据，不触发 IPC
+      useConversationStore.getState().activateConversation(
+        summary.id, cached.conversation, cached.messages, cached.segments
+      )
+      // 分阶段埋点：store 写入完成（此后 await React commit）
+      switchTimingMark(summary.id, 'store-write')
+
+      // 延迟记录
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const t1 = performance.now()
+          const paneAfter = document.querySelector<HTMLElement>(
+            `[data-conversation-pane="${summary.id}"] .message-list [data-message-id]`
+          )
+          if (paneBefore && paneAfter) {
+            console.log('[keepalive] dom-identity id=%s same=%s',
+              summary.id.slice(0, 8), paneBefore === paneAfter)
+          }
+          console.log('[perf] conversation-switch|id=%s msgs=%d total=%dms (cached)',
+            summary.id.slice(0, 8), cached.messages.length, Math.round(t1 - t0))
+          // 分阶段埋点：finish 与 switchTimingEnd 交由 MessageList restore 完成时打印
+          // （restore 在双 rAF 后执行；此处 rAF 注册更早，若在此 end 会早于 restore-end）
+        })
+      })
+      return
+    }
+
     const data = await window.openchat.conversations.get(summary.id)
 
     if (data) {
+      // Keep-alive：轮换缓存
+      if (DIAG_ENABLE_CONVERSATION_KEEP_ALIVE) {
+        const prevId = useConversationStore.getState().activeConversationId
+        const prevConv = useConversationStore.getState().activeConversation
+        const prevMsgs = useConversationStore.getState().activeMessages
+        const prevSegs = useConversationStore.getState().activeSegments
+        const streamConvId = useChatStreamStore.getState().streamingConversationId
+        const prevSettled = prevId != null && prevId !== streamConvId
+
+        const prevSnapshot: PaneEntry | null = (prevId && prevConv)
+          ? {
+              conversationId: prevId,
+              conversation: prevConv,
+              messages: prevMsgs,
+              segments: prevSegs,
+            }
+          : null
+
+        keepAliveRotateIn(summary.id, prevSettled, prevSnapshot)
+      }
+
       // 原子写入：一次 set 同时更新 id/conversation/messages/segments，消除中间态
       useConversationStore.getState().activateConversation(
         summary.id, data.conversation, data.messages, data.segments
@@ -97,6 +189,11 @@ export function ConversationItem({ summary, active }: Props) {
     e.stopPropagation()
     setMenuOpen(false)
     await window.openchat.conversations.remove(summary.id)
+
+    // Keep-alive：清理缓存中的对应 pane
+    if (DIAG_ENABLE_CONVERSATION_KEEP_ALIVE) {
+      keepAliveEvictDeleted(summary.id)
+    }
 
     if (activeConversationId === summary.id) {
       setActiveConversationId(null)

@@ -603,6 +603,58 @@ textarea {
   overflow: hidden;
 }
 
+/* Keep-alive pane container */
+.pane-cache-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-cache-pane {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 使子级 .message-list-viewport 的 flex:1 生效（原为 .chat-view 的 flex 子项），
+     否则 viewport 高度塌陷为 auto，.message-list height:100% 无法解析，
+     滚动容器变成内容全高 → scrollHeight == clientHeight → 无法滚动 */
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-cache-pane[data-active="true"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.pane-cache-pane[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* ============================================================
+   Pane rendering isolation 实验（DIAG_PANE_RENDERING_ISOLATION）
+   目的：降低切换时大 DOM subtree 的 layout 成本（paneVisible->raf1 200~270ms）。
+   保留上方 visibility 逻辑，仅叠加 contain / content-visibility。
+   ============================================================ */
+
+/* contain: layout paint —— 把 pane 的 layout/paint 影响限制在自身边界内，
+   使 pane 内外的重排/重绘互不扩散 */
+.pane-cache-pane-isolated {
+  contain: layout paint;
+}
+
+/* inactive pane：跳过渲染，浏览器不为其内容分配布局/绘制（保留下方 visibility:hidden） */
+.pane-cache-pane-isolated[data-active="false"] {
+  content-visibility: hidden;
+}
+
+/* active pane：正常渲染 */
+.pane-cache-pane-isolated[data-active="true"] {
+  content-visibility: visible;
+}
+
 .message-list {
   height: 100%;
   overflow-y: auto;

@@ -10,6 +10,10 @@ import { DefaultModelSettings } from './DefaultModelSettings'
 import { WebSearchEngineSettings } from './WebSearchEngineSettings'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { hastCacheClear } from '../../packages/markdownHastCache'
+import {
+  DIAG_ENABLE_CONVERSATION_KEEP_ALIVE,
+  keepAliveReset,
+} from '../../packages/conversationKeepAlive'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -26,6 +30,10 @@ export function SettingsDialog() {
 
   const handleClearAll = async () => {
     await window.openchat.conversations.removeAll()
+    // Keep-alive：清理所有缓存 pane
+    if (DIAG_ENABLE_CONVERSATION_KEEP_ALIVE) {
+      keepAliveReset()
+    }
     useConversationStore.getState().clearAll()
     hastCacheClear()
     setConfirmOpen(false)
