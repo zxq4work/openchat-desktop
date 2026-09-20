@@ -68,6 +68,13 @@ export const IPC_CHANNELS = {
   DRAFT_SET: 'draft:set',
   DRAFT_DELETE: 'draft:delete',
 
+  // Attachments (图片输入)
+  ATTACHMENTS_PICK_IMAGES: 'attachments:pick-images',
+  ATTACHMENTS_PREPARE_FROM_BYTES: 'attachments:prepare-from-bytes',
+  ATTACHMENTS_DELETE: 'attachments:delete',
+  ATTACHMENTS_LIST_DRAFTS: 'attachments:list-drafts',
+  ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
+
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',

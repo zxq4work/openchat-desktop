@@ -4,6 +4,7 @@ import { useUiStore } from '../../stores/uiStore'
 import { MessageList } from './MessageList'
 import { Composer } from '../composer/Composer'
 import { SearchBar } from './SearchBar'
+import { AttachmentLightbox } from './AttachmentLightbox'
 
 export function ChatView() {
   const activeConversation = useConversationStore((s) => s.activeConversation)
@@ -35,6 +36,7 @@ export function ChatView() {
       {searchVisible && <SearchBar />}
       <MessageList />
       <Composer />
+      <AttachmentLightbox />
     </div>
   )
 }

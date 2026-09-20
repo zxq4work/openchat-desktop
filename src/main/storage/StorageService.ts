@@ -28,6 +28,17 @@ export class StorageService {
     }
   }
 
+  private tableExists(name: string): boolean {
+    const result = this.db?.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, [name])
+    return !!result && result.length > 0 && result[0].values.length > 0
+  }
+
+  private hasForeignKey(table: string, fromColumn: string): boolean {
+    const result = this.db?.exec(`PRAGMA foreign_key_list(${table})`)
+    if (!result || !result.length || !result[0].values.length) return false
+    return result[0].values.some((row) => String(row[3]) === fromColumn)
+  }
+
   private runMigrations(): boolean {
     if (!this.db) return false
 
@@ -235,6 +246,42 @@ export class StorageService {
         changed = true
       }
     }
+
+    // 迁移：provider_configs 表 image_input 列（自定义 Provider 是否支持图片输入）
+    if (this.tableExists('provider_configs')) {
+      const pcCols = this.db.exec("PRAGMA table_info(provider_configs)")
+      const pcNames = pcCols.length > 0 && pcCols[0].values ? pcCols[0].values.map((row) => String(row[1])) : []
+      if (!pcNames.includes('image_input')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN image_input INTEGER NOT NULL DEFAULT 0")
+        changed = true
+      }
+    }
+
+    // 迁移：message_attachments 表（图片输入附件）。旧数据库无此表 → 自动创建。
+    // 非破坏性：既有 messages 行不需要重写，读取时 attachments 缺省为 []。
+    if (!this.tableExists('message_attachments')) {
+      this.db.run(`
+        CREATE TABLE message_attachments (
+          id TEXT PRIMARY KEY,
+          message_id TEXT,
+          conversation_id TEXT,
+          segment_id TEXT,
+          type TEXT NOT NULL,
+          mime_type TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          file_size INTEGER NOT NULL,
+          width INTEGER NOT NULL DEFAULT 0,
+          height INTEGER NOT NULL DEFAULT 0,
+          detail TEXT NOT NULL DEFAULT 'auto',
+          sha256 TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `)
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_message ON message_attachments(message_id)`)
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_conversation ON message_attachments(conversation_id)`)
+      changed = true
+    }
+
     return changed
   }
 
@@ -371,9 +418,31 @@ export class StorageService {
         responses_path TEXT,
         extra_headers TEXT,
         tool_calling TEXT NOT NULL DEFAULT 'auto',
+        image_input INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+
+      CREATE TABLE message_attachments (
+        id TEXT PRIMARY KEY,
+        message_id TEXT,
+        conversation_id TEXT,
+        segment_id TEXT,
+        type TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        width INTEGER NOT NULL DEFAULT 0,
+        height INTEGER NOT NULL DEFAULT 0,
+        detail TEXT NOT NULL DEFAULT 'auto',
+        sha256 TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_attachments_message
+        ON message_attachments(message_id);
+      CREATE INDEX idx_attachments_conversation
+        ON message_attachments(conversation_id);
     `)
   }
 }

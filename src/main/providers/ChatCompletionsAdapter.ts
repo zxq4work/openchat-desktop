@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'http'
+import * as fs from 'fs'
 import { SSEParser } from './SSEParser'
 import type {
   ModelAdapter,
@@ -10,10 +11,15 @@ import type {
   ProviderProtocol,
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
+import { UnsupportedImageInputError } from './errors'
+
+type ChatCompletionContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } }
 
 interface ChatCompletionMessage {
   role: string
-  content: string | null
+  content: string | ChatCompletionContentPart[] | null
   tool_calls?: Array<{
     id: string
     type: 'function'
@@ -48,7 +54,7 @@ interface ChatCompletionRequest {
 
 export class ChatCompletionsAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chat_completions'
-  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean; supportsImageInput: boolean }
 
   private baseUrl: string
   private apiKey: string
@@ -62,10 +68,15 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     chatCompletionsPath?: string
     extraHeaders?: Record<string, string>
     supportsReasoning?: boolean
+    imageInput?: boolean
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '')
     this.apiKey = config.apiKey
-    this.capabilities = { toolCalling: config.toolCalling, reasoning: config.supportsReasoning ?? false }
+    this.capabilities = {
+      toolCalling: config.toolCalling,
+      reasoning: config.supportsReasoning ?? false,
+      supportsImageInput: config.imageInput ?? false,
+    }
     // 如果 baseUrl 已以 /v1 结尾，则使用短路径，否则用完整路径
     if (config.chatCompletionsPath) {
       this.chatCompletionsPath = config.chatCompletionsPath
@@ -189,6 +200,18 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     yield { type: 'turn_completed' }
   }
 
+  // 读取受管图片文件并编码为 base64 data URL。读取失败返回 null（调用方须显式失败，不得降级）。
+  private readImageDataUrl(storagePath: string, mimeType: string): string | null {
+    try {
+      const buffer = fs.readFileSync(storagePath)
+      return `data:${mimeType};base64,${buffer.toString('base64')}`
+    } catch {
+      // 不打印本地路径，避免文件系统信息进入日志
+      console.error('[ChatCompletionsAdapter] failed to read image attachment')
+      return null
+    }
+  }
+
   // 将累积的思考文本按行拆分为摘要数组，便于前端按段落展示
   private splitReasoning(text: string): string[] {
     const lines = text
@@ -206,7 +229,7 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     }
 
     for (const msg of request.messages) {
-      messages.push(this.convertMessage(msg))
+      messages.push(this.convertMessage(msg, request))
     }
 
     const body: ChatCompletionRequest = {
@@ -237,10 +260,39 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     return body
   }
 
-  private convertMessage(msg: CanonicalMessage): ChatCompletionMessage {
+  private convertMessage(msg: CanonicalMessage, request: CanonicalModelRequest): ChatCompletionMessage {
     const ccMsg: ChatCompletionMessage = {
       role: msg.role === 'developer' ? 'system' : msg.role,
       content: msg.content ?? null,
+    }
+
+    // 多模态内容：user 消息带 inputParts 时构建 OpenAI 兼容的 multipart content。
+    // 图片字节由主进程 resolver 读取并编码为 base64 data URL；任何图片无法编码时
+    // 必须显式失败，绝不静默降级为纯文本（否则用户会误以为模型看到了图片）。
+    if (msg.inputParts && msg.inputParts.length > 0) {
+      const parts: ChatCompletionContentPart[] = []
+      for (const part of msg.inputParts) {
+        if (part.type === 'text') {
+          parts.push({ type: 'text', text: part.text })
+        } else if (part.type === 'image') {
+          // 最后一层 defensive check：capability gate 已提前拦截。
+          if (!this.capabilities.supportsImageInput) {
+            throw new UnsupportedImageInputError()
+          }
+          const resolved = request.attachmentResolver?.resolveForProvider(part.attachmentId)
+          if (!resolved) {
+            throw new UnsupportedImageInputError('图片附件无法解析')
+          }
+          const encoded = this.readImageDataUrl(resolved.storagePath, resolved.mimeType)
+          if (!encoded) {
+            throw new UnsupportedImageInputError('图片文件读取失败')
+          }
+          parts.push({ type: 'image_url', image_url: { url: encoded, detail: part.detail ?? resolved.detail ?? 'auto' } })
+        }
+      }
+      if (parts.length > 0) {
+        ccMsg.content = parts
+      }
     }
 
     if (msg.toolCalls && msg.toolCalls.length > 0) {

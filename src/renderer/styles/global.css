@@ -3181,12 +3181,16 @@ html[data-theme="dark"] mark.search-highlight-current {
 }
 
 .message-image-grid--single {
-  grid-template-columns: minmax(0, 1fr);
+  display: inline-grid;
+  grid-template-columns: auto;
+  /* 小图不放大：容器随 intrinsic 尺寸收缩，大图受 320px 上限约束 */
   max-width: 320px;
+  max-height: 320px;
 }
 
 .message-image-grid--multi {
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  /* 固定 160px 列宽与 cell 尺寸一致；不使用 1fr，避免列宽被拉伸 */
+  grid-template-columns: repeat(auto-fill, 160px);
   max-width: 420px;
 }
 
@@ -3212,21 +3216,36 @@ html[data-theme="dark"] mark.search-highlight-current {
 
 .message-image-grid--single .message-image-cell img {
   display: block;
-  width: 100%;
+  /* 关键：width/height 均为 auto，小图按 intrinsic 尺寸显示，
+     大图由 max-width/max-height 缩到 320px 以内，比例始终正确 */
+  width: auto;
+  height: auto;
+  max-width: 320px;
   max-height: 320px;
   object-fit: contain;
   background: var(--bg-subtle);
 }
 
 .message-image-grid--multi .message-image-cell {
-  aspect-ratio: 1 / 1;
+  width: 160px;
+  height: 160px;
+  /* 图片不填满 cell 时居中显示 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
+/* 多图 cell 保持统一尺寸，但图片不超 intrinsic：小图居中原尺寸展示，
+   大图 contain 缩入 cell。用 auto + max 约束而非 width:100% 避免小图被拉伸放大。 */
 .message-image-grid--multi .message-image-cell img {
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0 auto;
+  object-fit: contain;
+  background: var(--bg-subtle);
 }
 
 /* ========================================

@@ -8,9 +8,12 @@ interface Props {
   onChange: (text: string) => void
   onSend: () => void
   onStop: () => void
+  onPasteImages: (files: File[]) => void
+  // 仅有图片、无文字时也应允许 Enter 发送
+  hasDraftAttachments: boolean
 }
 
-export function MessageInput({ text, onChange, onSend, onStop }: Props) {
+export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, hasDraftAttachments }: Props) {
   const status = useChatStreamStore((s) => s.status)
   const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
@@ -36,7 +39,7 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
       if (isCurrentConversationStreaming) {
         // 当前会话正在流式生成，忽略回车，不停止也不发送
         return
-      } else if (text.trim()) {
+      } else if (text.trim() || hasDraftAttachments) {
         onSend()
       }
     }
@@ -45,6 +48,20 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
       if (isCurrentConversationStreaming) {
         onStop()
       }
+    }
+  }
+
+  // Ctrl/Cmd+V 粘贴剪贴板图片 → 交 Composer 导入草稿（纯文本粘贴保持默认行为）
+  const handlePaste = (e: React.ClipboardEvent) => {
+    if (isCurrentConversationStreaming) return
+    const items = Array.from(e.clipboardData?.items ?? [])
+    const files = items
+      .filter((it) => it.kind === 'file' && (!it.type || it.type.startsWith('image/')))
+      .map((it) => it.getAsFile())
+      .filter((f): f is File => !!f)
+    if (files.length > 0) {
+      e.preventDefault()
+      onPasteImages(files)
     }
   }
 
@@ -57,6 +74,7 @@ export function MessageInput({ text, onChange, onSend, onStop }: Props) {
         value={text}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         rows={3}
       />
     </div>

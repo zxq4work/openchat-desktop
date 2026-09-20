@@ -30,6 +30,7 @@ interface ProviderFormDialogProps {
   initialApiKey: string
   initialModels: string[]
   initialToolCalling: 'auto' | 'enabled' | 'disabled'
+  initialImageInput: boolean
   onSave: () => void
   onClose: () => void
 }
@@ -42,6 +43,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [models, setModels] = useState<string[]>([...props.initialModels])
   const [newModelInput, setNewModelInput] = useState('')
   const [toolCalling, setToolCalling] = useState<'auto' | 'enabled' | 'disabled'>(props.initialToolCalling)
+  const [imageInput, setImageInput] = useState(props.initialImageInput)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -108,6 +110,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         baseUrl: baseUrl.trim(),
         models,
         toolCalling,
+        imageInput,
       }
       if (apiKey.trim()) {
         updates.apiKey = apiKey.trim()
@@ -122,6 +125,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         apiKey: apiKey.trim(),
         models,
         toolCalling,
+        imageInput,
       })
     }
     props.onSave()
@@ -246,6 +250,29 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
           />
         </div> */}
 
+        <div className="provider-form-field">
+          <label className="provider-label">图片输入</label>
+          <div className="provider-switch-row">
+            <span>该服务的模型支持图片输入</span>
+            <div
+              className={`settings-switch ${imageInput ? 'settings-switch-on' : ''}`}
+              onClick={() => setImageInput(!imageInput)}
+              role="switch"
+              aria-checked={imageInput}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setImageInput(!imageInput)
+                }
+              }}
+            >
+              <div className="settings-switch-thumb" />
+            </div>
+          </div>
+          <p className="provider-hint">无法从模型名称自动推断，请按实际能力勾选；未勾选时按纯文本处理。</p>
+        </div>
+
         <div className="dialog-actions">
           <button className="btn-cancel" onClick={props.onClose}>取消</button>
           <button
@@ -275,6 +302,7 @@ export function ProviderSettings() {
     apiKey: '',
     models: [] as string[],
     toolCalling: 'auto' as 'auto' | 'enabled' | 'disabled',
+    imageInput: false,
   })
 
   useEffect(() => {
@@ -288,7 +316,7 @@ export function ProviderSettings() {
 
   function openAddDialog() {
     setEditId(null)
-    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto' })
+    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto', imageInput: false })
     setDialogOpen(true)
   }
 
@@ -301,6 +329,7 @@ export function ProviderSettings() {
       apiKey: '',
       models: [...p.models],
       toolCalling: p.toolCalling,
+      imageInput: p.imageInput ?? false,
     })
     setDialogOpen(true)
   }
@@ -333,6 +362,7 @@ export function ProviderSettings() {
           initialApiKey={dialogInitial.apiKey}
           initialModels={dialogInitial.models}
           initialToolCalling={dialogInitial.toolCalling}
+          initialImageInput={dialogInitial.imageInput}
           onSave={handleSave}
           onClose={() => setDialogOpen(false)}
         />

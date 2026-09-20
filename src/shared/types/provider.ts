@@ -29,9 +29,25 @@ export interface CanonicalToolResult {
   rawResults?: unknown[]
 }
 
+// 多模态输入片段：ConversationService 不感知协议差异，由 Adapter 负责映射。
+// 图片只携带 attachmentId，真实字节由主进程按需读取，避免 Base64 常驻内存。
+export type CanonicalInputPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; attachmentId: string; detail?: 'auto' | 'low' | 'high' }
+
+// 附件解析回调：给定 attachmentId，返回可被各 Adapter 编码的受控文件描述。
+// 由主进程 AttachmentService 提供，Adapter 通过 CanonicalModelRequest 拿到。
+export interface AttachmentResolver {
+  resolveForProvider(attachmentId: string):
+    | { storagePath: string; mimeType: string; width: number; height: number; detail?: 'auto' | 'low' | 'high' }
+    | null
+}
+
 export interface CanonicalMessage {
   role: CanonicalRole
   content?: string
+  // 多模态输入（仅 user 消息使用）。存在时 content 仍可作为纯文本回退。
+  inputParts?: CanonicalInputPart[]
   toolCalls?: CanonicalToolCall[]
   toolResult?: CanonicalToolResult
   webSearchCalls?: CanonicalWebSearchCall[]
@@ -50,6 +66,8 @@ export interface CanonicalModelRequest {
   model: string
   systemPrompt?: string
   messages: CanonicalMessage[]
+  // 图片附件的受控解析器（主进程注入），Adapter 用它把 attachmentId → 文件
+  attachmentResolver?: AttachmentResolver
   tools?: OpenChatToolDefinition[]
   toolChoice?: 'auto' | 'none' | 'required'
   reasoningEffort?: string
@@ -70,7 +88,7 @@ export type CanonicalModelEvent =
 
 export interface ModelAdapter {
   readonly protocol: ProviderProtocol
-  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean; supportsImageInput: boolean }
   stream(
     request: CanonicalModelRequest,
     signal?: AbortSignal
@@ -91,6 +109,8 @@ export interface CustomProviderConfig {
   responsesPath?: string
   extraHeaders?: Record<string, string>
   toolCalling: ToolCallingMode
+  // 手动声明该自定义 Provider 的模型支持图片输入（无法从 metadata 推断时使用）
+  imageInput?: boolean
   createdAt: number
   updatedAt: number
 }

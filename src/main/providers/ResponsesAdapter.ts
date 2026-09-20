@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'http'
+import * as fs from 'fs'
 import { SSEParser } from './SSEParser'
 import type {
   ModelAdapter,
@@ -10,6 +11,7 @@ import type {
   ProviderProtocol,
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
+import { UnsupportedImageInputError } from './errors'
 
 interface ResponsesInputItem {
   type: string
@@ -45,7 +47,7 @@ interface PendingFunctionCall {
 
 export class ResponsesAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'responses'
-  readonly capabilities: { toolCalling: boolean; reasoning: boolean }
+  readonly capabilities: { toolCalling: boolean; reasoning: boolean; supportsImageInput: boolean }
 
   private baseUrl: string
   private apiKey: string
@@ -59,10 +61,15 @@ export class ResponsesAdapter implements ModelAdapter {
     responsesPath?: string
     extraHeaders?: Record<string, string>
     supportsReasoning?: boolean
+    imageInput?: boolean
   }) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '')
     this.apiKey = config.apiKey
-    this.capabilities = { toolCalling: config.toolCalling, reasoning: config.supportsReasoning ?? false }
+    this.capabilities = {
+      toolCalling: config.toolCalling,
+      reasoning: config.supportsReasoning ?? false,
+      supportsImageInput: config.imageInput ?? false,
+    }
     if (config.responsesPath) {
       this.responsesPath = config.responsesPath
     } else if (this.baseUrl.endsWith('/v1')) {
@@ -369,7 +376,7 @@ export class ResponsesAdapter implements ModelAdapter {
     const input: ResponsesInputItem[] = []
 
     for (const msg of request.messages) {
-      input.push(this.convertMessage(msg))
+      input.push(this.convertMessage(msg, request))
     }
 
     const body: ResponsesRequest = {
@@ -409,7 +416,7 @@ export class ResponsesAdapter implements ModelAdapter {
     return body
   }
 
-  private convertMessage(msg: CanonicalMessage): ResponsesInputItem {
+  private convertMessage(msg: CanonicalMessage, request: CanonicalModelRequest): ResponsesInputItem {
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       const tc = msg.toolCalls[0]
       return {
@@ -428,10 +435,54 @@ export class ResponsesAdapter implements ModelAdapter {
       }
     }
 
+    // 多模态内容：Responses 协议使用 input_text / input_image content item。
+    // 一旦出现 image part 就必须真实编码为图片，绝不静默降级为纯文本。
+    if (msg.inputParts && msg.inputParts.length > 0) {
+      const content: Array<Record<string, unknown>> = []
+      for (const part of msg.inputParts) {
+        if (part.type === 'text') {
+          content.push({ type: 'input_text', text: part.text })
+        } else if (part.type === 'image') {
+          // 最后一层 defensive check：capability gate 已提前拦截，
+          // 但 Adapter 不能假设上游一定正确。
+          if (!this.capabilities.supportsImageInput) {
+            throw new UnsupportedImageInputError()
+          }
+          const resolved = request.attachmentResolver?.resolveForProvider(part.attachmentId)
+          if (!resolved) {
+            throw new UnsupportedImageInputError('图片附件无法解析')
+          }
+          const dataUrl = this.readImageDataUrl(resolved.storagePath, resolved.mimeType)
+          if (!dataUrl) {
+            throw new UnsupportedImageInputError('图片文件读取失败')
+          }
+          content.push({ type: 'input_image', image_url: dataUrl, detail: part.detail ?? resolved.detail ?? 'auto' })
+        }
+      }
+      if (content.length > 0) {
+        return {
+          type: 'message',
+          role: msg.role === 'developer' ? 'developer' : msg.role,
+          content,
+        }
+      }
+    }
+
     return {
       type: 'message',
       role: msg.role === 'developer' ? 'developer' : msg.role,
       content: [{ type: 'input_text', text: msg.content ?? '' }],
+    }
+  }
+
+  private readImageDataUrl(storagePath: string, mimeType: string): string | null {
+    try {
+      const buffer = fs.readFileSync(storagePath)
+      return `data:${mimeType};base64,${buffer.toString('base64')}`
+    } catch {
+      // 不打印本地路径，避免文件系统信息进入日志
+      console.error('[ResponsesAdapter] failed to read image attachment')
+      return null
     }
   }
 
@@ -451,11 +502,12 @@ export class ResponsesAdapter implements ModelAdapter {
       ...this.extraHeaders,
     }
 
+    // 诊断日志只打印结构信息，绝不打印 bodyStr（可能含 base64 图片）或 headers（含 token）
     console.log('========== [Responses] /v1/responses request params BEGIN ==========')
     console.log('[Responses] url:', url)
     console.log('[Responses] method: POST')
-    console.log('[Responses] body:', bodyStr)
-    console.log('[Responses] headers:', JSON.stringify(headers, null, 2))
+    console.log('[Responses] bodyBytes:', bodyBytes)
+    console.log('[Responses] inputItems:', body.input.length)
     console.log('========== [Responses] /v1/responses request params END ==========')
 
     const parser = new SSEParser()

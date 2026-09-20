@@ -11,6 +11,8 @@ export interface SafeProviderConfig {
   responsesPath?: string
   extraHeaders?: Record<string, string>
   toolCalling: 'auto' | 'enabled' | 'disabled'
+  // 该 Provider 的模型是否支持图片输入（无法从模型名推断，需显式声明）
+  imageInput?: boolean
   hasApiKey: boolean
   createdAt: number
   updatedAt: number

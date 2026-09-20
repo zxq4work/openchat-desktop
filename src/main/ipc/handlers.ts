@@ -1,4 +1,6 @@
-import { ipcMain, BrowserWindow, shell } from 'electron'
+import { ipcMain, BrowserWindow, shell, dialog } from 'electron'
+import type { AttachmentService } from '../services/attachments/AttachmentService'
+import type { MessageAttachment, ImageDetail, AttachmentImportResult } from '../../shared/types/conversation'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
@@ -61,7 +63,7 @@ interface Services {
     updateWebSearchConfig: (config: WebSearchConfig) => void
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
-    sendMessage: (id: string, text: string) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
+    sendMessage: (id: string, text: string, attachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
@@ -69,6 +71,7 @@ interface Services {
   usageService: ChatGPTUsageService | null
   webSearchService: { clearCache: () => void; setEngine: (engine: SearchEngine, engineName?: string) => void; getEngineName: () => string; setMaxResults: (n: number) => void } | null
   webSearchConfig: WebSearchConfig | null
+  attachmentService: AttachmentService | null
 }
 
 function clampInt(value: unknown, min: number, max: number, fallback: number): number {
@@ -263,6 +266,66 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     services.settingsRepository?.remove(key)
   })
 
+  // ===== Attachments (图片输入) =====
+  // 单张失败不阻断整批：成功项保留，失败项以 code 回传由 renderer 提示。
+  // 失败项不产生任何 DB 记录或落盘文件。
+  const errInfo = (err: unknown, fileName: string): AttachmentImportResult['errors'][number] => {
+    const code = (err as { code?: string })?.code ?? 'attachment_failed'
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[IPC attachments] error code=%s file=%s message=%s', code, fileName, message)
+    return { fileName, code, message }
+  }
+
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, async (_event, conversationId: string | null): Promise<AttachmentImportResult> => {
+    if (!services.attachmentService) return { attachments: [], errors: [] }
+    const win = getMainWindow()
+    const dialogOptions: Electron.OpenDialogOptions = {
+      title: '选择图片',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+    if (result.canceled || result.filePaths.length === 0) return { attachments: [], errors: [] }
+    const attachments: MessageAttachment[] = []
+    const errors: AttachmentImportResult['errors'] = []
+    for (const filePath of result.filePaths) {
+      try {
+        attachments.push(await services.attachmentService.prepareFromPath(filePath, conversationId))
+      } catch (err) {
+        errors.push(errInfo(err, filePath.split(/[\\/]/).pop() ?? filePath))
+      }
+    }
+    return { attachments, errors }
+  })
+
+  // 拖拽：renderer 只能拿到 File 对象，Electron 22 无 webUtils 拿不到路径。
+  // 这里接收 renderer 读取的字节（ArrayBuffer/Uint8Array）+ 文件名，Main 侧按 magic bytes 校验。
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, (_event, payload: { conversationId: string | null; fileName: string; data: Uint8Array }): MessageAttachment => {
+    if (!services.attachmentService) throw new Error('attachment_service_unavailable')
+    const fileName = payload.fileName || 'image'
+    try {
+      const buffer = Buffer.from(payload.data)
+      return services.attachmentService.prepareFromBytes(buffer, fileName, payload.conversationId)
+    } catch (err) {
+      const info = errInfo(err, fileName)
+      throw new Error(`${info.code}: ${info.message}`)
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_DELETE, (_event, attachmentId: string): void => {
+    services.attachmentService?.deleteOne(attachmentId)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, (_event, conversationId: string): MessageAttachment[] => {
+    return services.attachmentService?.listDrafts(conversationId) ?? []
+  })
+
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_SET_DETAIL, (_event, attachmentId: string, detail: ImageDetail): void => {
+    services.attachmentService?.setDetail(attachmentId, detail)
+  })
+
   // ===== Auth =====
   ipcMain.handle(IPC_CHANNELS.AUTH_GET_STATUS, async (): Promise<PublicAccountInfo> => {
     return services.authService?.checkAuth() ?? { loggedIn: false, email: null, planType: null, userId: null, accountId: null }
@@ -401,9 +464,9 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
   })
 
   // ===== Chat =====
-  ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_event, id: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message } | null> => {
-    console.log('[IPC CHAT_SEND] id=%s text=%s', id, text.slice(0, 80))
-    const result = await (services.conversationService?.sendMessage(id, text) ?? null)
+  ipcMain.handle(IPC_CHANNELS.CHAT_SEND, async (_event, id: string, text: string, attachmentIds: string[] = []): Promise<{ userMessage: Message; assistantMessage: Message } | null> => {
+    console.log('[IPC CHAT_SEND] id=%s text=%s attachments=%d', id, text.slice(0, 80), attachmentIds.length)
+    const result = await (services.conversationService?.sendMessage(id, text, attachmentIds) ?? null)
     console.log('[IPC CHAT_SEND] result=%s', result ? `userMsg=${result.userMessage.id} assistantMsg=${result.assistantMessage.id}` : 'null')
     return result
   })

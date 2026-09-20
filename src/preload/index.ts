@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { CodexUsageView } from '../shared/types/usage'
+import type { AttachmentImportResult, MessageAttachment } from '../shared/types/conversation'
 
 // Inline IPC channel constants to avoid module resolution issues in sandboxed preload
 const IPC_CHANNELS = {
@@ -58,6 +59,11 @@ const IPC_CHANNELS = {
   DRAFT_GET: 'draft:get',
   DRAFT_SET: 'draft:set',
   DRAFT_DELETE: 'draft:delete',
+  ATTACHMENTS_PICK_IMAGES: 'attachments:pick-images',
+  ATTACHMENTS_PREPARE_FROM_BYTES: 'attachments:prepare-from-bytes',
+  ATTACHMENTS_DELETE: 'attachments:delete',
+  ATTACHMENTS_LIST_DRAFTS: 'attachments:list-drafts',
+  ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -123,8 +129,21 @@ const openchat = {
   },
 
   chat: {
-    send: (id: string, text: string) => ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, id, text),
+    send: (id: string, text: string, attachmentIds: string[] = []) => ipcRenderer.invoke(IPC_CHANNELS.CHAT_SEND, id, text, attachmentIds),
     interrupt: () => ipcRenderer.invoke(IPC_CHANNELS.CHAT_INTERRUPT),
+  },
+
+  attachments: {
+    pick: (conversationId: string | null): Promise<AttachmentImportResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, conversationId),
+    prepareFromBytes: (conversationId: string | null, fileName: string, data: Uint8Array): Promise<MessageAttachment> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, { conversationId, fileName, data }),
+    delete: (attachmentId: string): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_DELETE, attachmentId),
+    listDrafts: (conversationId: string): Promise<MessageAttachment[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, conversationId),
+    setDetail: (attachmentId: string, detail: 'auto' | 'low' | 'high'): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_SET_DETAIL, attachmentId, detail),
   },
 
   settings: {

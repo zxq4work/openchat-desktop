@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useProviderStore } from '../../stores/providerStore'
+import { useModelStore } from '../../stores/modelStore'
+import { useUiStore } from '../../stores/uiStore'
 import { ModelSelector } from './ModelSelector'
 import { ProviderSelector } from './ProviderSelector'
 import { ReasoningSelector } from './ReasoningSelector'
@@ -9,7 +12,13 @@ import { CodexSearchModeSelector } from './CodexSearchModeSelector'
 import { SearchEngineSelector } from './SearchEngineSelector'
 import { MessageInput } from './MessageInput'
 import { SendButton } from './SendButton'
+import { AttachButton } from './AttachButton'
+import { AttachmentStrip } from './AttachmentStrip'
 import { useCodexUsageStore, isCodexExhausted } from '../../stores/codexUsageStore'
+import type { MessageAttachment } from '../../../shared/types/conversation'
+import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/constants'
+import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
+import { modelSupportsImage, historyHasImage } from '../../packages/imageCapability'
 
 function formatResetTime(resetAt: number): string {
   const d = new Date(resetAt * 1000)
@@ -22,17 +31,27 @@ function formatResetTime(resetAt: number): string {
 
 export function Composer() {
   const [text, setText] = useState('')
+  const [draftAttachments, setDraftAttachments] = useState<MessageAttachment[]>([])
+  const [importing, setImporting] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [importErrors, setImportErrors] = useState<Array<{ fileName: string; message: string }>>([])
   const activeConversation = useConversationStore((s) => s.activeConversation)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const activeMessages = useConversationStore((s) => s.activeMessages)
   const setStatus = useChatStreamStore((s) => s.setStatus)
   const setActiveAssistantMessage = useChatStreamStore((s) => s.setActiveAssistantMessage)
   const setError = useChatStreamStore((s) => s.setError)
   const error = useChatStreamStore((s) => s.error)
+  const status = useChatStreamStore((s) => s.status)
+  const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
   const usage = useCodexUsageStore((s) => s.usage)
   const exhausted = isCodexExhausted(usage)
   // 使用自定义服务时，忽略 Codex 额度限制
   const isCustomProvider = !!activeConversation?.providerConfigId
   const isExhausted = exhausted && !isCustomProvider
+  const models = useModelStore((s) => s.models)
+  const providers = useProviderStore((s) => s.providers)
+  const openLightbox = useUiStore((s) => s.openLightbox)
 
   // 内存缓存当前会话的草稿，避免 IPC 往返延迟
   const draftRef = useRef<string>('')
@@ -40,8 +59,13 @@ export function Composer() {
   const prevConversationIdRef = useRef<string | null>(null)
   // 防抖写库 timer
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 防抖合并导入错误提示
+  const importErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
 
-  // 切换会话时，先持久化旧草稿，再加载新草稿
+  const currentConversation = activeConversation ?? null
+
+  // 切换会话时，先持久化旧草稿，再加载新草稿与新会话的未发送图片
   useEffect(() => {
     const prevId = prevConversationIdRef.current
     const newId = activeConversationId ?? null
@@ -63,6 +87,7 @@ export function Composer() {
     if (!newId) {
       setText('')
       draftRef.current = ''
+      setDraftAttachments([])
       return
     }
 
@@ -73,6 +98,12 @@ export function Composer() {
         const draft = saved ?? ''
         setText(draft)
         draftRef.current = draft
+      }
+    })
+    // 加载新会话的未发送附件（Main 侧持久化，崩溃/重启后仍可恢复）
+    window.openchat.attachments.listDrafts(newId).then((atts) => {
+      if (useConversationStore.getState().activeConversationId === newId) {
+        setDraftAttachments(atts)
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,10 +130,118 @@ export function Composer() {
     return () => clearTimeout(timer)
   }, [error, setError])
 
+  useEffect(() => () => {
+    if (importErrorTimerRef.current) clearTimeout(importErrorTimerRef.current)
+  }, [])
+
+  const isStreamingForCurrent = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
+
+  const remainingSlots = MAX_IMAGES_PER_MESSAGE - draftAttachments.length
+
+  // 导入图片到草稿（文件选择 / 拖拽 / 粘贴共用）
+  const handleImport = async (files: File[]) => {
+    if (files.length === 0) return
+    if (!currentConversation) return
+    setImporting(true)
+    try {
+      const { attachments, errors } = await importFiles(files, activeConversationId, remainingSlots)
+      if (attachments.length > 0) {
+        setDraftAttachments((prev) => [...prev, ...attachments])
+      }
+      if (errors.length > 0) {
+        setImportErrors(errors)
+        if (importErrorTimerRef.current) clearTimeout(importErrorTimerRef.current)
+        importErrorTimerRef.current = setTimeout(() => setImportErrors([]), 4000)
+      }
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handlePickImages = async () => {
+    if (!currentConversation || importing) return
+    const result = await window.openchat.attachments.pick(activeConversationId)
+    if (result.attachments.length > 0) {
+      setDraftAttachments((prev) => [...prev, ...result.attachments])
+    }
+    if (result.errors.length > 0) {
+      setImportErrors(result.errors)
+      if (importErrorTimerRef.current) clearTimeout(importErrorTimerRef.current)
+      importErrorTimerRef.current = setTimeout(() => setImportErrors([]), 4000)
+    }
+  }
+
+  const handleRemoveDraft = (attachmentId: string) => {
+    setDraftAttachments((prev) => prev.filter((a) => a.id !== attachmentId))
+    window.openchat.attachments.delete(attachmentId)
+  }
+
+  // 拖拽：当前窗口没有 webUtils，renderer 只能把 File 转成字节经 IPC 送 Main。
+  // 因此这里不读取 file.path，统一走 prepareFromBytes（类型由 Main 按 magic bytes 校验）。
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // 只有真正离开 composer 区域才关闭遮罩（避免子元素抖动）
+    if (e.currentTarget === e.target) setDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+    if (isStreamingForCurrent) return
+    const files = imageFilesFromDataTransfer(e.dataTransfer)
+    void handleImport(files)
+  }
+
+  // 拖拽经过窗口非输入区（拖图片悬停时防止浏览器默认行为），
+  // 并在拖出窗口/结束时收起遮罩，避免遮罩残留。
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => !!e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')
+    const prevent = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault()
+    }
+    const reset = () => setDragOver(false)
+    window.addEventListener('dragover', prevent)
+    window.addEventListener('drop', prevent)
+    window.addEventListener('dragend', reset)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('dragover', prevent)
+      window.removeEventListener('drop', prevent)
+      window.removeEventListener('dragend', reset)
+      window.removeEventListener('blur', reset)
+    }
+  }, [])
+
+  // 发送前能力校验：待发送图片 + 历史需 replay 的图片有一项存在
+  // 且所选模型不支持图片输入 → 阻止发送并保留草稿。
+  const requiresImage = draftAttachments.length > 0 || historyHasImage(activeMessages)
+  const supportsImage = modelSupportsImage(currentConversation, models, providers)
+
   const handleSend = async () => {
-    console.log('[Composer] handleSend entry activeConversationId=%s text=%s streamingStatus=%s currentError=%s', activeConversation?.id ?? 'null', text.trim() ? `"${text.trim().slice(0, 30)}"` : '(empty)', useChatStreamStore.getState().status, useChatStreamStore.getState().error)
-    if (!activeConversation || !text.trim()) { console.log('[Composer] handleSend SKIP: no conversation or empty text'); return }
+    console.log('[Composer] handleSend entry activeConversationId=%s text=%s streamingStatus=%s currentError=%s attachments=%d', activeConversation?.id ?? 'null', text.trim() ? `"${text.trim().slice(0, 30)}"` : '(empty)', useChatStreamStore.getState().status, useChatStreamStore.getState().error, draftAttachments.length)
+    if (!activeConversation) { console.log('[Composer] handleSend SKIP: no conversation'); return }
+    if (!text.trim() && draftAttachments.length === 0) { console.log('[Composer] handleSend SKIP: empty text and no attachments'); return }
     if (isExhausted) { console.log('[Composer] handleSend SKIP: exhausted'); return }
+
+    // 发送前图片能力拦截（与 Main 侧门禁一致，先于 IPC 提示用户）
+    if (requiresImage && !supportsImage) {
+      setError('当前话题包含图片上下文，所选模型不支持图片输入。请选择支持图片的模型，或开始新话题。')
+      console.log('[Composer] handleSend BLOCKED: image required but model unsupported')
+      return
+    }
+
+    if (draftAttachments.length > MAX_IMAGES_PER_MESSAGE) {
+      setError(`单条消息最多支持 ${MAX_IMAGES_PER_MESSAGE} 张图片`)
+      return
+    }
 
     // 清除上一个请求的残留错误
     setError(null)
@@ -125,12 +264,15 @@ export function Composer() {
     draftRef.current = ''
     setText('')
     window.openchat.settings.deleteDraft(conversationId)
+    const sentAttachments = draftAttachments
+    const attachmentIds = sentAttachments.map((a) => a.id)
+    setDraftAttachments([])
     setStatus('starting')
     useChatStreamStore.getState().setStreamingConversationId(conversationId)
     useChatStreamStore.getState().setReasoningDisplayMode('none')
 
     try {
-      const result = await window.openchat.chat.send(conversationId, messageText)
+      const result = await window.openchat.chat.send(conversationId, messageText, attachmentIds)
       const streamState = useChatStreamStore.getState()
       console.log('[Composer] chat.send resolved, status=%s streamingId=%s pendingError=%s', streamState.status, streamState.streamingConversationId, streamState.errorCode ?? 'null')
 
@@ -173,6 +315,13 @@ export function Composer() {
     } catch (err) {
       console.error('[Composer] Send failed:', err)
       const message = err instanceof Error ? err.message : String(err)
+      // Main 侧能力门禁拒绝（图片上下文 + 不支持图片的模型）时恢复草稿，避免输入丢失。
+      // IPC 只透传 message（不含 code），因此按错误文案匹配；门禁在消息创建之前触发，
+      // 因此附件仍是未绑定的草稿，可安全放回草稿条。
+      if (message.includes('不支持图片输入')) {
+        if (sentAttachments.length > 0) setDraftAttachments(sentAttachments)
+        if (!draftRef.current) setText(messageText)
+      }
       console.log('[Composer] catch block: setting error, status=%s streamingId=%s', useChatStreamStore.getState().status, useChatStreamStore.getState().streamingConversationId)
       setError(message)
       setStatus('idle')
@@ -205,7 +354,14 @@ export function Composer() {
   }
 
   return (
-    <div className="composer">
+    <div
+      className="composer"
+      ref={composerRef}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div className="composer-inner">
         {isExhausted && (
           <div className="composer-usage-exhausted">
@@ -216,8 +372,29 @@ export function Composer() {
         {error && (
           <div className="composer-error">{error}</div>
         )}
-        <MessageInput text={text} onChange={setText} onSend={handleSend} onStop={handleStop} />
+        <AttachmentStrip
+          attachments={draftAttachments}
+          disabled={isStreamingForCurrent || importing}
+          onRemove={handleRemoveDraft}
+          onPreview={openLightbox}
+        />
+        {importErrors.length > 0 && (
+          <div className="composer-attachment-errors">
+            {importErrors.map((e, i) => (
+              <div key={i}>{e.fileName}：{e.message}</div>
+            ))}
+          </div>
+        )}
+        <MessageInput
+          text={text}
+          onChange={setText}
+          onSend={handleSend}
+          onStop={handleStop}
+          onPasteImages={handleImport}
+          hasDraftAttachments={draftAttachments.length > 0}
+        />
         <div className="composer-controls">
+          <AttachButton onClick={handlePickImages} disabled={isStreamingForCurrent || importing || !currentConversation} />
           <ProviderSelector />
           <ModelSelector />
           <ReasoningSelector />
@@ -225,9 +402,12 @@ export function Composer() {
           <CodexSearchModeSelector />
           <SearchEngineSelector />
           <div className="composer-spacer" />
-          <SendButton onSend={handleSend} onStop={handleStop} hasText={text.trim().length > 0 && !isExhausted} />
+          <SendButton onSend={handleSend} onStop={handleStop} hasText={(text.trim().length > 0 || draftAttachments.length > 0) && !isExhausted} />
         </div>
       </div>
+      {dragOver && !isStreamingForCurrent && (
+        <div className="composer-drag-overlay">松开以添加图片</div>
+      )}
     </div>
   )
 }

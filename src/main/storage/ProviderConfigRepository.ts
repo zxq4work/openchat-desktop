@@ -14,7 +14,7 @@ export class ProviderConfigRepository {
     const result = db.exec(`
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
-             extra_headers, tool_calling, created_at, updated_at
+             extra_headers, tool_calling, image_input, created_at, updated_at
       FROM provider_configs
       ORDER BY created_at ASC
     `)
@@ -39,7 +39,7 @@ export class ProviderConfigRepository {
     const result = db.exec(`
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
-             extra_headers, tool_calling, created_at, updated_at
+             extra_headers, tool_calling, image_input, created_at, updated_at
       FROM provider_configs WHERE id = ?
     `, [id])
 
@@ -64,8 +64,8 @@ export class ProviderConfigRepository {
       INSERT INTO provider_configs (
         id, name, protocol, base_url, api_key, models,
         models_path, chat_completions_path, responses_path,
-        extra_headers, tool_calling, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        extra_headers, tool_calling, image_input, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       fullConfig.name,
@@ -78,6 +78,7 @@ export class ProviderConfigRepository {
       fullConfig.responsesPath ?? null,
       fullConfig.extraHeaders ? JSON.stringify(fullConfig.extraHeaders) : null,
       fullConfig.toolCalling,
+      fullConfig.imageInput ? 1 : 0,
       now,
       now,
     ])
@@ -133,6 +134,10 @@ export class ProviderConfigRepository {
       sets.push('tool_calling = ?')
       values.push(updates.toolCalling)
     }
+    if (updates.imageInput !== undefined) {
+      sets.push('image_input = ?')
+      values.push(updates.imageInput ? 1 : 0)
+    }
     if (updates.extraHeaders !== undefined) {
       sets.push('extra_headers = ?')
       values.push(updates.extraHeaders ? JSON.stringify(updates.extraHeaders) : null)
@@ -178,8 +183,9 @@ export class ProviderConfigRepository {
       responsesPath: row[8] ? String(row[8]) : undefined,
       extraHeaders,
       toolCalling: String(row[10]) as ToolCallingMode,
-      createdAt: Number(row[11]),
-      updatedAt: Number(row[12]),
+      imageInput: row[11] ? Number(row[11]) === 1 : false,
+      createdAt: Number(row[12]),
+      updatedAt: Number(row[13]),
     }
   }
 }

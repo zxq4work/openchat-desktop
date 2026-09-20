@@ -7,9 +7,12 @@ import type {
   Conversation,
   ContextSegment,
   Message,
+  MessageAttachment,
 } from '../../../shared/types/conversation'
-import type { CanonicalMessage, CanonicalModelRequest, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol } from '../../../shared/types/provider'
-import { TITLE_MAX_LENGTH } from '../../../shared/constants'
+import type { ModelInfo } from '../../../shared/types/model'
+import type { CanonicalMessage, CanonicalModelRequest, CanonicalInputPart, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol, AttachmentResolver } from '../../../shared/types/provider'
+import { AttachmentService } from '../../services/attachments/AttachmentService'
+import { MAX_IMAGES_PER_MESSAGE, TITLE_MAX_LENGTH } from '../../../shared/constants'
 import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
@@ -32,6 +35,7 @@ import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandal
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
 import { citationDebugTracker } from '../../services/ai/CitationDebugTracker'
+import { UnsupportedImageInputError } from '../../providers/errors'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
@@ -142,6 +146,31 @@ const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available 
 - Do NOT mention that search is "disabled" or "unavailable" — just answer the question directly.
 - If the user explicitly asks you to search or look something up, simply say you're unable to look that up right now and suggest they try enabling web search.`
 
+// 判断某个模型是否支持图片输入。
+// - ChatGPT Codex：以模型 metadata 的 inputModalities 为准（含 'image' 才支持）
+// - 自定义 Provider：无可靠 metadata，使用 Provider 配置的显式 imageInput 开关
+// 未知能力一律视为不支持（unknown = text only），绝不根据模型名猜测。
+function modelSupportsImage(modelId: string, models: ModelInfo[], adapter: ModelAdapter): boolean {
+  if (adapter.protocol === 'chatgpt_codex') {
+    const model = models.find((m) => m.id === modelId)
+    return !!model && (model.inputModalities ?? []).includes('image')
+  }
+  return adapter.capabilities.supportsImageInput
+}
+
+// 该 message 是否包含需要作为图片 replay 的附件
+function messageHasImages(msg: Message): boolean {
+  return msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.some((a) => a.type === 'image')
+}
+
+export class ImageInputUnsupportedError extends Error {
+  code = 'IMAGE_INPUT_UNSUPPORTED'
+  constructor() {
+    super('当前话题包含图片上下文，所选模型不支持图片输入。请选择支持图片的模型，或开始新话题。')
+    this.name = 'ImageInputUnsupportedError'
+  }
+}
+
 export interface StreamEvent {
   type: 'delta' | 'reasoning-started' | 'reasoning-delta' | 'reasoning-completed' | 'turn-started' | 'item-started' | 'item-completed' | 'turn-completed' | 'error' | 'web-search-started' | 'web-search-completed' | 'web-search-error' | 'web-search-call-started' | 'web-search-call-completed' | 'web-search-call-failed' | 'stream-reset'
   conversationId?: string
@@ -174,6 +203,7 @@ export class ChatGPTConversationService {
   private providerConfigService: ProviderConfigService
   private usageService: ChatGPTUsageService
   private webSearchConfig: WebSearchConfig
+  private attachmentService: AttachmentService | null = null
 
   // 全局只允许一个 active generation
   private activeGeneration: {
@@ -215,6 +245,10 @@ export class ChatGPTConversationService {
 
   onStreamEvent(handler: (event: StreamEvent) => void): void {
     this.streamHandlers.push(handler)
+  }
+
+  setAttachmentService(service: AttachmentService): void {
+    this.attachmentService = service
   }
 
   private emitStreamEvent(event: StreamEvent): void {
@@ -315,11 +349,25 @@ export class ChatGPTConversationService {
   }
 
   async removeConversation(id: string): Promise<void> {
+    // 先清理附件文件与记录，再删除会话（文件失败不影响会话删除）
+    try {
+      if (this.attachmentService) this.attachmentService.deleteForConversation(id)
+    } catch (err) {
+      console.error('[ConversationService] attachment cleanup failed for conversation %s:', id, err)
+    }
     this.conversations.remove(id)
     await this.storage.save()
   }
 
   async removeAllConversations(): Promise<void> {
+    try {
+      if (this.attachmentService) {
+        const ids = this.conversations.listSummaries().map((c) => c.id)
+        this.attachmentService.deleteForConversations(ids)
+      }
+    } catch (err) {
+      console.error('[ConversationService] attachment cleanup failed for remove-all:', err)
+    }
     this.conversations.removeAll()
     await this.storage.save()
   }
@@ -396,8 +444,8 @@ export class ChatGPTConversationService {
     return newSegment
   }
 
-  async sendMessage(conversationId: string, text: string): Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' }> {
-    console.log('[SendMessage] entry conversationId=%s activeGeneration=%s', conversationId, this.activeGeneration ? `set(conv=${this.activeGeneration.conversationId})` : 'null')
+  async sendMessage(conversationId: string, text: string, attachmentIds: string[] = []): Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' }> {
+    console.log('[SendMessage] entry conversationId=%s activeGeneration=%s attachmentIds=%d', conversationId, this.activeGeneration ? `set(conv=${this.activeGeneration.conversationId})` : 'null', attachmentIds.length)
     if (this.activeGeneration) {
       console.log('[SendMessage] BLOCKED: activeGeneration still set')
       throw new Error('已有正在进行的生成')
@@ -411,6 +459,31 @@ export class ChatGPTConversationService {
 
     const modelId = conversation.defaultModelId
     if (!modelId) { console.log('[SendMessage] FAIL: no modelId'); throw new Error('未选择模型，请先刷新模型列表') }
+
+    // 图片能力拦截：待发送的 draft 图片 + 当前 segment 需要 replay 的历史图片
+    // 任一存在而所选模型不支持图片输入 → 阻止发送，保留 draft。
+    // 附件记录从 DB 读取（避免渲染进程伪造 metadata）。
+    const attachmentService = this.attachmentService
+    const draftAttachments: MessageAttachment[] = attachmentIds.length > 0 && attachmentService
+      ? attachmentIds
+          .map((id) => attachmentService.getAttachment(id))
+          .filter((a): a is MessageAttachment => a !== null)
+      : []
+
+    const segmentMessagesForGate = this.messages.getBySegmentId(segment.id)
+    const historyHasImage = segmentMessagesForGate.some(messageHasImages)
+    const hasImage = draftAttachments.length > 0 || historyHasImage
+    if (draftAttachments.length > MAX_IMAGES_PER_MESSAGE) {
+      throw new Error(`单条消息最多支持 ${MAX_IMAGES_PER_MESSAGE} 张图片`)
+    }
+    if (hasImage) {
+      const adapterForGate = this.resolveAdapter(conversation.providerConfigId)
+      const supportsImage = modelSupportsImage(modelId, this.modelService.currentModels, adapterForGate)
+      if (!supportsImage) {
+        console.log('[SendMessage] BLOCKED: image required but model unsupported modelId=%s historyImg=%s draftImg=%d', modelId, historyHasImage, draftAttachments.length)
+        throw new ImageInputUnsupportedError()
+      }
+    }
 
     let effort = conversation.defaultReasoningEffort
     if (effort && effort.includes('[object Object]')) {
@@ -463,6 +536,7 @@ export class ChatGPTConversationService {
       segmentId: segment.id,
       role: 'user',
       content: text,
+      attachments: draftAttachments,
       reasoningMeta: null,
       reasoningText: null,
       reasoningDisplayMode: 'none',
@@ -480,6 +554,10 @@ export class ChatGPTConversationService {
       updatedAt: now,
     }
     this.messages.create(userMessage)
+    // 草稿附件 → 正式的 message 归属（message_attachments 是归属唯一事实源）
+    if (draftAttachments.length > 0 && this.attachmentService) {
+      this.attachmentService.bindDrafts(draftAttachments.map((a) => a.id), userMessage.id, conversationId, segment.id)
+    }
 
     if (conversation.title === '新对话') {
       const title = this.deriveTitle(text)
@@ -492,6 +570,7 @@ export class ChatGPTConversationService {
       segmentId: segment.id,
       role: 'assistant',
       content: '',
+      attachments: [],
       reasoningMeta: null,
       reasoningText: null,
       reasoningDisplayMode,
@@ -610,8 +689,13 @@ export class ChatGPTConversationService {
     searchEngine: 'bing' | 'baidu' | 'google'
   ): Promise<void> {
     console.log('[runGeneration] entry conversationId=%s modelId=%s providerConfigId=%s webSearch=%s', conversationId, modelId, providerConfigId ?? 'codex', webSearchEnabled)
+    // 兜底图片能力拦截（sendMessage 已拦一次，这里覆盖 runGeneration 直接调用方）
     try {
       const adapter = this.resolveAdapter(providerConfigId)
+      const segmentMessagesGate = this.messages.getBySegmentId(this.messages.getById(assistantMessageId)?.segmentId ?? '')
+      if (segmentMessagesGate.some(messageHasImages) && !modelSupportsImage(modelId, this.modelService.currentModels, adapter)) {
+        throw new ImageInputUnsupportedError()
+      }
 
       const modelInstructions = useModelInstructions
         ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
@@ -723,6 +807,10 @@ export class ChatGPTConversationService {
       if (isAborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
+      } else if (err instanceof ImageInputUnsupportedError || err instanceof UnsupportedImageInputError) {
+        // 图片上下文 + 模型/适配器不支持：显式失败，绝不静默降级为纯文本。
+        this.messages.updateError(assistantMessageId, err.code, err.message)
+        this.emitStreamEvent({ type: 'error', conversationId, errorCode: err.code, errorMessage: err.message })
       } else {
         const code = err instanceof UsageLimitReachedError ? 'CODEX_USAGE_EXHAUSTED' : 'StreamFailed'
         this.messages.updateError(assistantMessageId, code, message)
@@ -1727,7 +1815,18 @@ User message: ${userText}${contextHint}`
       if (msg.status !== 'completed') continue
 
       if (msg.role === 'user') {
-        if (msg.content) {
+        // 历史图片附件每轮重新转换为 image input（三个 Provider 均为逐轮完整 replay）
+        const images = Array.isArray(msg.attachments)
+          ? msg.attachments.filter((a) => a.type === 'image')
+          : []
+        if (images.length > 0) {
+          const parts: CanonicalInputPart[] = []
+          if (msg.content) parts.push({ type: 'text', text: msg.content })
+          for (const att of images) {
+            parts.push({ type: 'image', attachmentId: att.id, detail: att.detail })
+          }
+          messages.push({ role: 'user', content: msg.content, inputParts: parts })
+        } else if (msg.content) {
           messages.push({ role: 'user', content: msg.content })
         }
         continue
@@ -1910,7 +2009,17 @@ User message: ${userText}${contextHint}`
       model: modelId,
       systemPrompt: instructions,
       messages,
+      attachmentResolver: this.attachmentResolver(),
       ...(effort ? { reasoningEffort: effort } : {}),
+    }
+  }
+
+  // 由主进程提供的受控附件解析器：attachmentId → 受管文件路径信息。
+  // Adapter 通过它按需读取图片字节，renderer 永不接触文件系统路径。
+  private attachmentResolver(): AttachmentResolver | undefined {
+    if (!this.attachmentService) return undefined
+    return {
+      resolveForProvider: (id: string) => this.attachmentService!.resolveForProvider(id),
     }
   }
 
@@ -1931,7 +2040,15 @@ User message: ${userText}${contextHint}`
     for (const msg of segmentMessages) {
       if (msg.status !== 'completed') continue
       if (msg.role === 'user') {
-        if (msg.content) messages.push({ role: 'user', content: msg.content })
+        const images = Array.isArray(msg.attachments) ? msg.attachments.filter((a) => a.type === 'image') : []
+        if (images.length > 0) {
+          const parts: CanonicalInputPart[] = []
+          if (msg.content) parts.push({ type: 'text', text: msg.content })
+          for (const att of images) parts.push({ type: 'image', attachmentId: att.id, detail: att.detail })
+          messages.push({ role: 'user', content: msg.content, inputParts: parts })
+        } else if (msg.content) {
+          messages.push({ role: 'user', content: msg.content })
+        }
         continue
       }
       if (msg.role === 'assistant') {
@@ -1945,6 +2062,7 @@ User message: ${userText}${contextHint}`
       model: modelId,
       systemPrompt: instructions,
       messages,
+      attachmentResolver: this.attachmentResolver(),
       ...(effort ? { reasoningEffort: effort } : {}),
     }
   }

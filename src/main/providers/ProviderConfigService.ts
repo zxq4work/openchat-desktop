@@ -64,6 +64,7 @@ export class ProviderConfigService {
         chatCompletionsPath: config.chatCompletionsPath,
         extraHeaders: config.extraHeaders,
         supportsReasoning: true,
+        imageInput: config.imageInput ?? false,
       })
     }
     // responses
@@ -74,6 +75,7 @@ export class ProviderConfigService {
       responsesPath: config.responsesPath,
       extraHeaders: config.extraHeaders,
       supportsReasoning: true,
+      imageInput: config.imageInput ?? false,
     })
   }
 

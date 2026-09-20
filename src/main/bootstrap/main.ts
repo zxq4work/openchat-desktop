@@ -42,7 +42,13 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
+import { AttachmentRepository } from '../storage/AttachmentRepository'
+import { AttachmentService } from '../services/attachments/AttachmentService'
+import { registerAttachmentScheme, registerAttachmentProtocol } from './AttachmentProtocol'
 import { getBootBackgroundColor } from './BootPreferences'
+
+// 必须在 app ready 之前注册 custom scheme（Electron 对调用时机有要求）
+registerAttachmentScheme()
 
 // ── 启动日志 ──
 const bootStartNs = process.hrtime.bigint()
@@ -97,6 +103,7 @@ const services = {
   providerConfigRepository: null as ProviderConfigRepository | null,
   providerConfigService: null as ProviderConfigService | null,
   webSearchConfig: null as WebSearchConfig | null,
+  attachmentService: null as AttachmentService | null,
 }
 
 function getAppServerMode(): AppServerMode {
@@ -226,6 +233,13 @@ async function initializeChatGPTProvider(): Promise<void> {
   const providerConfigService = new ProviderConfigService(providerConfigRepository, codexClient)
   services.providerConfigService = providerConfigService
 
+  // 附件服务：userData/attachments 目录 + message_attachments 表
+  const attachmentsDir = path.join(app.getPath('userData'), 'attachments')
+  const attachmentRepository = new AttachmentRepository(storage)
+  const attachmentService = new AttachmentService(attachmentsDir, attachmentRepository)
+  services.attachmentService = attachmentService
+  registerAttachmentProtocol(attachmentService)
+
   services.chatgptConversationService = new ChatGPTConversationService(
     storage,
     codexClient,
@@ -237,7 +251,16 @@ async function initializeChatGPTProvider(): Promise<void> {
     providerConfigService,
     webSearchConfig
   )
+  services.chatgptConversationService.setAttachmentService(attachmentService)
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
+
+  // 清理孤儿附件（引用了不存在会话的草稿，如发送前崩溃残留）
+  try {
+    const validIds = new Set((services.chatgptConversationService.listConversations() ?? []).map((c) => c.id))
+    attachmentService.cleanupOrphans(validIds)
+  } catch (err) {
+    console.error('[AttachmentService] orphan cleanup failed:', err)
+  }
 
   // 后台异步查询 usage，仅在已登录时执行（自定义服务场景下无需 Codex usage）
   const isLoggedIn = await credentialManager.isLoggedIn().catch(() => false)

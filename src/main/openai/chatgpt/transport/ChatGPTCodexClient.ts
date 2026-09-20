@@ -40,10 +40,16 @@ export interface ChatGPTModel {
   }
 }
 
+// Codex 用户消息的多模态内容项（与 vendor codex ContentItem schema 一致）。
+// input_image 的 image_url 为 data URL，detail 取自动画的判断。
+export type ProviderInputContentItem =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; image_url: string; detail?: string }
+
 // Provider 输入项：支持普通消息、additional_tools 声明，
 // function_call（模型工具调用）以及 function_call_output（工具回传结果）
 export type ProviderInputItem =
-  | { role: string; content: string }
+  | { role: string; content: string | ProviderInputContentItem[] }
   | { type: 'additional_tools'; role: string; tools: unknown[] }
   | { type: 'function_call'; call_id: string; name: string; arguments: string; namespace?: string }
   | { type: 'function_call_output'; call_id: string; output: string }
@@ -433,8 +439,16 @@ const MOCK_CITATION_RESPONSE =
 function extractMockUserText(input: ProviderInputItem[]): string {
   for (let i = input.length - 1; i >= 0; i--) {
     const item = input[i]
-    if ('role' in item && item.role === 'user' && 'content' in item && typeof item.content === 'string') {
-      return item.content
+    if ('role' in item && item.role === 'user' && 'content' in item) {
+      if (typeof item.content === 'string') return item.content
+      // 多模态：content 为 input_text / input_image 数组，拼接文本项
+      if (Array.isArray(item.content)) {
+        const text = item.content
+          .filter((c): c is { type: 'input_text'; text: string } => c.type === 'input_text')
+          .map((c) => c.text)
+          .join(' ')
+        if (text) return text
+      }
     }
   }
   return ''

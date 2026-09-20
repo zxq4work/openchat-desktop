@@ -1,12 +1,25 @@
 import { StorageService } from './StorageService'
 import type { Message, MessageStatus, ReasoningDisplayMode, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
+import { AttachmentRepository } from './AttachmentRepository'
 import { cleanCitationText } from '../services/ai/CitationParser'
 
 export class MessageRepository {
   private storage: StorageService
+  private attachments: AttachmentRepository
 
   constructor(storage: StorageService) {
     this.storage = storage
+    this.attachments = new AttachmentRepository(storage)
+  }
+
+  // 附件归属的权威来源是 message_attachments 表，读取时按 message_id 批量挂载。
+  private attachTo(messages: Message[]): Message[] {
+    if (messages.length === 0) return messages
+    const map = this.attachments.getByMessageIds(messages.map((m) => m.id))
+    for (const msg of messages) {
+      msg.attachments = map.get(msg.id) ?? []
+    }
+    return messages
   }
 
   getByConversationId(conversationId: string): Message[] {
@@ -22,7 +35,7 @@ export class MessageRepository {
 
     if (!result.length || !result[0].values.length) return []
 
-    return result[0].values.map((row) => this.rowToMessage(row))
+    return this.attachTo(result[0].values.map((row) => this.rowToMessage(row)))
   }
 
   getBySegmentId(segmentId: string): Message[] {
@@ -38,7 +51,7 @@ export class MessageRepository {
 
     if (!result.length || !result[0].values.length) return []
 
-    return result[0].values.map((row) => this.rowToMessage(row))
+    return this.attachTo(result[0].values.map((row) => this.rowToMessage(row)))
   }
 
   getById(id: string): Message | null {
@@ -52,7 +65,7 @@ export class MessageRepository {
 
     if (!result.length || !result[0].values.length) return null
 
-    return this.rowToMessage(result[0].values[0])
+    return this.attachTo([this.rowToMessage(result[0].values[0])])[0]
   }
 
   create(message: Message): void {
@@ -297,6 +310,7 @@ export class MessageRepository {
       segmentId: String(row[2]),
       role: String(row[3]) as 'user' | 'assistant',
       content: cleanedContent,
+      attachments: [],
       reasoningMeta: reasoningJson ? JSON.parse(reasoningJson) as ReasoningMeta : null,
       reasoningText: reasoningText,
       reasoningDisplayMode: reasoningDisplayMode,

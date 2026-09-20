@@ -1,3 +1,4 @@
+import * as fs from 'fs'
 import type {
   ModelAdapter,
   CanonicalModelRequest,
@@ -7,9 +8,11 @@ import type {
 } from '../../shared/types/provider'
 import type {
   ChatGPTCodexClient,
+  ProviderInputContentItem,
   ProviderInputItem,
   ResponsesSSEEvent,
 } from '../openai/chatgpt/transport/ChatGPTCodexClient'
+import { UnsupportedImageInputError } from './errors'
 
 export interface CodexRequestOptions {
   useResponsesLite?: boolean
@@ -17,7 +20,7 @@ export interface CodexRequestOptions {
 
 export class ChatGPTCodexAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chatgpt_codex'
-  readonly capabilities = { toolCalling: true, reasoning: true }
+  readonly capabilities = { toolCalling: true, reasoning: true, supportsImageInput: true }
 
   private codexClient: ChatGPTCodexClient
   private useResponsesLite: boolean
@@ -100,7 +103,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     }
 
     for (const msg of request.messages) {
-      input.push(...this.convertMessages(msg))
+      input.push(...this.convertMessages(msg, request))
     }
 
     console.log('[Codex Adapter] buildRequest input items=', input.length,
@@ -158,7 +161,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     return req
   }
 
-  private convertMessages(msg: CanonicalMessage): ProviderInputItem[] {
+  private convertMessages(msg: CanonicalMessage, request: CanonicalModelRequest): ProviderInputItem[] {
     // function_call_output（工具执行结果）
     if (msg.toolResult) {
       return [{
@@ -166,6 +169,30 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
         call_id: msg.toolResult.callId,
         output: msg.toolResult.output,
       }]
+    }
+
+    // 用户消息多模态：转换为 Codex 支持的 input_text / input_image 内容项。
+    // 图片无法解析/读取时必须显式失败，绝不静默丢弃 image part 降级为纯文本。
+    if (msg.inputParts && msg.inputParts.length > 0 && (msg.role === 'user' || msg.role === 'developer')) {
+      const content: ProviderInputContentItem[] = []
+      for (const part of msg.inputParts) {
+        if (part.type === 'text') {
+          content.push({ type: 'input_text', text: part.text })
+        } else if (part.type === 'image') {
+          const resolved = request.attachmentResolver?.resolveForProvider(part.attachmentId)
+          if (!resolved) {
+            throw new UnsupportedImageInputError('图片附件无法解析')
+          }
+          const dataUrl = this.readImageDataUrl(resolved.storagePath, resolved.mimeType)
+          if (!dataUrl) {
+            throw new UnsupportedImageInputError('图片文件读取失败')
+          }
+          content.push({ type: 'input_image', image_url: dataUrl, detail: part.detail ?? resolved.detail ?? 'auto' })
+        }
+      }
+      if (content.length > 0) {
+        return [{ role: msg.role === 'developer' ? 'developer' : 'user', content }]
+      }
     }
 
     // assistant 消息：buildCanonicalRequest 已拆分为独立消息，每条只有一种内容
@@ -207,6 +234,17 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       role: msg.role === 'developer' ? 'developer' : msg.role,
       content: msg.content ?? '',
     }]
+  }
+
+  private readImageDataUrl(storagePath: string, mimeType: string): string | null {
+    try {
+      const buffer = fs.readFileSync(storagePath)
+      return `data:${mimeType};base64,${buffer.toString('base64')}`
+    } catch {
+      // 不打印本地路径，避免文件系统信息进入日志
+      console.error('[ChatGPTCodexAdapter] failed to read image attachment')
+      return null
+    }
   }
 
   private convertEvent(event: ResponsesSSEEvent): CanonicalModelEvent | null {

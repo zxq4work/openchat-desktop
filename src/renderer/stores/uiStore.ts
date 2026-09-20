@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { MessageAttachment } from '../../shared/types/conversation'
 
 export interface SearchMatch {
   messageId: string
@@ -20,6 +21,8 @@ interface UiState {
   currentMatchIndex: number
   focusRequestId: number
   toast: string | null
+  // 全局图片 Lightbox：草稿与历史消息共用同一实例
+  lightboxAttachment: MessageAttachment | null
 
   toggleSidebar: () => void
   requestComposerFocus: () => void
@@ -30,6 +33,8 @@ interface UiState {
   setConversationSettingsTargetId: (id: string | null) => void
   setModelPickerOpen: (open: boolean) => void
   setEffortPickerOpen: (open: boolean) => void
+  openLightbox: (attachment: MessageAttachment) => void
+  closeLightbox: () => void
   openSearch: () => void
   closeSearch: () => void
   setSearchQuery: (query: string) => void
@@ -52,6 +57,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   currentMatchIndex: -1,
   focusRequestId: 0,
   toast: null,
+  lightboxAttachment: null,
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   requestComposerFocus: () => set((state) => ({ focusRequestId: state.focusRequestId + 1 })),
@@ -62,6 +68,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   setConversationSettingsTargetId: (id) => set({ conversationSettingsTargetId: id }),
   setModelPickerOpen: (open) => set({ modelPickerOpen: open }),
   setEffortPickerOpen: (open) => set({ effortPickerOpen: open }),
+  openLightbox: (attachment) => set({ lightboxAttachment: attachment }),
+  closeLightbox: () => set({ lightboxAttachment: null }),
 
   openSearch: () => set({ searchVisible: true, searchQuery: '', searchMatches: [], currentMatchIndex: -1 }),
   closeSearch: () => set({ searchVisible: false, searchQuery: '', searchMatches: [], currentMatchIndex: -1 }),

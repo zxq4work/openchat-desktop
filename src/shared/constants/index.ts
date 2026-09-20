@@ -16,6 +16,9 @@ export const STREAM_FLUSH_MS = 40
 // 会话标题最大字符数
 export const TITLE_MAX_LENGTH = 40
 
+// 单条消息图片数量上限（Renderer 预校验与 Main 落库共用同一来源）
+export const MAX_IMAGES_PER_MESSAGE = 6
+
 // App Server 相关
 export const CODEX_VERSION = '0.148.0'
 export const CODEX_TAG = 'rust-v0.148.0'
