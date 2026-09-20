@@ -359,6 +359,7 @@ textarea {
 
 .conversation-dropdown-item-danger:hover {
   background: var(--danger-bg);
+  color: var(--danger);
   border-color: var(--danger);
 }
 
@@ -899,6 +900,7 @@ textarea {
   background: var(--bg-composer);
   backdrop-filter: blur(8px);
   transition: var(--theme-transition);
+  position: relative;
 }
 
 .composer-inner {
@@ -3026,4 +3028,272 @@ html[data-theme="dark"] mark.search-highlight-current {
 .context-menu-item:hover {
   background: var(--accent-light);
   color: var(--accent);
+}
+
+/* ========================================
+   Attachments — Composer draft strip
+   ======================================== */
+
+.attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.attachment-strip-item {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  box-shadow: var(--shadow-sm);
+  transition: var(--theme-transition);
+}
+
+.attachment-strip-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.attachment-strip-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-strip-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #FFFFFF;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.attachment-strip-item:hover .attachment-strip-remove {
+  opacity: 1;
+}
+
+.attachment-strip-remove:hover:not(:disabled) {
+  background: var(--danger);
+}
+
+.attachment-strip-remove:disabled {
+  cursor: not-allowed;
+}
+
+.composer-attachment-errors {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 拖拽图片到 Composer：整块区域显示提示遮罩 */
+.composer-drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-ring-outer);
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 添加图片按钮：风格与 composer toggle 一致 */
+.attach-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+
+.attach-btn:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Provider 设置：图片输入开关行 */
+.provider-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+/* ========================================
+   Attachments — Message image grid
+   ======================================== */
+
+.message-image-grid {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message-image-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 320px;
+}
+
+.message-image-grid--multi {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  max-width: 420px;
+}
+
+.message-image-cell {
+  position: relative;
+  padding: 0;
+  border: 1px solid var(--user-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-input);
+  cursor: zoom-in;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s, transform 0.1s;
+}
+
+.message-image-cell:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.message-image-cell:active {
+  transform: scale(0.99);
+}
+
+.message-image-grid--single .message-image-cell img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: var(--bg-subtle);
+}
+
+.message-image-grid--multi .message-image-cell {
+  aspect-ratio: 1 / 1;
+}
+
+.message-image-grid--multi .message-image-cell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ========================================
+   Attachments — Lightbox
+   ======================================== */
+
+.attachment-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+
+.attachment-lightbox-image {
+  max-width: 92vw;
+  max-height: 84vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  cursor: default;
+  background: var(--bg-card);
+}
+
+.attachment-lightbox-close {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.attachment-lightbox-close:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.attachment-lightbox-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 92vw;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+.attachment-lightbox-name {
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
 }
