@@ -47,8 +47,22 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    name: Build macOS (x64)
-    runs-on: macos-15-intel
+    name: Build macOS (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x64
+            script: package:mac:x64
+            runner: macos-15-intel
+          - name: arm64
+            script: package:mac:arm64
+            runner: macos-15
+          - name: universal
+            script: package:mac:universal
+            runner: macos-15
+
+    runs-on: ${{ matrix.runner }}
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -67,12 +81,12 @@ jobs:
         run: npm ci
 
       - name: Package
-        run: npm run package:mac
+        run: npm run ${{ matrix.script }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: OpenChat-macOS-x64
+          name: OpenChat-macOS-${{ matrix.name }}
           path: |
             release/*.dmg
             release/*.zip

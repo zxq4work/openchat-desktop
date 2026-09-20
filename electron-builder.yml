@@ -22,7 +22,7 @@ mac:
   target:
     - dmg
     # - zip
-  artifactName: ${productName}-${version}-mac.${ext}
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
   category: public.app-category.productivity
 
 linux:

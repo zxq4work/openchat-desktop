@@ -1872,10 +1872,12 @@ User message: ${userText}${contextHint}`
 
     // 注入所有历史搜索的确定性来源上下文（始终注入，即使当前请求不带 tools）
     // 确保模型记住自己执行过搜索，避免关闭搜索后模型否认之前的搜索结果
+    // 通过 systemPrompt 携带（而非 mid-array developer message），避免 Chat Completions 协议
+    // 将 developer 转成 system 后出现在消息中间被服务端拒绝（"System message must be at the beginning."）
     const allProvenances = resolveAllSearchProvenance(segmentMessages)
     if (allProvenances.length > 0) {
       const ctx = buildAllProvenanceContext(allProvenances, skipWebSearchHistory)
-      messages.push({ role: 'developer', content: ctx })
+      instructions = instructions + '\n\n' + ctx
       console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), skipWebSearchHistory ? 'true' : 'false')
     }
 
@@ -1885,7 +1887,7 @@ User message: ${userText}${contextHint}`
     }
 
     // 搜索开关状态切换提示：若本次请求的搜索能力与历史轮次不同，
-    // 注入一条 developer message 告知模型，避免它把能力变化误判为自己的失误
+    // 在 systemPrompt 中追加说明告知模型，避免它把能力变化误判为自己的失误
     const currentlyDisabled = skipWebSearchHistory === true
     const hadSearchEnabled = this.detectSearchWasEnabledInHistory(segmentMessages)
     // 历史中是否出现过模型声称"没有搜索能力"的表述（曾因开关关闭而无法搜索）
@@ -1894,19 +1896,14 @@ User message: ${userText}${contextHint}`
     )
 
     // 本次关闭 + 历史开启过搜索 → 告知模型这是用户切换，不是它的失误
+    // 同样折叠进 systemPrompt，避免 mid-array system message 触发服务端报错
     if (currentlyDisabled && hadSearchEnabled) {
-      messages.push({
-        role: 'developer',
-        content: 'NOTE: The user has just toggled web search OFF. In earlier turns you had web search tools, but for this turn they are gone. This is a user settings change, not a mistake on your part. Do NOT apologize, do NOT claim you "lied" or "made an error", and do NOT invent a self-contradictory explanation. Just answer using past search results or your own knowledge.',
-      })
+      instructions = instructions + '\n\n' + 'NOTE: The user has just toggled web search OFF. In earlier turns you had web search tools, but for this turn they are gone. This is a user settings change, not a mistake on your part. Do NOT apologize, do NOT claim you "lied" or "made an error", and do NOT invent a self-contradictory explanation. Just answer using past search results or your own knowledge.'
     }
 
     // 本次开启 + 历史中出现过"不能搜索"的表述 → 告知模型搜索已恢复，别解释过去
     if (!currentlyDisabled && historyContainsNoSearchClaim) {
-      messages.push({
-        role: 'developer',
-        content: 'NOTE: Web search was toggled off in earlier turns (which is why the model previously said it could not search), but the user has now toggled it back ON. Do NOT apologize, do NOT explain past inconsistency, and do NOT dwell on previous turns. You now have web search available again — use it when needed.',
-      })
+      instructions = instructions + '\n\n' + 'NOTE: Web search was toggled off in earlier turns (which is why the model previously said it could not search), but the user has now toggled it back ON. Do NOT apologize, do NOT explain past inconsistency, and do NOT dwell on previous turns. You now have web search available again — use it when needed.'
     }
 
     return {

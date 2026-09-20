@@ -25,6 +25,9 @@
     "package:win:nsis:legacy-mac": "node scripts/check-pnpm.js && npm run build && node scripts/package-win-nsis-legacy-mac.js",
     "package:win:zip": "node scripts/check-pnpm.js && npm run build && electron-builder --win zip",
     "package:mac": "node scripts/check-pnpm.js && npm run build && electron-builder --mac",
+    "package:mac:x64": "node scripts/check-pnpm.js && npm run build && electron-builder --mac --x64",
+    "package:mac:arm64": "node scripts/check-pnpm.js && npm run build && electron-builder --mac --arm64",
+    "package:mac:universal": "node scripts/check-pnpm.js && npm run build && electron-builder --mac --universal",
     "package:linux": "node scripts/check-pnpm.js && npm run build && electron-builder --linux"
   },
   "dependencies": {
