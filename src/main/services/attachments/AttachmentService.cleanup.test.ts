@@ -27,6 +27,8 @@ function att(overrides: Partial<MessageAttachment>): MessageAttachment {
     height: 10,
     detail: 'auto',
     sha256: 'deadbeef',
+    source: 'user_upload',
+    usage: 'chat_input',
     createdAt: Date.now(),
     ...overrides,
   }

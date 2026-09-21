@@ -100,9 +100,9 @@ describe('historyHasImage', () => {
     expect(historyHasImage(msgs)).toBe(false)
   })
 
-  it('is true when a historical user message has an image attachment', () => {
+  it('is true when a historical user message has a chat_input image attachment', () => {
     const msgs: Message[] = [
-      { ...base, id: 'a', attachments: [{ id: 'att-1', type: 'image' } as never] },
+      { ...base, id: 'a', attachments: [{ id: 'att-1', type: 'image', usage: 'chat_input' } as never] },
       { ...base, id: 'b', role: 'assistant', content: 'ok' },
     ]
     expect(historyHasImage(msgs)).toBe(true)
@@ -110,7 +110,15 @@ describe('historyHasImage', () => {
 
   it('ignores assistant attachments (only user replays images)', () => {
     const msgs: Message[] = [
-      { ...base, id: 'b', role: 'assistant', attachments: [{ id: 'att-1', type: 'image' } as never], content: 'ok' },
+      { ...base, id: 'b', role: 'assistant', attachments: [{ id: 'att-1', type: 'image', usage: 'generation_output' } as never], content: 'ok' },
+    ]
+    expect(historyHasImage(msgs)).toBe(false)
+  })
+
+  it('ignores generation_input / generation_output (not part of Chat context)', () => {
+    const msgs: Message[] = [
+      { ...base, id: 'a', attachments: [{ id: 'att-1', type: 'image', usage: 'generation_input' } as never] },
+      { ...base, id: 'b', attachments: [{ id: 'att-2', type: 'image', usage: 'generation_output' } as never] },
     ]
     expect(historyHasImage(msgs)).toBe(false)
   })

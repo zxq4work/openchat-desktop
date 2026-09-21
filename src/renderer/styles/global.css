@@ -194,10 +194,13 @@ textarea {
 
 .sidebar-header {
   padding: 16px 12px 12px;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
 }
 
 .new-conversation-btn {
-  width: 100%;
+  flex: 1;
   padding: 10px 16px;
   background: var(--accent);
   color: #FFFFFF;
@@ -261,6 +264,8 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
 }
 
 .conversation-title-input {
@@ -578,6 +583,161 @@ textarea {
 
 .messages-empty-ring {
   display: none;
+}
+
+/* 图片生成空状态：复用同一视觉结构（居中小图标 + 标题 + 弱化说明），
+   图标换成侧栏「新建图片生成」同款 SVG，不引入 emoji 或新图标库。
+   外框卡片完全静止；动效只在内部图形（山峰 / 太阳 / 扫描高光）与 Sparkle 上。
+   此容器同时作为 Sparkle 的定位父级（position: relative）。 */
+.messages-empty-icon--image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-muted);
+  position: relative;
+  overflow: visible;
+}
+
+/* 图片区域：内部内容由 SVG clipPath（与 frame 同几何）裁剪，无需 overflow:hidden。 */
+.image-empty-picture {
+  position: relative;
+  width: 24px;
+  height: 24px;
+}
+
+.image-empty-glyph {
+  display: block;
+}
+
+/* 山峰：主体动画，「图像内容逐渐生成」的观感；越界部分由 clipPath 裁掉 */
+.image-empty-landscape {
+  animation: imageEmptyLandscape 2.3s ease-in-out infinite;
+}
+
+@keyframes imageEmptyLandscape {
+  0%, 100% {
+    opacity: 0.45;
+    transform: translateY(2px);
+  }
+  30% {
+    opacity: 0.7;
+    transform: translateY(1px);
+  }
+  55%, 80% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 太阳：与山峰错开节奏，从淡到清晰，无跳动 */
+.image-empty-sun {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: imageEmptySun 2.3s ease-in-out infinite;
+}
+
+@keyframes imageEmptySun {
+  0%, 15%, 100% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+  35%, 70% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  85% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
+}
+
+/* 扫描高光：SVG 内一条渐淡竖条，配合 clipPath 只在图片框内可见；
+   一轮只扫过一次，极度克制，避免 skeleton loading 观感。
+   渐变颜色走 theme token（.image-empty-sweep-stop 系列），不硬编码。 */
+.image-empty-scan {
+  opacity: 0;
+  animation: imageEmptyScan 2.3s ease-in-out infinite;
+}
+
+.image-empty-sweep-stop {
+  stop-color: var(--accent);
+  stop-opacity: 0;
+}
+
+.image-empty-sweep-stop--mid {
+  stop-opacity: 1;
+}
+
+@keyframes imageEmptyScan {
+  0%, 35% {
+    opacity: 0;
+    transform: translateX(-7px);
+  }
+  44%, 58% {
+    opacity: 0.22;
+  }
+  66%, 100% {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+/* ── AI Sparkle：绝对定位的四角星，作为「完成点缀」，不是主体动画 ──
+   SVG 绘制（非 emoji / 非图片资源），允许略微超出 icon 外框但不参与布局。 */
+.image-sparkle {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  color: var(--accent);
+  opacity: 0;
+}
+
+.image-sparkle svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.image-sparkle--lg {
+  top: -4px;
+  right: -5px;
+  width: 9px;
+  height: 9px;
+  animation: imageSparkle 2.3s ease-in-out infinite;
+}
+
+.image-sparkle--sm {
+  top: 7px;
+  right: -10px;
+  width: 5px;
+  height: 5px;
+  color: var(--text-muted);
+  animation: imageSparkle 2.3s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
+/* 闪烁：在周期约 60% 处点亮（内部图形与高光之后），闪一下即熄，与主体动画同一节奏 */
+@keyframes imageSparkle {
+  0%, 45% {
+    opacity: 0;
+    transform: scale(0.4) rotate(0deg);
+  }
+  58% {
+    opacity: 1;
+    transform: scale(1) rotate(8deg);
+  }
+  72% {
+    opacity: 0.65;
+    transform: scale(0.8) rotate(12deg);
+  }
+  85%, 100% {
+    opacity: 0;
+    transform: scale(0.4) rotate(16deg);
+  }
 }
 
 .messages-empty-title {
@@ -2373,6 +2533,57 @@ textarea {
   margin: 0;
 }
 
+.provider-hint--error {
+  color: var(--danger);
+}
+
+.provider-input--error {
+  border-color: var(--danger);
+}
+
+.provider-save-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* 高级协议兼容设置：默认折叠 */
+.provider-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.provider-advanced-toggle:hover {
+  color: var(--text-primary);
+}
+
+.provider-advanced-chevron {
+  transition: transform 0.15s;
+}
+
+.provider-advanced-chevron--open {
+  transform: rotate(90deg);
+}
+
+.provider-advanced-body {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 /* Model management */
 .provider-model-input-row {
   display: flex;
@@ -3174,6 +3385,21 @@ html[data-theme="dark"] mark.search-highlight-current {
    Attachments — Message image grid
    ======================================== */
 
+.message-image-block {
+  display: flex;
+  flex-direction: column;
+  /* flex-start（而非默认 stretch）：让单图网格按 intrinsic 尺寸收缩，
+     否则 inline-grid 会被拉伸到 max-width(320px)，窄图右侧出现空白。 */
+  align-items: flex-start;
+  gap: 4px;
+}
+
+/* 图片生成参考图标签（区别于 Chat 图片输入） */
+.message-image-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .message-image-grid {
   display: grid;
   gap: 6px;
@@ -3189,7 +3415,9 @@ html[data-theme="dark"] mark.search-highlight-current {
 }
 
 .message-image-grid--multi {
-  /* 固定 160px 列宽与 cell 尺寸一致；不使用 1fr，避免列宽被拉伸 */
+  /* 固定 160px 列宽与 cell 尺寸一致；不使用 1fr，避免列宽被拉伸。
+     width:100% 抵消父级 flex-start：多图仍需占满到 max-width 才能正确 auto-fill 列数。 */
+  width: 100%;
   grid-template-columns: repeat(auto-fill, 160px);
   max-width: 420px;
 }
@@ -3224,6 +3452,21 @@ html[data-theme="dark"] mark.search-highlight-current {
   max-height: 320px;
   object-fit: contain;
   background: var(--bg-subtle);
+}
+
+/* 图片生成结果沿用与参考图/AI 生成图完全相同的尺寸规则：
+   不固定比例、不 width:100%，让 frame 跟随图片真实比例收缩（不放大、contain）。
+   这里显式声明，避免结果块未来单独漂移出另一套 CSS。 */
+.message-image-cell--generated {
+  min-width: 0;
+  line-height: 0;
+}
+.message-image-cell--generated img {
+  width: auto;
+  height: auto;
+  max-width: 320px;
+  max-height: 320px;
+  object-fit: contain;
 }
 
 .message-image-grid--multi .message-image-cell {
@@ -3315,4 +3558,626 @@ html[data-theme="dark"] mark.search-highlight-current {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+.attachment-lightbox-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.attachment-lightbox-save:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.attachment-lightbox-save:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ========================================
+   Image Generation
+   ======================================== */
+
+/* 侧边栏：图片生成会话类型图标 + 新建按钮 */
+.conversation-type-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 6px;
+  color: var(--text-secondary);
+  vertical-align: -2px;
+}
+
+.conversation-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「新对话」拆分按钮：主按钮新建聊天，箭头展开菜单（新建聊天 / 图片生成） */
+.new-conversation-split {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+}
+
+.new-conversation-split .new-conversation-btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.new-conversation-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  background: var(--accent);
+  color: #FFFFFF;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.28);
+  border-top-right-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.new-conversation-caret:hover {
+  background: var(--accent-hover);
+}
+
+.new-conversation-caret:active {
+  filter: brightness(0.9);
+}
+
+.new-conversation-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10000;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: var(--theme-transition);
+}
+
+.new-conversation-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.new-conversation-menu-item:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.new-conversation-menu-item svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.new-conversation-menu-item:hover svg {
+  color: var(--accent);
+}
+
+/* Chat 头部类型标识 */
+.chat-type-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 8px;
+  color: var(--text-secondary);
+}
+
+/* 图片生成 Composer 提示 */
+.composer-image-hint {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+/* 参考图不受当前供应商支持时的警示提示（保留参考图，不静默丢弃） */
+.composer-image-hint--warn {
+  color: var(--danger, #d9534f);
+  border-color: var(--danger, #d9534f);
+}
+
+/* 生成能力编辑器（文生图 / 参考图生成） */
+.image-ops-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-ops-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 20px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.image-ops-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.image-ops-number input {
+  width: 64px;
+  padding: 3px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.image-input-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 生成中的占位骨架：尺寸接近单图上限，减少结果到达时的布局跳动 */
+.message-image-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 320px;
+  height: 320px;
+  max-width: 100%;
+  margin-bottom: 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.message-image-placeholder-text {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+/* 生成中图标：「图片内容被逐步绘制出来 + 淡高光 + Sparkle」，语义为 AI 在生成图片。
+   外框完全静止；内部内容由静态 frame clipPath 兜底防溢出。
+   统一周期 2.4s：太阳出现 → 山峰线条绘制 → 高光扫过 → sparkle → 停顿 → 循环。 */
+.message-image-gen-icon {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  color: var(--text-muted);
+}
+
+.message-image-gen-icon svg {
+  display: block;
+}
+
+/* 山峰：用 stroke-dashoffset 沿 path 由无到有绘制。
+   pathLength="1" 已归一化，dash 长度 1 即整条 path。
+   循环末尾只淡出 opacity，不做反向擦除；opacity=0 时 dashoffset 静默复位。 */
+.image-gen-landscape {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: imageGenDraw 2.4s ease-in-out infinite;
+}
+
+@keyframes imageGenDraw {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 0;
+  }
+  12% {
+    stroke-dashoffset: 1;
+    opacity: 0.7;
+  }
+  18% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  58%, 88% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+/* 太阳：比山峰略早出现，从淡到清晰，无跳动 */
+.image-gen-sun {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: imageGenSun 2.4s ease-in-out infinite;
+}
+
+@keyframes imageGenSun {
+  0%, 8% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  18%, 30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  88% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+/* 扫描高光：山峰绘制完成后只扫一次，配合静态 clipPath 只在图片框内 */
+.image-gen-scan {
+  opacity: 0;
+  animation: imageGenScan 2.4s ease-in-out infinite;
+}
+
+.image-gen-sweep-stop {
+  stop-color: var(--accent);
+  stop-opacity: 0;
+}
+
+.image-gen-sweep-stop--mid {
+  stop-opacity: 1;
+}
+
+@keyframes imageGenScan {
+  0%, 55% {
+    opacity: 0;
+    transform: translateX(-7px);
+  }
+  62% {
+    opacity: 0.18;
+  }
+  78% {
+    opacity: 0.18;
+    transform: translateX(16px);
+  }
+  82%, 100% {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+/* Sparkle：完成点缀（约 75% 处点亮），不参与裁剪，可在图片框外 */
+.image-gen-sparkle {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+  color: var(--accent);
+  opacity: 0;
+}
+
+.image-gen-sparkle svg {
+  width: 100%;
+  height: 100%;
+}
+
+.image-gen-sparkle--lg {
+  top: -3px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  animation: imageGenSparkle 2.4s ease-in-out infinite;
+}
+
+.image-gen-sparkle--sm {
+  top: 12px;
+  right: -7px;
+  width: 7px;
+  height: 7px;
+  color: var(--text-muted);
+  animation: imageGenSparkle 2.4s ease-in-out infinite;
+  animation-delay: 0.25s;
+}
+
+@keyframes imageGenSparkle {
+  0%, 55% {
+    opacity: 0;
+    transform: scale(0.5) rotate(0deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1) rotate(8deg);
+  }
+  82% {
+    opacity: 0.6;
+    transform: scale(0.8) rotate(12deg);
+  }
+  90%, 100% {
+    opacity: 0;
+    transform: scale(0.6) rotate(16deg);
+  }
+}
+
+/* 文字右侧三个独立小点：stagger 呼吸，文字本身不动 */
+.image-gen-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.image-gen-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  animation: imageGenDot 1.3s ease-in-out infinite;
+}
+
+.image-gen-dot:nth-child(1) { animation-delay: 0ms; }
+.image-gen-dot:nth-child(2) { animation-delay: 160ms; }
+.image-gen-dot:nth-child(3) { animation-delay: 320ms; }
+
+@keyframes imageGenDot {
+  0%, 100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+}
+
+/* Provider 卡片徽标：Image Generations */
+.provider-card-badge--image_generations {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 图片生成：自定义尺寸输入行 */
+.image-custom-size-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-custom-size-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.image-custom-size-apply {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.image-custom-size-apply:hover {
+  border-color: var(--accent);
+}
+
+/* Provider 设置：Image Generation 参数 Profile 编辑器 */
+.image-profile-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.image-param-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.image-param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.image-param-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.image-param-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ========================================
+   OpenChat Checkbox — 统一自绘复选框
+   ======================================== */
+.oc-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  line-height: 1.4;
+}
+
+.oc-checkbox--disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 原生 input 保留在无障碍树中，仅视觉隐藏，键盘焦点仍可聚焦到它 */
+.oc-checkbox-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.oc-checkbox-box {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-input);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+
+.oc-checkbox:hover .oc-checkbox-box {
+  border-color: var(--accent-border);
+}
+
+.oc-checkbox:active .oc-checkbox-box {
+  background: var(--bg-hover);
+}
+
+.oc-checkbox-mark {
+  width: 12px;
+  height: 12px;
+  color: #FFFFFF;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.12s, transform 0.12s;
+}
+
+/* :checked 作用于隐藏的原生 input，DOM 上它是 .oc-checkbox-box 的前一个兄弟 */
+.oc-checkbox-input:checked + .oc-checkbox-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.oc-checkbox-input:checked + .oc-checkbox-box .oc-checkbox-mark {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* 键盘焦点环：仅在键盘导航（:focus-visible）时出现 */
+.oc-checkbox-input:focus-visible + .oc-checkbox-box {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.oc-checkbox-input:disabled + .oc-checkbox-box {
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+}
+
+.oc-checkbox-label {
+  color: inherit;
+}
+
+.image-param-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-param-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.image-param-chip-remove {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.image-param-chip-remove:hover {
+  color: var(--text);
+}
+
+.image-param-option-input {
+  min-width: 120px;
+  padding: 3px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.image-param-option-add {
+  padding: 3px 9px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.image-param-option-add:disabled {
+  opacity: 0.5;
+  cursor: default;
 }

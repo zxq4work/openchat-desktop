@@ -1,5 +1,6 @@
 import { StorageService } from './StorageService'
-import type { CustomProviderConfig, ToolCallingMode } from '../../shared/types/provider'
+import type { CustomProviderConfig, ToolCallingMode, ImageGenerationParameterProfile } from '../../shared/types/provider'
+import { normalizeImageGenerationProfile } from '../../shared/image-generation/parameterProfile'
 import { randomUUID } from 'crypto'
 
 export class ProviderConfigRepository {
@@ -14,7 +15,8 @@ export class ProviderConfigRepository {
     const result = db.exec(`
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
-             extra_headers, tool_calling, image_input, created_at, updated_at
+             extra_headers, tool_calling, image_input, image_generations_path,
+             image_generation_profile_json, created_at, updated_at
       FROM provider_configs
       ORDER BY created_at ASC
     `)
@@ -39,7 +41,8 @@ export class ProviderConfigRepository {
     const result = db.exec(`
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
-             extra_headers, tool_calling, image_input, created_at, updated_at
+             extra_headers, tool_calling, image_input, image_generations_path,
+             image_generation_profile_json, created_at, updated_at
       FROM provider_configs WHERE id = ?
     `, [id])
 
@@ -64,8 +67,9 @@ export class ProviderConfigRepository {
       INSERT INTO provider_configs (
         id, name, protocol, base_url, api_key, models,
         models_path, chat_completions_path, responses_path,
-        extra_headers, tool_calling, image_input, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        extra_headers, tool_calling, image_input, image_generations_path,
+        image_generation_profile_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       fullConfig.name,
@@ -79,6 +83,8 @@ export class ProviderConfigRepository {
       fullConfig.extraHeaders ? JSON.stringify(fullConfig.extraHeaders) : null,
       fullConfig.toolCalling,
       fullConfig.imageInput ? 1 : 0,
+      fullConfig.imageGenerationsPath ?? null,
+      fullConfig.imageGenerationProfile ? JSON.stringify(fullConfig.imageGenerationProfile) : null,
       now,
       now,
     ])
@@ -130,6 +136,14 @@ export class ProviderConfigRepository {
       sets.push('responses_path = ?')
       values.push(updates.responsesPath || null)
     }
+    if (updates.imageGenerationsPath !== undefined) {
+      sets.push('image_generations_path = ?')
+      values.push(updates.imageGenerationsPath || null)
+    }
+    if (updates.imageGenerationProfile !== undefined) {
+      sets.push('image_generation_profile_json = ?')
+      values.push(updates.imageGenerationProfile ? JSON.stringify(updates.imageGenerationProfile) : null)
+    }
     if (updates.toolCalling !== undefined) {
       sets.push('tool_calling = ?')
       values.push(updates.toolCalling)
@@ -171,6 +185,17 @@ export class ProviderConfigRepository {
       models = []
     }
 
+    let imageGenerationProfile: ImageGenerationParameterProfile | undefined
+    const profileStr = row[13] ? String(row[13]) : null
+    if (profileStr) {
+      try {
+        imageGenerationProfile = normalizeImageGenerationProfile(JSON.parse(profileStr))
+      } catch {
+        // 无效 JSON：回退到最小集，绝不让坏数据导致 Provider 不可用
+        imageGenerationProfile = normalizeImageGenerationProfile(null)
+      }
+    }
+
     return {
       id: String(row[0]),
       name: String(row[1]),
@@ -184,8 +209,10 @@ export class ProviderConfigRepository {
       extraHeaders,
       toolCalling: String(row[10]) as ToolCallingMode,
       imageInput: row[11] ? Number(row[11]) === 1 : false,
-      createdAt: Number(row[12]),
-      updatedAt: Number(row[13]),
+      imageGenerationsPath: row[12] ? String(row[12]) : undefined,
+      imageGenerationProfile,
+      createdAt: Number(row[14]),
+      updatedAt: Number(row[15]),
     }
   }
 }

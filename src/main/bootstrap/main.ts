@@ -44,6 +44,8 @@ import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
 import { AttachmentRepository } from '../storage/AttachmentRepository'
 import { AttachmentService } from '../services/attachments/AttachmentService'
+import { ImageGenerationRepository } from '../storage/ImageGenerationRepository'
+import { ImageGenerationService } from '../image-generation/ImageGenerationService'
 import { registerAttachmentScheme, registerAttachmentProtocol } from './AttachmentProtocol'
 import { getBootBackgroundColor } from './BootPreferences'
 
@@ -104,6 +106,7 @@ const services = {
   providerConfigService: null as ProviderConfigService | null,
   webSearchConfig: null as WebSearchConfig | null,
   attachmentService: null as AttachmentService | null,
+  imageGenerationService: null as ImageGenerationService | null,
 }
 
 function getAppServerMode(): AppServerMode {
@@ -253,6 +256,14 @@ async function initializeChatGPTProvider(): Promise<void> {
   )
   services.chatgptConversationService.setAttachmentService(attachmentService)
   services.conversationService = services.chatgptConversationService as unknown as ConversationService
+
+  // 图片生成服务：独立协议（POST /v1/images/generations），与 Chat 完全隔离
+  const imageGenerationRepository = new ImageGenerationRepository(storage)
+  const imageGenerationService = new ImageGenerationService(storage, providerConfigService)
+  imageGenerationService.setAttachmentService(attachmentService)
+  services.imageGenerationService = imageGenerationService
+  // 会话删除时同步清理 image_generations
+  services.chatgptConversationService.setImageGenerationRepository(imageGenerationRepository)
 
   // 清理孤儿附件（引用了不存在会话的草稿，如发送前崩溃残留）
   try {

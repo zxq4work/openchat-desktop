@@ -77,6 +77,7 @@ export class ConversationService {
     const summaries = this.conversations.listSummaries()
     return summaries.map((s) => ({
       id: s.id,
+      type: s.type,
       title: s.title,
       systemPrompt: '',
       systemPromptRevision: 0,
@@ -88,6 +89,9 @@ export class ConversationService {
       codexSearchMode: 'hosted',
       searchEngine: 'bing',
       providerConfigId: null,
+      defaultImageSize: null,
+      defaultImageQuality: null,
+      defaultImageBackground: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
       }))
@@ -121,6 +125,7 @@ export class ConversationService {
 
     const conversation: Conversation = {
       id: conversationId,
+      type: 'chat',
       title: '新对话',
       systemPrompt,
       systemPromptRevision: 0,
@@ -132,6 +137,9 @@ export class ConversationService {
       codexSearchMode: 'hosted',
       searchEngine,
       providerConfigId,
+      defaultImageSize: null,
+      defaultImageQuality: null,
+      defaultImageBackground: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -241,6 +249,12 @@ export class ConversationService {
 
   async updateEffort(id: string, effort: string): Promise<void> {
     this.conversations.updateEffort(id, effort)
+    await this.storage.save()
+  }
+
+  // appserver 模式不支持图片生成，仅为服务类型兼容保留该接口。
+  async updateImageDefaults(id: string, size: string | null, quality: string | null, background: string | null): Promise<void> {
+    this.conversations.updateImageDefaults(id, size, quality, background)
     await this.storage.save()
   }
 

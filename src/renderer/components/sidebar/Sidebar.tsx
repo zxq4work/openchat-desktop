@@ -1,6 +1,7 @@
-import React, { useEffect, useCallback } from 'react'
+import React, { useEffect, useCallback, useRef, useState } from 'react'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useModelStore } from '../../stores/modelStore'
+import { useProviderStore } from '../../stores/providerStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useThemeStore } from '../../stores/themeStore'
 import { ConversationList } from './ConversationList'
@@ -14,9 +15,30 @@ export function Sidebar() {
   const setActiveSegments = useConversationStore((s) => s.setActiveSegments)
   const setSettingsDialogOpen = useUiStore((s) => s.setSettingsDialogOpen)
   const models = useModelStore((s) => s.models)
+  const providers = useProviderStore((s) => s.providers)
   const themeMode = useThemeStore((s) => s.mode)
   const resolvedTheme = useThemeStore((s) => s.resolved)
   const cycleTheme = useThemeStore((s) => s.cycle)
+
+  // 「新对话」拆分为主按钮（新建聊天）+ 下拉箭头（可新建图片生成会话）。
+  const [menuOpen, setMenuOpen] = useState(false)
+  const newBtnRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (newBtnRef.current && !newBtnRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   const themeLabel = themeMode === 'system'
     ? `跟随系统（${resolvedTheme === 'light' ? '浅色' : '深色'}）`
@@ -30,11 +52,37 @@ export function Sidebar() {
     load()
   }, [setSummaries])
 
-  const handleNewConversation = useCallback(async () => {
-    // 若当前活跃会话是空白的（无消息），直接复用，不新建
+  const handleNewConversation = useCallback(async (type: 'chat' | 'image_generation' = 'chat') => {
+    // 若当前活跃会话是空白且类型相同，直接复用，不新建
     const store = useConversationStore.getState()
     if (store.activeConversationId && store.activeMessages.length === 0) {
-      useUiStore.getState().requestComposerFocus()
+      if (store.activeConversation?.type === type) {
+        useUiStore.getState().requestComposerFocus()
+        return
+      }
+      // 类型不同：不允许在同一空会话上切换类型（保持语义清晰），新建一个
+    }
+
+    if (type === 'image_generation') {
+      // 图片生成会话：默认使用第一个图片生成服务及其首个模型
+      const imageProvider = providers.find((p) => p.protocol === 'image_generations')
+      const conv = await window.openchat.conversations.create(
+        imageProvider?.models?.[0] ?? null,
+        null,
+        undefined,
+        imageProvider?.id ?? null,
+        false,
+        undefined,
+        'image_generation'
+      )
+      if (conv) {
+        const newList = await window.openchat.conversations.list()
+        setSummaries(newList)
+        setActiveConversationId(conv.id)
+        setActiveConversation(conv)
+        setActiveMessages([])
+        setActiveSegments([])
+      }
       return
     }
 
@@ -55,7 +103,7 @@ export function Sidebar() {
           : null)
     }
 
-    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId, defaultWebSearch, defaultSearchEngine)
+    const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId, defaultWebSearch, defaultSearchEngine, 'chat')
     if (conv) {
       const newList = await window.openchat.conversations.list()
       setSummaries(newList)
@@ -64,14 +112,60 @@ export function Sidebar() {
       setActiveMessages([])
       setActiveSegments([])
     }
-  }, [models, setSummaries, setActiveConversationId, setActiveConversation, setActiveMessages, setActiveSegments])
+  }, [models, providers, setSummaries, setActiveConversationId, setActiveConversation, setActiveMessages, setActiveSegments])
 
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <button className="new-conversation-btn" onClick={handleNewConversation}>
-          + 新对话
-        </button>
+        <div className="new-conversation-split" ref={newBtnRef}>
+          <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
+            + 新对话
+          </button>
+          <button
+            className="new-conversation-caret"
+            onClick={() => setMenuOpen((v) => !v)}
+            title="更多新建选项"
+            aria-label="更多新建选项"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+          {menuOpen && (
+            <div className="new-conversation-menu" role="menu">
+              <button
+                className="new-conversation-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false)
+                  void handleNewConversation('chat')
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                新建聊天
+              </button>
+              <button
+                className="new-conversation-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false)
+                  void handleNewConversation('image_generation')
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="M21 15l-5-5L5 21" />
+                </svg>
+                新建图片生成
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <ConversationList />

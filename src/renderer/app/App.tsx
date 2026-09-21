@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/authStore'
 import { useModelStore } from '../stores/modelStore'
 import { useConversationStore } from '../stores/conversationStore'
 import { useChatStreamStore } from '../stores/chatStreamStore'
+import { useImageGenerationStore } from '../stores/imageGenerationStore'
 import { useUiStore } from '../stores/uiStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useCodexUsageStore } from '../stores/codexUsageStore'
@@ -477,6 +478,48 @@ export function App() {
       useChatStreamStore.getState().setBufferedText('')
       useChatStreamStore.getState().setReasoningStatus('idle')
       useChatStreamStore.getState().setReasoningText('')
+    }))
+
+    // 图片生成事件：独立于 chat 流式路径，只更新 imageGenerationStore + 重载消息
+    // （生成结果通过 message_attachments 落库，完成后需要从 Main 重新拉取才能拿到 attachments）
+    const reloadActiveConversation = async (conversationId: string) => {
+      const activeConvId = useConversationStore.getState().activeConversationId
+      if (conversationId !== activeConvId) return
+      const data = await window.openchat.conversations.get(conversationId)
+      if (data) {
+        useConversationStore.getState().setActiveConversation(data.conversation)
+        useConversationStore.getState().setActiveMessages(data.messages)
+        useConversationStore.getState().setActiveSegments(data.segments)
+      }
+    }
+
+    disposers.push(window.openchat.events.onImageGenerationStarted((event: unknown) => {
+      const e = event as { conversationId: string; assistantMessageId: string }
+      console.log('[App RAW] image-generation-started conversationId=%s messageId=%s', e.conversationId, e.assistantMessageId)
+      useImageGenerationStore.getState().setStarted(e.conversationId, e.assistantMessageId)
+    }))
+
+    disposers.push(window.openchat.events.onImageGenerationCompleted((event: unknown) => {
+      const e = event as { conversationId: string }
+      console.log('[App RAW] image-generation-completed conversationId=%s', e.conversationId)
+      const store = useImageGenerationStore.getState()
+      // 仅当完成的正是当前跟踪的生成时才清理，避免跨会话误清
+      if (store.conversationId && store.conversationId !== e.conversationId) return
+      useImageGenerationStore.getState().setCompleted(e.conversationId)
+      void reloadActiveConversation(e.conversationId)
+      window.openchat.conversations.list().then((list) => {
+        useConversationStore.getState().setSummaries(list)
+      })
+    }))
+
+    disposers.push(window.openchat.events.onImageGenerationFailed((event: unknown) => {
+      const e = event as { conversationId: string }
+      console.log('[App RAW] image-generation-failed conversationId=%s', e.conversationId)
+      const store = useImageGenerationStore.getState()
+      if (store.conversationId && store.conversationId !== e.conversationId) return
+      // 失败原因已写入 assistant message，重载后由 AssistantMessage 内联展示。
+      useImageGenerationStore.getState().setFailed(e.conversationId)
+      void reloadActiveConversation(e.conversationId)
     }))
 
     disposers.push(window.openchat.events.onTurnCompleted((event: unknown) => {

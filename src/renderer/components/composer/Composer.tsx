@@ -101,7 +101,7 @@ export function Composer() {
       }
     })
     // 加载新会话的未发送附件（Main 侧持久化，崩溃/重启后仍可恢复）
-    window.openchat.attachments.listDrafts(newId).then((atts) => {
+    window.openchat.attachments.listDrafts(newId, 'chat_input').then((atts) => {
       if (useConversationStore.getState().activeConversationId === newId) {
         setDraftAttachments(atts)
       }
@@ -144,7 +144,7 @@ export function Composer() {
     if (!currentConversation) return
     setImporting(true)
     try {
-      const { attachments, errors } = await importFiles(files, activeConversationId, remainingSlots)
+      const { attachments, errors } = await importFiles(files, activeConversationId, remainingSlots, 'chat_input', MAX_IMAGES_PER_MESSAGE)
       if (attachments.length > 0) {
         setDraftAttachments((prev) => [...prev, ...attachments])
       }

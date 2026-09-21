@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect, useCallback, useContext } from 'rea
 import type { Message } from '../../../shared/types/conversation'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useModelStore } from '../../stores/modelStore'
+import { useImageGenerationStore } from '../../stores/imageGenerationStore'
+import { useUiStore } from '../../stores/uiStore'
+import { imageAttachments, thumbnailUrl } from '../../packages/attachmentUrl'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { ScrollContainerContext } from './ScrollContainerContext'
 import { probeLayoutRead } from '../../packages/layoutReadDiag'
@@ -13,6 +16,11 @@ interface Props {
 export const AssistantMessage = React.memo(function AssistantMessage({ message }: Props) {
   const streamState = useChatStreamStore()
   const isStreaming = streamState.activeAssistantMessageId === message.id && streamState.status === 'streaming'
+  const openLightbox = useUiStore((s) => s.openLightbox)
+  // 图片生成结果：assistant 消息此前不渲染 attachments，这里补齐图片网格。
+  const generatedImages = imageAttachments(message.attachments)
+  const imageGenActiveAssistantId = useImageGenerationStore((s) => s.activeAssistantMessageId)
+  const isImageGenerating = imageGenActiveAssistantId === message.id
   const [summaryExpanded, setSummaryExpanded] = useState(
     // 当前 turn 的消息（非 completed）默认展开 reasoning 面板，避免 completion 时
     // summaryExpanded 从 false 切到 true 导致 DOM 卸载再挂载，scrollTop 归零。
@@ -335,10 +343,87 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
           <div>...</div>
         ) : null}
       </div>
+
+      {/* 图片生成结果：复用与用户上传图片相同的网格 + Lightbox */}
+      {generatedImages.length > 0 && (
+        <div className={`message-image-grid message-image-grid--${generatedImages.length === 1 ? 'single' : 'multi'}`}>
+          {generatedImages.map((att) => (
+            <button
+              key={att.id}
+              type="button"
+              className="message-image-cell message-image-cell--generated"
+              onClick={() => openLightbox(att)}
+              aria-label={`查看生成图片 ${att.fileName}`}
+            >
+              <img
+                src={thumbnailUrl(att.id)}
+                alt={att.fileName}
+                width={att.width > 0 ? att.width : undefined}
+                height={att.height > 0 ? att.height : undefined}
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 图片生成进行中占位骨架：保持布局稳定，避免结果到达时消息列表跳动。
+          「图片逐渐生成」的动画语义，而非通用 loading spinner。 */}
+      {generatedImages.length === 0 && isImageGenerating && (
+        <div className="message-image-placeholder" role="status" aria-label="图片生成中">
+          <div className="message-image-gen-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <defs>
+                {/* 静态 frame clipPath：仅防止 sun / mountain / scan 溢出图片框，自身不动画 */}
+                <clipPath id={`image-gen-${message.id}-frame`}>
+                  <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="1.6" />
+                </clipPath>
+                <linearGradient id={`image-gen-${message.id}-sweep`} x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" className="image-gen-sweep-stop" />
+                  <stop offset="50%" className="image-gen-sweep-stop image-gen-sweep-stop--mid" />
+                  <stop offset="100%" className="image-gen-sweep-stop" />
+                </linearGradient>
+              </defs>
+              {/* 内部图像内容：太阳 / 山峰 / 高光，全部限制在图片框内 */}
+              <g clipPath={`url(#image-gen-${message.id}-frame)`}>
+                <circle className="image-gen-sun" cx="8.5" cy="8.5" r="1.5" />
+                {/* 山峰用 stroke-dashoffset 沿 path 绘制；pathLength 归一化后 dash 参数与坐标无关 */}
+                <path className="image-gen-landscape" pathLength="1" d="M21 15l-5-5L5 21" />
+                <rect className="image-gen-scan" x="3.4" y="3.4" width="6.4" height="17.2" fill={`url(#image-gen-${message.id}-sweep)`} />
+              </g>
+              {/* frame stroke 在裁剪内容之上，始终保持完整 */}
+              <rect className="image-gen-frame" x="3" y="3" width="18" height="18" rx="2" />
+            </svg>
+            <span className="image-gen-sparkle image-gen-sparkle--lg" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
+              </svg>
+            </span>
+            <span className="image-gen-sparkle image-gen-sparkle--sm" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
+              </svg>
+            </span>
+          </div>
+          <div className="message-image-placeholder-text">
+            正在生成图片
+            <span className="image-gen-dots" aria-hidden="true">
+              <span className="image-gen-dot" />
+              <span className="image-gen-dot" />
+              <span className="image-gen-dot" />
+            </span>
+          </div>
+        </div>
+      )}
       {statusBadge && <div className="message-status">{statusBadge}</div>}
       {message.errorCode && (
         <div className="message-error">
-          {message.errorCode}: {message.errorMessage}
+          {/* 图片生成错误码（IMAGE_GENERATION_*）是内部标识，对用户无意义；
+              其 errorMessage 已是面向用户的具体原因，直接展示。 */}
+          {message.errorCode.startsWith('IMAGE_GENERATION_')
+            ? message.errorMessage
+            : `${message.errorCode}: ${message.errorMessage}`}
         </div>
       )}
     </div>

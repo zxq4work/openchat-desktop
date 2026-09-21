@@ -143,6 +143,27 @@ export class StorageService {
       changed = true
     }
 
+    // 迁移：conversations 表 type 列（chat | image_generation）。
+    // 旧库已有会话一律回填 'chat'，保证历史聊天完全无感。
+    if (!convColumnNames.includes('type')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN type TEXT NOT NULL DEFAULT 'chat'")
+      changed = true
+    }
+
+    // 迁移：conversations 表默认图片参数（仅 image_generation 会话使用）
+    if (!convColumnNames.includes('default_image_size')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN default_image_size TEXT")
+      changed = true
+    }
+    if (!convColumnNames.includes('default_image_quality')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN default_image_quality TEXT")
+      changed = true
+    }
+    if (!convColumnNames.includes('default_image_background')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN default_image_background TEXT")
+      changed = true
+    }
+
     // 迁移：provider_configs 表
     const tables = this.db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_configs'")
     if (!tables.length || !tables[0].values.length) {
@@ -255,6 +276,18 @@ export class StorageService {
         this.db.run("ALTER TABLE provider_configs ADD COLUMN image_input INTEGER NOT NULL DEFAULT 0")
         changed = true
       }
+      // 迁移：image_generations_path 列（Image Generations Provider 的请求路径）
+      if (!pcNames.includes('image_generations_path')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN image_generations_path TEXT")
+        changed = true
+      }
+      // 迁移：image_generation_profile_json 列（Image Generation 参数能力 Profile）。
+      // 旧 Provider 无值 → 读取时回退到最小集（只发送 model/prompt/n），
+      // 不假定 OpenAI 兼容，避免把历史第三方 Provider 误判为完整兼容。
+      if (!pcNames.includes('image_generation_profile_json')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN image_generation_profile_json TEXT")
+        changed = true
+      }
     }
 
     // 迁移：message_attachments 表（图片输入附件）。旧数据库无此表 → 自动创建。
@@ -280,6 +313,74 @@ export class StorageService {
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_message ON message_attachments(message_id)`)
       this.db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_conversation ON message_attachments(conversation_id)`)
       changed = true
+    }
+
+    // 迁移：message_attachments 表 source 列（user_upload | ai_generated）。
+    // 旧附件全部视为用户上传。
+    if (this.tableExists('message_attachments')) {
+      const attCols = this.db.exec("PRAGMA table_info(message_attachments)")
+      const attNames = attCols.length > 0 && attCols[0].values ? attCols[0].values.map((row) => String(row[1])) : []
+      if (!attNames.includes('source')) {
+        this.db.run("ALTER TABLE message_attachments ADD COLUMN source TEXT NOT NULL DEFAULT 'user_upload'")
+        changed = true
+      }
+      // 迁移：message_attachments 表 usage 列（chat_input | generation_input | generation_output）。
+      // 旧数据无法可靠区分「Chat 图片输入」与「图片生成参考图」，统一按 source 推导：
+      //   ai_generated → generation_output
+      //   user_upload  → chat_input（旧库尚无 generation_input 语义）
+      // 新增列先置空，随后按 source 回填（幂等）。
+      if (!attNames.includes('usage')) {
+        this.db.run("ALTER TABLE message_attachments ADD COLUMN usage TEXT")
+        this.db.run(`
+          UPDATE message_attachments
+          SET usage = CASE WHEN source = 'ai_generated' THEN 'generation_output' ELSE 'chat_input' END
+          WHERE usage IS NULL
+        `)
+        changed = true
+      }
+    }
+
+    // 迁移：image_generations 表（图片生成记录）。旧库无此表 → 自动创建。
+    if (!this.tableExists('image_generations')) {
+      this.db.run(`
+        CREATE TABLE image_generations (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          prompt_message_id TEXT,
+          result_message_id TEXT,
+          provider_config_id TEXT,
+          model_id TEXT,
+          prompt TEXT NOT NULL,
+          size TEXT,
+          quality TEXT,
+          background TEXT,
+          output_format TEXT,
+          n INTEGER NOT NULL DEFAULT 1,
+          operation TEXT NOT NULL DEFAULT 'text_to_image',
+          input_image_count INTEGER NOT NULL DEFAULT 0,
+          revised_prompt TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          error_code TEXT,
+          error_message TEXT,
+          created_at INTEGER NOT NULL,
+          completed_at INTEGER
+        )
+      `)
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_image_generations_conversation ON image_generations(conversation_id)`)
+      changed = true
+    } else {
+      // 迁移：image_generations 增加 operation / input_image_count（图生图记录）。
+      // 旧行一律回填 text_to_image / 0，历史文生图语义不变。
+      const genCols = this.db.exec("PRAGMA table_info(image_generations)")
+      const genNames = genCols.length > 0 && genCols[0].values ? genCols[0].values.map((row) => String(row[1])) : []
+      if (!genNames.includes('operation')) {
+        this.db.run("ALTER TABLE image_generations ADD COLUMN operation TEXT NOT NULL DEFAULT 'text_to_image'")
+        changed = true
+      }
+      if (!genNames.includes('input_image_count')) {
+        this.db.run("ALTER TABLE image_generations ADD COLUMN input_image_count INTEGER NOT NULL DEFAULT 0")
+        changed = true
+      }
     }
 
     return changed
@@ -328,6 +429,7 @@ export class StorageService {
     this.db.run(`
       CREATE TABLE conversations (
         id TEXT PRIMARY KEY,
+        type TEXT NOT NULL DEFAULT 'chat',
         title TEXT NOT NULL,
         system_prompt TEXT NOT NULL DEFAULT '',
         system_prompt_revision INTEGER NOT NULL DEFAULT 0,
@@ -339,6 +441,9 @@ export class StorageService {
         codex_search_mode TEXT NOT NULL DEFAULT 'hosted',
         search_engine TEXT NOT NULL DEFAULT 'bing',
         provider_config_id TEXT,
+        default_image_size TEXT,
+        default_image_quality TEXT,
+        default_image_background TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -416,6 +521,8 @@ export class StorageService {
         models_path TEXT,
         chat_completions_path TEXT,
         responses_path TEXT,
+        image_generations_path TEXT,
+        image_generation_profile_json TEXT,
         extra_headers TEXT,
         tool_calling TEXT NOT NULL DEFAULT 'auto',
         image_input INTEGER NOT NULL DEFAULT 0,
@@ -436,6 +543,8 @@ export class StorageService {
         height INTEGER NOT NULL DEFAULT 0,
         detail TEXT NOT NULL DEFAULT 'auto',
         sha256 TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'user_upload',
+        usage TEXT NOT NULL DEFAULT 'chat_input',
         created_at INTEGER NOT NULL
       );
 
@@ -443,6 +552,32 @@ export class StorageService {
         ON message_attachments(message_id);
       CREATE INDEX idx_attachments_conversation
         ON message_attachments(conversation_id);
+
+      CREATE TABLE image_generations (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        prompt_message_id TEXT,
+        result_message_id TEXT,
+        provider_config_id TEXT,
+        model_id TEXT,
+        prompt TEXT NOT NULL,
+        size TEXT,
+        quality TEXT,
+        background TEXT,
+        output_format TEXT,
+        n INTEGER NOT NULL DEFAULT 1,
+        operation TEXT NOT NULL DEFAULT 'text_to_image',
+        input_image_count INTEGER NOT NULL DEFAULT 0,
+        revised_prompt TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        error_code TEXT,
+        error_message TEXT,
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+
+      CREATE INDEX idx_image_generations_conversation
+        ON image_generations(conversation_id);
     `)
   }
 }

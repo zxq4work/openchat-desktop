@@ -1,5 +1,14 @@
 import { StorageService } from './StorageService'
-import type { ImageDetail, MessageAttachment } from '../../shared/types/conversation'
+import type { AttachmentSource, AttachmentUsage, ImageDetail, MessageAttachment } from '../../shared/types/conversation'
+
+// usage 读取容错：新列可能为 NULL（旧库尚未回填）或非法值 → 按 source 推导兜底。
+function normalizeAttachmentUsage(raw: unknown, source: AttachmentSource): AttachmentUsage {
+  const value = raw === null || raw === undefined ? '' : String(raw)
+  if (value === 'chat_input' || value === 'generation_input' || value === 'generation_output') {
+    return value
+  }
+  return source === 'ai_generated' ? 'generation_output' : 'chat_input'
+}
 
 // message_attachments 表访问层。
 // 草稿阶段 message_id 为 null，发送后通过 bindToMessage 绑定。
@@ -15,8 +24,8 @@ export class AttachmentRepository {
     db.run(`
       INSERT INTO message_attachments (
         id, message_id, conversation_id, segment_id, type, mime_type,
-        file_name, file_size, width, height, detail, sha256, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        file_name, file_size, width, height, detail, sha256, source, usage, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       att.id,
       att.messageId,
@@ -30,6 +39,8 @@ export class AttachmentRepository {
       att.height,
       att.detail,
       att.sha256,
+      att.source,
+      att.usage,
       att.createdAt,
     ])
   }
@@ -38,7 +49,7 @@ export class AttachmentRepository {
     const db = this.storage.database
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments WHERE id = ?
     `, [id])
     if (!result.length || !result[0].values.length) return null
@@ -57,7 +68,7 @@ export class AttachmentRepository {
     const placeholders = messageIds.map(() => '?').join(',')
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments
       WHERE message_id IN (${placeholders})
       ORDER BY created_at ASC
@@ -104,7 +115,7 @@ export class AttachmentRepository {
     const db = this.storage.database
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments WHERE conversation_id = ?
     `, [conversationId])
     if (!result.length || !result[0].values.length) return []
@@ -116,7 +127,7 @@ export class AttachmentRepository {
     const db = this.storage.database
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments
       WHERE conversation_id = ? AND message_id IS NULL
       ORDER BY created_at ASC
@@ -131,7 +142,7 @@ export class AttachmentRepository {
     const placeholders = conversationIds.map(() => '?').join(',')
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments WHERE conversation_id IN (${placeholders})
     `, conversationIds)
     if (!result.length || !result[0].values.length) return []
@@ -142,7 +153,7 @@ export class AttachmentRepository {
     const db = this.storage.database
     const result = db.exec(`
       SELECT id, message_id, conversation_id, segment_id, type, mime_type,
-             file_name, file_size, width, height, detail, sha256, created_at
+             file_name, file_size, width, height, detail, sha256, source, usage, created_at
       FROM message_attachments
     `)
     if (!result.length || !result[0].values.length) return []
@@ -183,6 +194,7 @@ export class AttachmentRepository {
   }
 
   private rowToAttachment(row: unknown[]): MessageAttachment {
+    const source: AttachmentSource = row[12] === 'ai_generated' ? 'ai_generated' : 'user_upload'
     return {
       id: String(row[0]),
       messageId: row[1] ? String(row[1]) : null,
@@ -197,7 +209,10 @@ export class AttachmentRepository {
       height: Number(row[9]),
       detail: (row[10] === 'low' || row[10] === 'high' ? row[10] : 'auto') as ImageDetail,
       sha256: String(row[11]),
-      createdAt: Number(row[12]),
+      source,
+      // 旧数据 usage 可能为 NULL（迁移前）→ 按 source 兜底推导，保证语义总有值。
+      usage: normalizeAttachmentUsage(row[13], source),
+      createdAt: Number(row[14]),
     }
   }
 }

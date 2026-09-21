@@ -14,9 +14,12 @@ export function ProviderSelector() {
 
   const currentProviderId = conversation.providerConfigId ?? DEFAULT_OPTION_VALUE
 
+  // Chat 会话只能选择文字对话服务；图片生成服务在图片生成 Composer 中单独选择
+  const chatProviders = providers.filter((p: SafeProviderConfig) => p.protocol !== 'image_generations')
+
   const options = [
     { value: DEFAULT_OPTION_VALUE, label: 'ChatGPT Codex' },
-    ...providers.map((p: SafeProviderConfig) => ({ value: p.id, label: p.name })),
+    ...chatProviders.map((p: SafeProviderConfig) => ({ value: p.id, label: p.name })),
   ]
 
   const handleChange = async (value: string) => {
@@ -26,7 +29,7 @@ export function ProviderSelector() {
       await window.openchat.conversations.updateProviderConfig(conversation.id, null)
       setActiveConversation({ ...conversation, providerConfigId: null })
     } else {
-      const provider = providers.find((p) => p.id === value)
+      const provider = chatProviders.find((p) => p.id === value)
       await window.openchat.conversations.updateProviderConfig(conversation.id, value)
 
       // 切换为自定义服务时，模型同步为 provider 配置的第一个模型

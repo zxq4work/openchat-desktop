@@ -109,13 +109,26 @@ export function ConversationItem({ summary, active }: Props) {
     setSummaries(list)
   }
 
+  const isImageGeneration = summary.type === 'image_generation'
+
   return (
     <div
       className={`conversation-item ${active ? 'active' : ''} ${menuOpen ? 'menu-open' : ''}`}
       onClick={handleClick}
       title={summary.title}
     >
-      <div className="conversation-title">{summary.title}</div>
+      <div className="conversation-title">
+        {isImageGeneration && (
+          <span className="conversation-type-icon" title="图片生成会话" aria-label="图片生成会话">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+          </span>
+        )}
+        <span className="conversation-title-text">{summary.title}</span>
+      </div>
       <div className="conversation-preview">{summary.preview}</div>
       <div className="conversation-menu-wrapper" ref={menuRef}>
         <button

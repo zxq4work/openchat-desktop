@@ -2,12 +2,16 @@ import { randomUUID } from 'crypto'
 import { ConversationRepository } from '../../storage/ConversationRepository'
 import { ContextSegmentRepository } from '../../storage/ContextSegmentRepository'
 import { MessageRepository } from '../../storage/MessageRepository'
+import { ImageGenerationRepository } from '../../storage/ImageGenerationRepository'
 import { StorageService } from '../../storage/StorageService'
+import { resolveProviderSwitch } from '../../conversation/typeLocking'
+import { reconcileImageDefaults } from '../../../shared/image-generation/parameterProfile'
 import type {
   Conversation,
   ContextSegment,
   Message,
   MessageAttachment,
+  ConversationType,
 } from '../../../shared/types/conversation'
 import type { ModelInfo } from '../../../shared/types/model'
 import type { CanonicalMessage, CanonicalModelRequest, CanonicalInputPart, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol, AttachmentResolver } from '../../../shared/types/provider'
@@ -158,9 +162,17 @@ function modelSupportsImage(modelId: string, models: ModelInfo[], adapter: Model
   return adapter.capabilities.supportsImageInput
 }
 
-// 该 message 是否包含需要作为图片 replay 的附件
+// 该 message 是否包含需要作为图片 replay 的附件。
+// 只统计 Chat 图片输入（usage=chat_input），不包含图片生成参考图 / 生成结果，
+// 避免 Image Generation 的附件进入 Chat 上下文与图片能力门禁。
 function messageHasImages(msg: Message): boolean {
-  return msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.some((a) => a.type === 'image')
+  return msg.role === 'user' && Array.isArray(msg.attachments) && msg.attachments.some((a) => a.type === 'image' && a.usage === 'chat_input')
+}
+
+// Chat 历史重建时只取 Chat 图片输入；generation_input / generation_output 不得进入 replay。
+function chatInputImages(msg: Message): MessageAttachment[] {
+  if (!Array.isArray(msg.attachments)) return []
+  return msg.attachments.filter((a) => a.type === 'image' && a.usage === 'chat_input')
 }
 
 export class ImageInputUnsupportedError extends Error {
@@ -195,6 +207,8 @@ export class ChatGPTConversationService {
   private segments: ContextSegmentRepository
   private messages: MessageRepository
   private storage: StorageService
+  // 会话删除时同步清理 image_generations 记录（延迟注入，避免与 ImageGenerationService 循环依赖）
+  private imageGenerations: ImageGenerationRepository | null = null
   private codexClient: ChatGPTCodexClient
   private modelService: ChatGPTModelService
   private standaloneSearchClient: ChatGPTCodexStandaloneSearchClient
@@ -251,6 +265,10 @@ export class ChatGPTConversationService {
     this.attachmentService = service
   }
 
+  setImageGenerationRepository(repo: ImageGenerationRepository): void {
+    this.imageGenerations = repo
+  }
+
   private emitStreamEvent(event: StreamEvent): void {
     // 发送 UI 前检查是否仍有 citation 泄漏
     if (event.type === 'delta' && event.text) {
@@ -265,6 +283,7 @@ export class ChatGPTConversationService {
     const summaries = this.conversations.listSummaries()
     return summaries.map((s) => ({
       id: s.id,
+      type: s.type,
       title: s.title,
       systemPrompt: '',
       systemPromptRevision: 0,
@@ -276,6 +295,9 @@ export class ChatGPTConversationService {
       codexSearchMode: 'hosted',
       searchEngine: 'bing',
       providerConfigId: null,
+      defaultImageSize: null,
+      defaultImageQuality: null,
+      defaultImageBackground: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
       }))
@@ -305,13 +327,14 @@ export class ChatGPTConversationService {
     return { conversation, segments, messages }
   }
 
-  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false, searchEngine: 'bing' | 'baidu' | 'google' = 'bing'): Conversation {
+  createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false, searchEngine: 'bing' | 'baidu' | 'google' = 'bing', type: ConversationType = 'chat'): Conversation {
     const now = Date.now()
     const conversationId = randomUUID()
     const segmentId = randomUUID()
 
     const conversation: Conversation = {
       id: conversationId,
+      type,
       title: '新对话',
       systemPrompt,
       systemPromptRevision: 0,
@@ -323,6 +346,9 @@ export class ChatGPTConversationService {
       codexSearchMode: 'hosted',
       searchEngine,
       providerConfigId,
+      defaultImageSize: null,
+      defaultImageQuality: null,
+      defaultImageBackground: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -355,6 +381,11 @@ export class ChatGPTConversationService {
     } catch (err) {
       console.error('[ConversationService] attachment cleanup failed for conversation %s:', id, err)
     }
+    try {
+      this.imageGenerations?.removeByConversationId(id)
+    } catch (err) {
+      console.error('[ConversationService] image_generations cleanup failed for conversation %s:', id, err)
+    }
     this.conversations.remove(id)
     await this.storage.save()
   }
@@ -367,6 +398,11 @@ export class ChatGPTConversationService {
       }
     } catch (err) {
       console.error('[ConversationService] attachment cleanup failed for remove-all:', err)
+    }
+    try {
+      this.imageGenerations?.removeAll()
+    } catch (err) {
+      console.error('[ConversationService] image_generations cleanup failed for remove-all:', err)
     }
     this.conversations.removeAll()
     await this.storage.save()
@@ -411,18 +447,41 @@ export class ChatGPTConversationService {
   }
 
   async updateModel(id: string, modelId: string): Promise<void> {
+    const conversation = this.conversations.getById(id)
+    // chat 会话不得把模型切到图片生成 Provider 下的模型
+    if (conversation && conversation.type !== 'image_generation'
+      && conversation.providerConfigId
+      && this.providerConfigService.isImageGenerationProvider(conversation.providerConfigId)) {
+      throw new Error('当前会话已锁定为图片生成类型，不能切换到聊天模型')
+    }
     this.conversations.updateModel(id, modelId)
     await this.storage.save()
   }
 
   async updateEffort(id: string, effort: string): Promise<void> {
+    const conversation = this.conversations.getById(id)
+    if (conversation?.type === 'image_generation') {
+      throw new Error('图片生成会话不支持推理强度')
+    }
     this.conversations.updateEffort(id, effort)
+    await this.storage.save()
+  }
+
+  // Image Generation 会话默认图片参数更新
+  async updateImageDefaults(id: string, size: string | null, quality: string | null, background: string | null): Promise<void> {
+    const conversation = this.conversations.getById(id)
+    if (!conversation || conversation.type !== 'image_generation') {
+      throw new Error('当前会话不是图片生成会话')
+    }
+    this.conversations.updateImageDefaults(id, size, quality, background)
     await this.storage.save()
   }
 
   newTopic(id: string): ContextSegment | null {
     const conversation = this.conversations.getById(id)
     if (!conversation) return null
+    // 图片生成会话无上下文段语义，新话题无意义
+    if (conversation.type === 'image_generation') return null
 
     const now = Date.now()
     const segmentId = randomUUID()
@@ -453,6 +512,15 @@ export class ChatGPTConversationService {
 
     const conversation = this.conversations.getById(conversationId)
     if (!conversation) { console.log('[SendMessage] FAIL: conversation not found'); throw new Error('会话不存在') }
+
+    // 会话类型门禁：图片生成会话只能走 ImageGenerationService，绝不进 chat 路径
+    if (conversation.type === 'image_generation') {
+      throw new Error('当前会话为图片生成会话，不能发送聊天消息')
+    }
+    // 图片生成 Provider 不得用于 chat 会话
+    if (conversation.providerConfigId && this.providerConfigService.isImageGenerationProvider(conversation.providerConfigId)) {
+      throw new Error('当前会话已锁定为图片生成类型，不能切换到聊天模型')
+    }
 
     const segment = this.segments.getById(conversation.currentSegmentId)
     if (!segment) { console.log('[SendMessage] FAIL: segment not found currentSegmentId=%s', conversation.currentSegmentId); throw new Error('当前上下文段不存在') }
@@ -1815,10 +1883,9 @@ User message: ${userText}${contextHint}`
       if (msg.status !== 'completed') continue
 
       if (msg.role === 'user') {
-        // 历史图片附件每轮重新转换为 image input（三个 Provider 均为逐轮完整 replay）
-        const images = Array.isArray(msg.attachments)
-          ? msg.attachments.filter((a) => a.type === 'image')
-          : []
+        // 历史图片附件每轮重新转换为 image input（三个 Provider 均为逐轮完整 replay）。
+        // 仅取 chat_input，排除图片生成参考图/结果。
+        const images = chatInputImages(msg)
         if (images.length > 0) {
           const parts: CanonicalInputPart[] = []
           if (msg.content) parts.push({ type: 'text', text: msg.content })
@@ -2040,7 +2107,7 @@ User message: ${userText}${contextHint}`
     for (const msg of segmentMessages) {
       if (msg.status !== 'completed') continue
       if (msg.role === 'user') {
-        const images = Array.isArray(msg.attachments) ? msg.attachments.filter((a) => a.type === 'image') : []
+        const images = chatInputImages(msg)
         if (images.length > 0) {
           const parts: CanonicalInputPart[] = []
           if (msg.content) parts.push({ type: 'text', text: msg.content })
@@ -2118,14 +2185,73 @@ User message: ${userText}${contextHint}`
   }
 
   async updateProviderConfig(id: string, providerConfigId: string | null): Promise<void> {
+    const conversation = this.conversations.getById(id)
+    if (!conversation) throw new Error('会话不存在')
+
+    const isImageProvider = !!providerConfigId && this.providerConfigService.isImageGenerationProvider(providerConfigId)
+    const hasMessages = this.messages.getByConversationId(id).length > 0
+
+    const action = resolveProviderSwitch({
+      currentType: conversation.type,
+      nextIsImageProvider: isImageProvider,
+      hasMessages,
+    })
+
+    switch (action.kind) {
+      case 'reject':
+        throw new Error(action.reason)
+      case 'update-provider':
+        // 同类型内更换（或保持）Provider
+        this.conversations.updateProviderConfigId(id, providerConfigId)
+        // 图片生成会话：Provider 切换后按新 Profile 做参数 reconciliation，
+        // 清除新 Provider 不支持 / 非法的遗留默认值（不强行替换为新 Profile 的默认值）。
+        if (conversation.type === 'image_generation') {
+          this.reconcileImageDefaultsForProvider(id, providerConfigId)
+        }
+        await this.storage.save()
+        return
+      case 'unlock-to-chat':
+        // 空会话：image_generation → chat
+        this.conversations.updateType(id, 'chat')
+        this.conversations.updateProviderConfigId(id, providerConfigId)
+        await this.storage.save()
+        return
+      case 'lock-image':
+        // 空会话：chat → image_generation，从此锁定
+        this.conversations.lockImageGeneration(id, providerConfigId)
+        await this.storage.save()
+        return
+    }
+
     this.conversations.updateProviderConfigId(id, providerConfigId)
     // 切换到自定义服务时，清除可能残留的 Codex 推理等级，避免 400
-    if (providerConfigId) {
+    if (providerConfigId && !isImageProvider) {
       const adapter = this.providerConfigService.getAdapter(providerConfigId)
       if (!adapter.capabilities.reasoning) {
         this.conversations.updateEffort(id, '')
       }
     }
     await this.storage.save()
+  }
+
+  // 按目标 Provider 的 Profile 重算会话图片默认参数：
+  // 逐个参数，新 Profile 仍合法则保留，否则清空为 null（Provider 默认），
+  // 不强行替换成新 Profile 的第一个 option（避免用户没选就被改了值）。
+  private reconcileImageDefaultsForProvider(id: string, providerConfigId: string | null): void {
+    const conversation = this.conversations.getById(id)
+    if (!conversation) return
+    const profile = this.providerConfigService.getImageGenerationProfile(providerConfigId)
+    const next = reconcileImageDefaults(profile, {
+      size: conversation.defaultImageSize,
+      quality: conversation.defaultImageQuality,
+      background: conversation.defaultImageBackground,
+    })
+    if (
+      next.size !== conversation.defaultImageSize ||
+      next.quality !== conversation.defaultImageQuality ||
+      next.background !== conversation.defaultImageBackground
+    ) {
+      this.conversations.updateImageDefaults(id, next.size, next.quality, next.background)
+    }
   }
 }

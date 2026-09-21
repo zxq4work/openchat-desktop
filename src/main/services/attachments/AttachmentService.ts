@@ -3,7 +3,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID, createHash } from 'crypto'
 import type { AttachmentRepository } from '../../storage/AttachmentRepository'
-import type { ImageDetail, MessageAttachment } from '../../../shared/types/conversation'
+import type { AttachmentSource, AttachmentUsage, ImageDetail, MessageAttachment } from '../../../shared/types/conversation'
 import {
   MAX_IMAGE_BYTES,
   MAX_ORIGINAL_EDGE,
@@ -54,7 +54,7 @@ export class AttachmentService {
   }
 
   // 由 Main 读取文件字节后调用（renderer 拿不到任意路径，只能通过 dialog / 拖拽路径解析）
-  async prepareFromPath(filePath: string, conversationId: string | null): Promise<MessageAttachment> {
+  async prepareFromPath(filePath: string, conversationId: string | null, usage: AttachmentUsage = 'chat_input'): Promise<MessageAttachment> {
     let buffer: Buffer
     try {
       const stat = fs.statSync(filePath)
@@ -67,10 +67,22 @@ export class AttachmentService {
       throw new AttachmentError('read_failed', '无法读取图片文件')
     }
     const fileName = path.basename(filePath)
-    return this.prepareFromBytes(buffer, fileName, conversationId)
+    return this.prepareFromBytes(buffer, fileName, conversationId, usage)
   }
 
-  prepareFromBytes(data: Buffer, fileName: string, conversationId: string | null): MessageAttachment {
+  // usage 区分 Chat 图片输入（chat_input）与图片生成参考图（generation_input）。
+  // 两者复用同一落盘/校验/缩略图/去重路径，仅语义不同。
+  prepareFromBytes(data: Buffer, fileName: string, conversationId: string | null, usage: AttachmentUsage = 'chat_input'): MessageAttachment {
+    return this.persistImage(data, fileName, conversationId, 'user_upload', usage)
+  }
+
+  // AI 生成图片走同一落盘/校验/缩略图路径，仅 source 不同。
+  // Provider 返回的字节同样必须通过 magic-byte 校验与解码，不因"生成"而跳过安全校验。
+  prepareGeneratedImage(data: Buffer, fileName: string, conversationId: string | null): MessageAttachment {
+    return this.persistImage(data, fileName, conversationId, 'ai_generated', 'generation_output')
+  }
+
+  private persistImage(data: Buffer, fileName: string, conversationId: string | null, source: AttachmentSource, usage: AttachmentUsage): MessageAttachment {
     if (data.length === 0) throw new AttachmentError('empty', '图片为空')
     if (data.length > MAX_IMAGE_BYTES) throw new AttachmentError('too_large', '图片超过大小上限')
 
@@ -133,6 +145,8 @@ export class AttachmentService {
       height: workSize.height,
       detail: 'auto',
       sha256,
+      source,
+      usage,
       createdAt: Date.now(),
     }
     this.repo.create(attachment)
@@ -180,7 +194,8 @@ export class AttachmentService {
   }
 
   // 供 Adapter 读取原始字节并编码（base64 data URL）。返回后由调用方释放。
-  readForProvider(id: string): { dataUrl: string; mimeType: string; width: number; height: number; detail: ImageDetail } | null {
+  // byteSize 用于诊断日志（避免打印 Base64 本体）。
+  readForProvider(id: string): { dataUrl: string; mimeType: string; width: number; height: number; detail: ImageDetail; byteSize: number } | null {
     const att = this.repo.getById(id)
     if (!att) return null
     const filePath = this.originalPath(att.id, att.mimeType)
@@ -196,6 +211,20 @@ export class AttachmentService {
       width: att.width,
       height: att.height,
       detail: att.detail,
+      byteSize: buffer.length,
+    }
+  }
+
+  // 参考图字节读取：与 readForProvider 同源，但直接返回 Buffer（Adapter 按需自行编码）。
+  // 只接受 attachmentId，由 DB 反查受管路径，杜绝任意路径读取。
+  readBytes(id: string): { bytes: Buffer; mimeType: string } | null {
+    const att = this.repo.getById(id)
+    if (!att) return null
+    try {
+      const bytes = fs.readFileSync(this.originalPath(att.id, att.mimeType))
+      return { bytes, mimeType: att.mimeType }
+    } catch {
+      return null
     }
   }
 
@@ -207,8 +236,11 @@ export class AttachmentService {
     return this.repo.getById(id)
   }
 
-  listDrafts(conversationId: string): MessageAttachment[] {
-    return this.repo.listDrafts(conversationId)
+  // 只列出指定用途的草稿附件，避免 Chat 图片输入与图片生成参考图互相污染。
+  listDrafts(conversationId: string, usage?: AttachmentUsage): MessageAttachment[] {
+    const drafts = this.repo.listDrafts(conversationId)
+    if (!usage) return drafts
+    return drafts.filter((a) => a.usage === usage)
   }
 
   // 供 Adapter 经 CanonicalModelRequest 注入：把 attachmentId → Provider 可编码信息
@@ -222,6 +254,11 @@ export class AttachmentService {
       height: att.height,
       detail: att.detail,
     }
+  }
+
+  // 供 Image Generation Adapter 注入：把参考图 attachmentId → 真实字节 + MIME。
+  resolveForGeneration(id: string): { bytes: Buffer; mimeType: string } | null {
+    return this.readBytes(id)
   }
 
   bindDrafts(attachmentIds: string[], messageId: string, conversationId: string, segmentId: string): void {

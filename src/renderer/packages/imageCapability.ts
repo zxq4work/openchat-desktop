@@ -25,7 +25,11 @@ export function modelSupportsImage(
   return !!model && (model.inputModalities ?? []).includes('image')
 }
 
-// 当前 segment 内是否已有历史图片需要 replay（用于发送前能力提示）
+// 当前 segment 内是否已有历史图片需要 replay（用于发送前能力提示）。
+// 只统计 Chat 图片输入（usage=chat_input）：图片生成的参考图/结果不进入 Chat 上下文，
+// 因此不应触发「模型需支持图片输入」的能力门禁。
 export function historyHasImage(messages: Message[]): boolean {
-  return messages.some((m) => m.role === 'user' && imageAttachments(m.attachments).length > 0)
+  return messages.some(
+    (m) => m.role === 'user' && imageAttachments(m.attachments).some((a) => a.usage === 'chat_input')
+  )
 }

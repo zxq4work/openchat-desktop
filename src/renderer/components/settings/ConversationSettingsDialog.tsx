@@ -66,6 +66,9 @@ export function ConversationSettingsDialog() {
     setConversationSettingsOpen(false)
   }
 
+  // 图片生成会话无系统提示 / 角色 / 模型提示词语义，仅提供重命名
+  const isImageGeneration = conversation?.type === 'image_generation'
+
   return (
     <div className="dialog-overlay">
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
@@ -81,40 +84,44 @@ export function ConversationSettingsDialog() {
           />
         </div>
 
-        <div className="settings-section">
-          <h4>角色设定（系统提示）</h4>
-          <textarea
-            className="role-textarea"
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            placeholder="例如：你是一名资深 Java 架构师……"
-            rows={6}
-          />
-        </div>
-
-        <div className="settings-section">
-          <label className="settings-switch-label">
-            <span>使用模型自带提示词</span>
-            <div
-              className={`settings-switch ${useModelInstructions ? 'settings-switch-on' : ''}`}
-              onClick={() => setUseModelInstructions(!useModelInstructions)}
-              role="switch"
-              aria-checked={useModelInstructions}
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  setUseModelInstructions(!useModelInstructions)
-                }
-              }}
-            >
-              <div className="settings-switch-thumb" />
+        {!isImageGeneration && (
+          <>
+            <div className="settings-section">
+              <h4>角色设定（系统提示）</h4>
+              <textarea
+                className="role-textarea"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                placeholder="例如：你是一名资深 Java 架构师……"
+                rows={6}
+              />
             </div>
-          </label>
-          <p className="settings-switch-hint">
-            Codex 模型自带任务指令模板，启用后会在角色设定之前注入模型的默认行为指令。
-          </p>
-        </div>
+
+            <div className="settings-section">
+              <label className="settings-switch-label">
+                <span>使用模型自带提示词</span>
+                <div
+                  className={`settings-switch ${useModelInstructions ? 'settings-switch-on' : ''}`}
+                  onClick={() => setUseModelInstructions(!useModelInstructions)}
+                  role="switch"
+                  aria-checked={useModelInstructions}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setUseModelInstructions(!useModelInstructions)
+                    }
+                  }}
+                >
+                  <div className="settings-switch-thumb" />
+                </div>
+              </label>
+              <p className="settings-switch-hint">
+                Codex 模型自带任务指令模板，启用后会在角色设定之前注入模型的默认行为指令。
+              </p>
+            </div>
+          </>
+        )}
 
         <div className="dialog-actions">
           <button className="btn-cancel" onClick={() => setConversationSettingsOpen(false)}>取消</button>

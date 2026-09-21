@@ -34,6 +34,15 @@ export const IPC_CHANNELS = {
   CHAT_INTERRUPT: 'chat:interrupt',
   CHAT_REGENERATE_LAST: 'chat:regenerate-last',
 
+  // Image Generation
+  IMAGE_GENERATION_GENERATE: 'image-generation:generate',
+  IMAGE_GENERATION_INTERRUPT: 'image-generation:interrupt',
+  IMAGE_GENERATION_LIST: 'image-generation:list',
+  CONVERSATIONS_UPDATE_IMAGE_DEFAULTS: 'conversations:update-image-defaults',
+  IMAGE_GENERATION_STARTED: 'image-generation:started',
+  IMAGE_GENERATION_COMPLETED: 'image-generation:completed',
+  IMAGE_GENERATION_FAILED: 'image-generation:failed',
+
   // Events (Main -> Renderer)
   CHAT_DELTA: 'chat:delta',
   CHAT_REASONING_STARTED: 'chat:reasoning-started',
@@ -74,6 +83,8 @@ export const IPC_CHANNELS = {
   ATTACHMENTS_DELETE: 'attachments:delete',
   ATTACHMENTS_LIST_DRAFTS: 'attachments:list-drafts',
   ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
+  // 保存受管图片到用户选择的位置（renderer 不接触内部路径）
+  ATTACHMENTS_SAVE: 'attachments:save',
 
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',

@@ -3,6 +3,7 @@ import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
 import { MessageList } from './MessageList'
 import { Composer } from '../composer/Composer'
+import { ImageComposer } from '../composer/ImageComposer'
 import { SearchBar } from './SearchBar'
 import { AttachmentLightbox } from './AttachmentLightbox'
 
@@ -28,14 +29,25 @@ export function ChatView() {
     )
   }
 
+  const isImageGeneration = activeConversation.type === 'image_generation'
+
   return (
-    <div className="chat-view">
+    <div className={`chat-view${isImageGeneration ? ' chat-view--image' : ''}`}>
       <div className="chat-header">
+        {isImageGeneration && (
+          <span className="chat-type-icon" title="图片生成会话" aria-label="图片生成会话">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <circle cx="8.5" cy="8.5" r="1.5" />
+              <path d="M21 15l-5-5L5 21" />
+            </svg>
+          </span>
+        )}
         <span className="chat-title">{activeConversation.title}</span>
       </div>
-      {searchVisible && <SearchBar />}
+      {searchVisible && !isImageGeneration && <SearchBar />}
       <MessageList />
-      <Composer />
+      {isImageGeneration ? <ImageComposer /> : <Composer />}
       <AttachmentLightbox />
     </div>
   )

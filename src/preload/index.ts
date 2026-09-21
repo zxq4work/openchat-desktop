@@ -28,6 +28,13 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_SEARCH_ENGINE: 'conversations:update-search-engine',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
+  CONVERSATIONS_UPDATE_IMAGE_DEFAULTS: 'conversations:update-image-defaults',
+  IMAGE_GENERATION_GENERATE: 'image-generation:generate',
+  IMAGE_GENERATION_INTERRUPT: 'image-generation:interrupt',
+  IMAGE_GENERATION_LIST: 'image-generation:list',
+  IMAGE_GENERATION_STARTED: 'image-generation:started',
+  IMAGE_GENERATION_COMPLETED: 'image-generation:completed',
+  IMAGE_GENERATION_FAILED: 'image-generation:failed',
   CHAT_SEND: 'chat:send',
   CHAT_INTERRUPT: 'chat:interrupt',
   CHAT_REGENERATE_LAST: 'chat:regenerate-last',
@@ -64,6 +71,7 @@ const IPC_CHANNELS = {
   ATTACHMENTS_DELETE: 'attachments:delete',
   ATTACHMENTS_LIST_DRAFTS: 'attachments:list-drafts',
   ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
+  ATTACHMENTS_SAVE: 'attachments:save',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -103,8 +111,8 @@ const openchat = {
   conversations: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_GET, id),
-    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google') =>
-      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine),
+    create: (modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google', type?: 'chat' | 'image_generation') =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_CREATE, modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine, type),
     rename: (id: string, title: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_RENAME, id, title),
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE, id),
@@ -125,6 +133,8 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_SEARCH_ENGINE, id, engine),
     updateProviderConfig: (id: string, providerConfigId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, id, providerConfigId),
+    updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_IMAGE_DEFAULTS, id, size, quality, background),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
   },
 
@@ -133,17 +143,30 @@ const openchat = {
     interrupt: () => ipcRenderer.invoke(IPC_CHANNELS.CHAT_INTERRUPT),
   },
 
+  imageGeneration: {
+    generate: (
+      conversationId: string,
+      prompt: string,
+      params: { size?: string | null; quality?: string | null; background?: string | null; outputFormat?: string | null } = {},
+      inputAttachmentIds: string[] = []
+    ) => ipcRenderer.invoke(IPC_CHANNELS.IMAGE_GENERATION_GENERATE, conversationId, prompt, params, inputAttachmentIds),
+    interrupt: () => ipcRenderer.invoke(IPC_CHANNELS.IMAGE_GENERATION_INTERRUPT),
+    list: (conversationId: string) => ipcRenderer.invoke(IPC_CHANNELS.IMAGE_GENERATION_LIST, conversationId),
+  },
+
   attachments: {
-    pick: (conversationId: string | null): Promise<AttachmentImportResult> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, conversationId),
-    prepareFromBytes: (conversationId: string | null, fileName: string, data: Uint8Array): Promise<MessageAttachment> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, { conversationId, fileName, data }),
+    pick: (conversationId: string | null, usage?: 'chat_input' | 'generation_input'): Promise<AttachmentImportResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, conversationId, usage),
+    prepareFromBytes: (conversationId: string | null, fileName: string, data: Uint8Array, usage?: 'chat_input' | 'generation_input'): Promise<MessageAttachment> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, { conversationId, fileName, data, usage }),
     delete: (attachmentId: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_DELETE, attachmentId),
-    listDrafts: (conversationId: string): Promise<MessageAttachment[]> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, conversationId),
+    listDrafts: (conversationId: string, usage?: 'chat_input' | 'generation_input'): Promise<MessageAttachment[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, conversationId, usage),
     setDetail: (attachmentId: string, detail: 'auto' | 'low' | 'high'): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_SET_DETAIL, attachmentId, detail),
+    save: (attachmentId: string): Promise<{ saved: boolean; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_SAVE, attachmentId),
   },
 
   settings: {
@@ -265,6 +288,21 @@ const openchat = {
       const handler = () => cb()
       ipcRenderer.on(IPC_CHANNELS.SHORTCUT_NEW_TOPIC, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SHORTCUT_NEW_TOPIC, handler)
+    },
+    onImageGenerationStarted: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.IMAGE_GENERATION_STARTED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.IMAGE_GENERATION_STARTED, handler)
+    },
+    onImageGenerationCompleted: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, handler)
+    },
+    onImageGenerationFailed: (cb: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, eventData: unknown) => cb(eventData)
+      ipcRenderer.on(IPC_CHANNELS.IMAGE_GENERATION_FAILED, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.IMAGE_GENERATION_FAILED, handler)
     },
   },
 

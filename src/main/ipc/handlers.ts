@@ -1,6 +1,7 @@
 import { ipcMain, BrowserWindow, shell, dialog } from 'electron'
+import * as fs from 'fs'
 import type { AttachmentService } from '../services/attachments/AttachmentService'
-import type { MessageAttachment, ImageDetail, AttachmentImportResult } from '../../shared/types/conversation'
+import type { MessageAttachment, ImageDetail, AttachmentImportResult, AttachmentUsage } from '../../shared/types/conversation'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
@@ -49,13 +50,14 @@ interface Services {
   conversationService: {
     listConversations: () => Conversation[]
     getConversation: (id: string) => { conversation: Conversation; segments: ContextSegment[]; messages: Message[] } | null
-    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google') => Conversation
+    createConversation: (modelId: string | null, effort: string | null, systemPrompt?: string, providerConfigId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google', type?: 'chat' | 'image_generation') => Conversation
     renameConversation: (id: string, title: string) => void
     removeConversation: (id: string) => Promise<void>
     removeAllConversations: () => Promise<void>
     updateRole: (id: string, prompt: string) => void
     updateModel: (id: string, modelId: string) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
+    updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
     updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') => Promise<void>
@@ -65,6 +67,12 @@ interface Services {
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string, attachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
+    onStreamEvent: (handler: (event: unknown) => void) => void
+  } | null
+  imageGenerationService: {
+    generate: (conversationId: string, prompt: string, params: { size?: string | null; quality?: string | null; background?: string | null; outputFormat?: string | null }, inputAttachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message }>
+    interrupt: () => Promise<void>
+    listGenerations: (conversationId: string) => import('../../shared/types/conversation').ImageGeneration[]
     onStreamEvent: (handler: (event: unknown) => void) => void
   } | null
   credentialManager: OAuthCredentialManager | null
@@ -276,7 +284,7 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     return { fileName, code, message }
   }
 
-  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, async (_event, conversationId: string | null): Promise<AttachmentImportResult> => {
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PICK_IMAGES, async (_event, conversationId: string | null, usage?: AttachmentUsage): Promise<AttachmentImportResult> => {
     if (!services.attachmentService) return { attachments: [], errors: [] }
     const win = getMainWindow()
     const dialogOptions: Electron.OpenDialogOptions = {
@@ -292,7 +300,7 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     const errors: AttachmentImportResult['errors'] = []
     for (const filePath of result.filePaths) {
       try {
-        attachments.push(await services.attachmentService.prepareFromPath(filePath, conversationId))
+        attachments.push(await services.attachmentService.prepareFromPath(filePath, conversationId, usage))
       } catch (err) {
         errors.push(errInfo(err, filePath.split(/[\\/]/).pop() ?? filePath))
       }
@@ -302,12 +310,13 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   // 拖拽：renderer 只能拿到 File 对象，Electron 22 无 webUtils 拿不到路径。
   // 这里接收 renderer 读取的字节（ArrayBuffer/Uint8Array）+ 文件名，Main 侧按 magic bytes 校验。
-  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, (_event, payload: { conversationId: string | null; fileName: string; data: Uint8Array }): MessageAttachment => {
+  // usage 区分 Chat 图片输入 / 图片生成参考图（默认 chat_input，保持既有行为）。
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_PREPARE_FROM_BYTES, (_event, payload: { conversationId: string | null; fileName: string; data: Uint8Array; usage?: AttachmentUsage }): MessageAttachment => {
     if (!services.attachmentService) throw new Error('attachment_service_unavailable')
     const fileName = payload.fileName || 'image'
     try {
       const buffer = Buffer.from(payload.data)
-      return services.attachmentService.prepareFromBytes(buffer, fileName, payload.conversationId)
+      return services.attachmentService.prepareFromBytes(buffer, fileName, payload.conversationId, payload.usage ?? 'chat_input')
     } catch (err) {
       const info = errInfo(err, fileName)
       throw new Error(`${info.code}: ${info.message}`)
@@ -318,12 +327,38 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     services.attachmentService?.deleteOne(attachmentId)
   })
 
-  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, (_event, conversationId: string): MessageAttachment[] => {
-    return services.attachmentService?.listDrafts(conversationId) ?? []
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_LIST_DRAFTS, (_event, conversationId: string, usage?: AttachmentUsage): MessageAttachment[] => {
+    return services.attachmentService?.listDrafts(conversationId, usage) ?? []
   })
 
   ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_SET_DETAIL, (_event, attachmentId: string, detail: ImageDetail): void => {
     services.attachmentService?.setDetail(attachmentId, detail)
+  })
+
+  // 把受管图片另存为用户选择的位置。renderer 只传 attachmentId，
+  // Main 按 DB 反查受管原图路径后复制，绝不暴露内部路径给渲染进程。
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_SAVE, async (_event, attachmentId: string): Promise<{ saved: boolean; canceled?: boolean; error?: string }> => {
+    const att = services.attachmentService?.getAttachment(attachmentId)
+    if (!att) return { saved: false, error: '附件不存在' }
+    const resolved = services.attachmentService?.resolveOriginal(attachmentId)
+    if (!resolved) return { saved: false, error: '附件文件不存在' }
+
+    const win = getMainWindow()
+    const options: Electron.SaveDialogOptions = {
+      title: '保存图片',
+      defaultPath: att.fileName || 'image.png',
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { saved: false, canceled: true }
+
+    try {
+      await fs.promises.copyFile(resolved.filePath, result.filePath)
+      return { saved: true }
+    } catch (err) {
+      return { saved: false, error: err instanceof Error ? err.message : '保存失败' }
+    }
   })
 
   // ===== Auth =====
@@ -374,8 +409,8 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     return result
   })
 
-  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google'): Conversation | null => {
-    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine) ?? null
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_CREATE, (_event, modelId: string | null, effort: string | null, systemPrompt?: string, providerId?: string | null, webSearchEnabled?: boolean, searchEngine?: 'bing' | 'baidu' | 'google', type?: 'chat' | 'image_generation'): Conversation | null => {
+    return services.conversationService?.createConversation(modelId, effort, systemPrompt, providerId, webSearchEnabled, searchEngine, type) ?? null
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_RENAME, (_event, id: string, title: string): void => {
@@ -475,6 +510,36 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     await services.conversationService?.interrupt()
   })
 
+  // ===== Image Generation =====
+  ipcMain.handle(IPC_CHANNELS.IMAGE_GENERATION_GENERATE, async (
+    _event,
+    conversationId: string,
+    prompt: string,
+    params: { size?: string | null; quality?: string | null; background?: string | null; outputFormat?: string | null },
+    inputAttachmentIds: string[] = []
+  ): Promise<{ userMessage: Message; assistantMessage: Message } | null> => {
+    if (!services.imageGenerationService) throw new Error('image_generation_unavailable')
+    return await services.imageGenerationService.generate(conversationId, prompt, params ?? {}, inputAttachmentIds)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.IMAGE_GENERATION_INTERRUPT, async (): Promise<void> => {
+    await services.imageGenerationService?.interrupt()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.IMAGE_GENERATION_LIST, (_event, conversationId: string) => {
+    return services.imageGenerationService?.listGenerations(conversationId) ?? []
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_IMAGE_DEFAULTS, async (
+    _event,
+    id: string,
+    size: string | null,
+    quality: string | null,
+    background: string | null
+  ): Promise<void> => {
+    await services.conversationService?.updateImageDefaults(id, size, quality, background)
+  })
+
   // ===== Codex Usage =====
   ipcMain.handle(IPC_CHANNELS.CODEX_USAGE_GET_STATE, (): CodexUsageView => {
     return services.usageService?.getView() ?? { state: 'unknown' }
@@ -528,6 +593,23 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     const win = getMainWindow()
     if (!win) return
     win.webContents.send(IPC_CHANNELS.CODEX_USAGE_CHANGED, view)
+  })
+
+  services.imageGenerationService?.onStreamEvent((event) => {
+    const win = getMainWindow()
+    if (!win) return
+    const e = event as { type: string }
+    switch (e.type) {
+      case 'image-generation-started':
+        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_STARTED, event)
+        break
+      case 'image-generation-completed':
+        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, event)
+        break
+      case 'image-generation-failed':
+        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_FAILED, event)
+        break
+    }
   })
 
   services.conversationService?.onStreamEvent((event) => {
