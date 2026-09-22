@@ -3752,22 +3752,80 @@ html[data-theme="dark"] mark.search-highlight-current {
   gap: 10px;
 }
 
-/* 生成中的占位骨架：尺寸接近单图上限，减少结果到达时的布局跳动 */
+/* 图片生成结果 slot：最终图片与占位覆盖层叠放于同一槽位。
+   槽位尺寸只由这一处决定（占位为绝对定位覆盖层，不贡献第二份布局高度），
+   因此图片 decode 阶段 scrollHeight 稳定，不会出现两套 block 交替造成的闪动。 */
+.generation-image-slot {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+/* slot 内的图片网格不再自带外边距（外边距统一由 slot 提供，避免叠加） */
+.generation-image-slot .message-image-grid {
+  margin-bottom: 0;
+}
+
+/* slot 内单图网格改为 flex：inline-grid 会落在文本基线上、下方带 descender 间隙，
+   使图片阶段比占位阶段高数像素。flex 化后无行盒/基线参与，槽位高度完全由 slot 决定。 */
+.generation-image-slot .message-image-grid--single {
+  display: flex;
+  align-items: flex-start;
+}
+
+/* 最终生成图：像素就绪前保持透明（仍真实挂载、加载、decode），就绪后轻微淡入（140ms）。
+   注意：这不与占位叠加成完整 crossfade —— 占位是在 ready 的同一帧直接卸载的，
+   这里只是结果图自身的淡入，用于消除「一帧硬切」的观感。不做 scale / blur / zoom。 */
+.generation-result-image {
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.generation-result-image.is-ready {
+  opacity: 1;
+}
+
+/* 生成中的占位骨架：基础样式（不限定定位，供任意使用点复用） */
 .message-image-placeholder {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  width: 320px;
-  height: 320px;
-  max-width: 100%;
-  margin-bottom: 8px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+/* 覆盖层变体：填满 generation-image-slot，不贡献第二份布局高度。
+   absolute/inset 只属于 overlay，不污染基础 class。 */
+.message-image-placeholder--overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+/* 单图本地加载失败：保持 slot 高度不变，轻量内联提示（区别于 Provider 生成失败） */
+.generation-image-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* 多图 cell 内的加载失败提示：撑满 cell，居中图标 */
+.generation-image-load-error--cell {
+  border: none;
+  background: transparent;
 }
 
 .message-image-placeholder-text {
@@ -3963,6 +4021,37 @@ html[data-theme="dark"] mark.search-highlight-current {
     opacity: 1;
     transform: translateY(-1px);
   }
+}
+
+/* settling：结果元数据已到、仅等本地 decode。生成已完成，占位只作静态兜底层，
+   停止内部循环动画（避免「模型已完成又开始重绘」），并冻结在最后完整状态。
+   animation:none 而非 paused：paused 会停在 0% 关键帧（空白），none 回到基础样式（完整）。 */
+.message-image-placeholder--overlay.is-settling .image-gen-landscape,
+.message-image-placeholder--overlay.is-settling .image-gen-sun,
+.message-image-placeholder--overlay.is-settling .image-gen-scan,
+.message-image-placeholder--overlay.is-settling .image-gen-sparkle,
+.message-image-placeholder--overlay.is-settling .image-gen-dot {
+  animation: none;
+}
+
+/* settling 时把周期性元素固定在其可见形态（不再依赖动画中间帧） */
+.message-image-placeholder--overlay.is-settling .image-gen-landscape {
+  stroke-dashoffset: 0;
+  opacity: 1;
+}
+
+.message-image-placeholder--overlay.is-settling .image-gen-sun {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.message-image-placeholder--overlay.is-settling .image-gen-sparkle--lg {
+  opacity: 1;
+  transform: scale(1) rotate(8deg);
+}
+
+.message-image-placeholder--overlay.is-settling .image-gen-dot {
+  opacity: 0.6;
 }
 
 /* Provider 卡片徽标：Image Generations */

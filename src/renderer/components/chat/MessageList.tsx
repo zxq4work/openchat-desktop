@@ -265,9 +265,9 @@ export function MessageList() {
       !scrollbarDraggingRef.current
 
     if (resultChanged && wasPinnedToBottom) {
-      followModeRef.current = 'FOLLOWING'
-      pinnedRef.current = true
-      programmaticScrollTargetRef.current = null
+      // 只 arm + 贴底；不再手工改写 followMode/pinned —— 完成前本就在底部跟随，
+      // 这两个 ref 已是 FOLLOWING/true，直接 scrollToBottom 后 handleScroll 会自然维持，
+      // 人为重置反而可能触发 scroll handler / 按钮状态的额外切换。
       generationCompletionBottomIntentRef.current = true
       generationCompletionDeadlineRef.current = performance.now() + GENERATION_COMPLETION_SETTLE_MS
       setShowScrollToBottom(false)
@@ -417,8 +417,12 @@ export function MessageList() {
       }
 
       // 图片生成完成补底意图：图片 decode / 异步布局增长期间继续贴底，窄分支、超时即止。
+      // 仅在确实离底时才写 scrollTop —— 图片 decode 可能连续触发多次 ResizeObserver，
+      // 已贴底时重复写 scrollTop 会制造多余的 layout / scroll 事件 / paint。
       if (isGenerationCompletionBottomIntentActive()) {
-        scrollToBottom()
+        if (distanceFromBottom > 2) {
+          scrollToBottom()
+        }
         setShowScrollToBottom(false)
         return
       }

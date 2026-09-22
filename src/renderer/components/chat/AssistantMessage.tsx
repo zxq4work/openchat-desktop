@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback, useContext } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useContext } from 'react'
 import type { Message } from '../../../shared/types/conversation'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useModelStore } from '../../stores/modelStore'
 import { useImageGenerationStore } from '../../stores/imageGenerationStore'
 import { useUiStore } from '../../stores/uiStore'
 import { imageAttachments, thumbnailUrl } from '../../packages/attachmentUrl'
+import { parseRequestedDims, fitSlot, IMAGE_SLOT_MAX } from '../../packages/imageSlot'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { ScrollContainerContext } from './ScrollContainerContext'
 import { probeLayoutRead } from '../../packages/layoutReadDiag'
@@ -20,7 +21,97 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   // 图片生成结果：assistant 消息此前不渲染 attachments，这里补齐图片网格。
   const generatedImages = imageAttachments(message.attachments)
   const imageGenActiveAssistantId = useImageGenerationStore((s) => s.activeAssistantMessageId)
-  const isImageGenerating = imageGenActiveAssistantId === message.id
+  const imageGenPendingAssistantId = useImageGenerationStore((s) => s.pendingAssistantMessageId)
+  const imageGenPendingSize = useImageGenerationStore((s) => s.pendingSize)
+  // 占位骨架的「被跟踪」判定：本消息是当前 pending 的目标。
+  // pendingAssistantMessageId 由 setStarted 写入、由 clearPending（像素就绪）/setFailed/reset 清除。
+  // 关键：不把可见性直接绑 activeAssistantMessageId，否则 setCompleted 会立刻卸载占位，
+  // 在异步 reload 提交前露出一帧「这一条消息什么都没了」的空白 → 抖动。
+  // 也不绑「本消息是否已 completed 且未 ready」——那会让历史会话图片误套生成占位。
+  const isHandoffTracked = imageGenPendingAssistantId === message.id
+  // 仍在网络生成中（active 与 pending 同源写入，setCompleted 仅清 active）。
+  const isActiveGenerating = imageGenActiveAssistantId === message.id
+  // 结果图片的「像素已就绪」状态（按 attachment.id 隔离，连续生成互不干扰）。
+  // generation_output 附件进入 activeMessages 只代表元数据就绪，<img> 仍需经
+  // openchat-attachment protocol → 文件读取 → decode → paint。
+  // 在此之前保持占位覆盖层可见，避免「有尺寸但未 decode 的空 img box」白帧。
+  const [readyAttachmentIds, setReadyAttachmentIds] = useState<Set<string>>(() => new Set())
+  const markVisualReady = useCallback((attachmentId: string) => {
+    setReadyAttachmentIds((prev) => {
+      if (prev.has(attachmentId)) return prev
+      const next = new Set(prev)
+      next.add(attachmentId)
+      return next
+    })
+  }, [])
+
+  // 本地图片展示失败（thumbnail protocol / 文件读取 / decode 失败）。
+  // 这是 Renderer 的图片加载状态，不是 Provider generation 状态：
+  // 绝不写入 imageGenerationStore，也不改 image_generations DB（生成本身已成功落盘）。
+  // 有了它，onError 才能结束 handoff，避免占位永久停在「正在生成图片」。
+  const [failedVisualAttachmentIds, setFailedVisualAttachmentIds] = useState<Set<string>>(() => new Set())
+  const markVisualFailed = useCallback((attachmentId: string) => {
+    setFailedVisualAttachmentIds((prev) => {
+      if (prev.has(attachmentId)) return prev
+      const next = new Set(prev)
+      next.add(attachmentId)
+      return next
+    })
+  }, [])
+
+  // 单图结果（正常 n=1 契约）。slot 高度优先取真实 attachment.width/height；
+  // 附件未到时用请求比例预留，避免 decode 阶段再次改变槽位高度。
+  // 多图（第三方 Provider 无视 n=1 返回多个 data item 时 Main 会全部落盘）走原 multi 网格。
+  const singleImage = generatedImages.length === 1 ? generatedImages[0] : null
+  const resultSlot = (() => {
+    if (singleImage && singleImage.width > 0 && singleImage.height > 0) {
+      return fitSlot(singleImage.width, singleImage.height)
+    }
+    // 附件未到：占位阶段按请求比例预留（请求 1024×1536 → 213×320，而非固定 320×320）
+    const req = parseRequestedDims(imageGenPendingSize)
+    return req ? fitSlot(req.width, req.height) : { width: IMAGE_SLOT_MAX, height: IMAGE_SLOT_MAX }
+  })()
+
+  // 占位覆盖层：仅在本消息是本轮生成目标、且单图结果尚未就绪时显示。
+  // - 无结果（生成本身进行中）；或
+  // - 单图元数据已到但像素尚未就绪。
+  // 像素就绪 / 本地加载失败后 clearPending 置空本消息 pending → 覆盖层自动卸载。
+  // 多图走原网格、不再叠加占位；历史会话图片从不被跟踪，不会误显示生成占位。
+  const showPlaceholderOverlay =
+    isHandoffTracked &&
+    generatedImages.length <= 1 &&
+    !(singleImage !== null && failedVisualAttachmentIds.has(singleImage.id))
+  // settling：单图元数据已到、仅等本地 decode。此时停止占位内部循环动画，
+  // 避免「模型已完成又开始重绘」，冻结在最后完整状态。
+  const settling = showPlaceholderOverlay && !isActiveGenerating && singleImage !== null
+
+  // 占位 → 结果的 handoff 结束条件：结果已就绪（ready）或本地加载失败（failed）。
+  // 失败也算「结束」，否则 onError 会让 pending 永久卡住。
+  // 多图：原网格自带固定 cell 尺寸、无白帧，结果一到即结束 handoff。
+  const handoffSettled =
+    generatedImages.length > 1 ||
+    (singleImage !== null &&
+      (readyAttachmentIds.has(singleImage.id) || failedVisualAttachmentIds.has(singleImage.id)))
+  // 结果图片像素就绪（或加载失败）后，才在 paint 前清空 pending 标记。
+  // 绝不在 attachment 出现的瞬间就清 —— 那会让占位提前卸载，露出未 decode 的白帧。
+  const clearPendingGeneration = useImageGenerationStore((s) => s.clearPending)
+  useLayoutEffect(() => {
+    if (isHandoffTracked && handoffSettled) {
+      clearPendingGeneration(message.id)
+    }
+  }, [isHandoffTracked, handoffSettled, message.id, clearPendingGeneration])
+
+  // 缓存命中的兜底：<img> 若在挂载前已完整缓存，onLoad 可能不触发。
+  // 挂载后在 paint 前用 img.complete + naturalWidth 判定，直接置为 ready。
+  // 只把 naturalWidth>0 视为 ready；不用 complete+naturalWidth===0 判失败（避免首帧误判），
+  // 失败一律以 onError 为准。
+  const resultImgRef = useRef<HTMLImageElement>(null)
+  useLayoutEffect(() => {
+    const img = resultImgRef.current
+    if (img && img.complete && img.naturalWidth > 0 && singleImage) {
+      markVisualReady(singleImage.id)
+    }
+  }, [singleImage, markVisualReady])
   const [summaryExpanded, setSummaryExpanded] = useState(
     // 当前 turn 的消息（非 completed）默认展开 reasoning 面板，避免 completion 时
     // summaryExpanded 从 false 切到 true 导致 DOM 卸载再挂载，scrollTop 归零。
@@ -344,9 +435,120 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
         ) : null}
       </div>
 
-      {/* 图片生成结果：复用与用户上传图片相同的网格 + Lightbox */}
-      {generatedImages.length > 0 && (
-        <div className={`message-image-grid message-image-grid--${generatedImages.length === 1 ? 'single' : 'multi'}`}>
+      {/* 单图结果 slot：最终图片与占位覆盖层叠放于同一槽位。
+          槽位高度只由这一处决定（占位为绝对定位覆盖层，不贡献第二份布局高度），
+          因此图片 decode 阶段 scrollHeight 稳定，不会因两套 block 交替而闪动。
+          渲染条件含「尚未到达附件但正在生成」——此时 slot 仅承载占位覆盖层，
+          用请求比例预留高度（见 resultSlot）；绝不能因 generatedImages.length===0 就整块不渲染，
+          否则生成期间看不到任何占位。
+          多图（第三方 Provider 返回多张）走下方独立网格，不套用单图 slot。 */}
+      {(generatedImages.length === 1 || showPlaceholderOverlay) && (() => {
+        const att = generatedImages.length === 1 ? generatedImages[0] : null
+        const visualFailed = att !== null && failedVisualAttachmentIds.has(att.id)
+        return (
+          <div
+            className="generation-image-slot"
+            style={{ width: resultSlot.width, height: resultSlot.height }}
+          >
+            {att !== null && !visualFailed && (
+              <div className="message-image-grid message-image-grid--single">
+                <button
+                  type="button"
+                  className="message-image-cell message-image-cell--generated"
+                  onClick={() => openLightbox(att)}
+                  aria-label={`查看生成图片 ${att.fileName}`}
+                >
+                  <img
+                    ref={resultImgRef}
+                    className={`generation-result-image${readyAttachmentIds.has(att.id) ? ' is-ready' : ''}`}
+                    src={thumbnailUrl(att.id)}
+                    alt={att.fileName}
+                    width={att.width > 0 ? att.width : undefined}
+                    height={att.height > 0 ? att.height : undefined}
+                    loading="lazy"
+                    decoding="async"
+                    onLoad={() => markVisualReady(att.id)}
+                    onError={() => markVisualFailed(att.id)}
+                  />
+                </button>
+              </div>
+            )}
+
+            {/* 本地图片展示失败：gen 已成功，仅 thumbnail 读取失败。轻量内联提示，保持 slot 高度。
+                与 Provider generation failed 的 .message-error 明确区分。 */}
+            {visualFailed && (
+              <div className="generation-image-load-error" role="status" aria-label="图片加载失败">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="9" cy="9" r="1.6" />
+                  <path d="M21 15l-5-5L5 21" />
+                  <line x1="3" y1="3" x2="21" y2="21" />
+                </svg>
+                <span>图片加载失败</span>
+              </div>
+            )}
+
+            {/* 占位覆盖层：生成本轮进行中 / 单图元数据已到但像素未就绪时显示。
+                与最终图片叠放于同一 slot，绝不贡献第二份高度；像素就绪或加载失败后卸载。 */}
+            {showPlaceholderOverlay && (
+              <div
+                className={`message-image-placeholder message-image-placeholder--overlay${settling ? ' is-settling' : ''}`}
+                role="status"
+                aria-label="图片生成中"
+              >
+                <div className="message-image-gen-icon">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <defs>
+                      {/* 静态 frame clipPath：仅防止 sun / mountain / scan 溢出图片框，自身不动画 */}
+                      <clipPath id={`image-gen-${message.id}-frame`}>
+                        <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="1.6" />
+                      </clipPath>
+                      <linearGradient id={`image-gen-${message.id}-sweep`} x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" className="image-gen-sweep-stop" />
+                        <stop offset="50%" className="image-gen-sweep-stop image-gen-sweep-stop--mid" />
+                        <stop offset="100%" className="image-gen-sweep-stop" />
+                      </linearGradient>
+                    </defs>
+                    {/* 内部图像内容：太阳 / 山峰 / 高光，全部限制在图片框内 */}
+                    <g clipPath={`url(#image-gen-${message.id}-frame)`}>
+                      <circle className="image-gen-sun" cx="8.5" cy="8.5" r="1.5" />
+                      {/* 山峰用 stroke-dashoffset 沿 path 绘制；pathLength 归一化后 dash 参数与坐标无关 */}
+                      <path className="image-gen-landscape" pathLength="1" d="M21 15l-5-5L5 21" />
+                      <rect className="image-gen-scan" x="3.4" y="3.4" width="6.4" height="17.2" fill={`url(#image-gen-${message.id}-sweep)`} />
+                    </g>
+                    {/* frame stroke 在裁剪内容之上，始终保持完整 */}
+                    <rect className="image-gen-frame" x="3" y="3" width="18" height="18" rx="2" />
+                  </svg>
+                  <span className="image-gen-sparkle image-gen-sparkle--lg" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
+                    </svg>
+                  </span>
+                  <span className="image-gen-sparkle image-gen-sparkle--sm" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
+                    </svg>
+                  </span>
+                </div>
+                <div className="message-image-placeholder-text">
+                  正在生成图片
+                  <span className="image-gen-dots" aria-hidden="true">
+                    <span className="image-gen-dot" />
+                    <span className="image-gen-dot" />
+                    <span className="image-gen-dot" />
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* 多图结果（第三方 Provider 无视 n=1 返回多张时）：沿用原 multi 网格，
+          每张独立 ready / error，不做生成占位交接（fixed cell 尺寸，无白帧）。
+          单图加载失败同样在此显示轻量提示。 */}
+      {generatedImages.length > 1 && (
+        <div className="message-image-grid message-image-grid--multi">
           {generatedImages.map((att) => (
             <button
               key={att.id}
@@ -355,65 +557,30 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
               onClick={() => openLightbox(att)}
               aria-label={`查看生成图片 ${att.fileName}`}
             >
-              <img
-                src={thumbnailUrl(att.id)}
-                alt={att.fileName}
-                width={att.width > 0 ? att.width : undefined}
-                height={att.height > 0 ? att.height : undefined}
-                loading="lazy"
-                decoding="async"
-              />
+              {failedVisualAttachmentIds.has(att.id) ? (
+                <span className="generation-image-load-error generation-image-load-error--cell" role="status" aria-label="图片加载失败">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="9" cy="9" r="1.6" />
+                    <path d="M21 15l-5-5L5 21" />
+                    <line x1="3" y1="3" x2="21" y2="21" />
+                  </svg>
+                </span>
+              ) : (
+                <img
+                  className={`generation-result-image${readyAttachmentIds.has(att.id) ? ' is-ready' : ''}`}
+                  src={thumbnailUrl(att.id)}
+                  alt={att.fileName}
+                  width={att.width > 0 ? att.width : undefined}
+                  height={att.height > 0 ? att.height : undefined}
+                  loading="lazy"
+                  decoding="async"
+                  onLoad={() => markVisualReady(att.id)}
+                  onError={() => markVisualFailed(att.id)}
+                />
+              )}
             </button>
           ))}
-        </div>
-      )}
-
-      {/* 图片生成进行中占位骨架：保持布局稳定，避免结果到达时消息列表跳动。
-          「图片逐渐生成」的动画语义，而非通用 loading spinner。 */}
-      {generatedImages.length === 0 && isImageGenerating && (
-        <div className="message-image-placeholder" role="status" aria-label="图片生成中">
-          <div className="message-image-gen-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <defs>
-                {/* 静态 frame clipPath：仅防止 sun / mountain / scan 溢出图片框，自身不动画 */}
-                <clipPath id={`image-gen-${message.id}-frame`}>
-                  <rect x="3.4" y="3.4" width="17.2" height="17.2" rx="1.6" />
-                </clipPath>
-                <linearGradient id={`image-gen-${message.id}-sweep`} x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" className="image-gen-sweep-stop" />
-                  <stop offset="50%" className="image-gen-sweep-stop image-gen-sweep-stop--mid" />
-                  <stop offset="100%" className="image-gen-sweep-stop" />
-                </linearGradient>
-              </defs>
-              {/* 内部图像内容：太阳 / 山峰 / 高光，全部限制在图片框内 */}
-              <g clipPath={`url(#image-gen-${message.id}-frame)`}>
-                <circle className="image-gen-sun" cx="8.5" cy="8.5" r="1.5" />
-                {/* 山峰用 stroke-dashoffset 沿 path 绘制；pathLength 归一化后 dash 参数与坐标无关 */}
-                <path className="image-gen-landscape" pathLength="1" d="M21 15l-5-5L5 21" />
-                <rect className="image-gen-scan" x="3.4" y="3.4" width="6.4" height="17.2" fill={`url(#image-gen-${message.id}-sweep)`} />
-              </g>
-              {/* frame stroke 在裁剪内容之上，始终保持完整 */}
-              <rect className="image-gen-frame" x="3" y="3" width="18" height="18" rx="2" />
-            </svg>
-            <span className="image-gen-sparkle image-gen-sparkle--lg" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
-              </svg>
-            </span>
-            <span className="image-gen-sparkle image-gen-sparkle--sm" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 0L14.4 9.6L24 12L14.4 14.4L12 24L9.6 14.4L0 12L9.6 9.6Z" />
-              </svg>
-            </span>
-          </div>
-          <div className="message-image-placeholder-text">
-            正在生成图片
-            <span className="image-gen-dots" aria-hidden="true">
-              <span className="image-gen-dot" />
-              <span className="image-gen-dot" />
-              <span className="image-gen-dot" />
-            </span>
-          </div>
         </div>
       )}
       {statusBadge && <div className="message-status">{statusBadge}</div>}

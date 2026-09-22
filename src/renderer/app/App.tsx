@@ -494,9 +494,9 @@ export function App() {
     }
 
     disposers.push(window.openchat.events.onImageGenerationStarted((event: unknown) => {
-      const e = event as { conversationId: string; assistantMessageId: string }
+      const e = event as { conversationId: string; assistantMessageId: string; size?: string | null }
       console.log('[App RAW] image-generation-started conversationId=%s messageId=%s', e.conversationId, e.assistantMessageId)
-      useImageGenerationStore.getState().setStarted(e.conversationId, e.assistantMessageId)
+      useImageGenerationStore.getState().setStarted(e.conversationId, e.assistantMessageId, e.size ?? null)
     }))
 
     disposers.push(window.openchat.events.onImageGenerationCompleted((event: unknown) => {

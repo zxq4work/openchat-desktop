@@ -24,6 +24,9 @@ export interface ImageGenerationStreamEvent {
   conversationId: string
   generationId: string
   assistantMessageId: string
+  // 仅 started：本次请求的 canonical 尺寸（可能为 null = 使用供应商默认）。
+  // 供渲染进程按目标比例预留占位骨架高度，避免落图时高度突变。
+  size?: string | null
   errorCode?: ImageGenerationErrorCode
   errorMessage?: string
 }
@@ -280,6 +283,7 @@ export class ImageGenerationService {
       conversationId,
       generationId,
       assistantMessageId: assistantMessage.id,
+      size,
     })
 
     // 延迟到下一个宏任务，确保 IPC 响应先于完成/失败事件到达渲染进程
