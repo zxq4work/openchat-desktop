@@ -2525,7 +2525,36 @@ textarea {
 .provider-dialog {
   width: 560px;
   max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.provider-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 28px 28px 0;
+  margin-bottom: 16px;
+}
+
+.provider-dialog-header h3 {
+  margin-bottom: 0;
+}
+
+.provider-dialog-body {
+  flex: 1;
   overflow-y: auto;
+  padding: 0 28px 20px;
+}
+
+.provider-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 28px 24px;
+  border-top: 1px solid var(--border-color);
 }
 
 .provider-dialog .provider-form-field {

@@ -522,8 +522,11 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
       }}
     >
       <div className="dialog provider-dialog" onClick={(e) => e.stopPropagation()}>
-        <h3>{props.editId ? '编辑模型服务' : '添加模型服务'}</h3>
+        <div className="provider-dialog-header">
+          <h3>{props.editId ? '编辑模型服务' : '添加模型服务'}</h3>
+        </div>
 
+        <div className="provider-dialog-body">
         <div className="provider-form-field">
           <label className="provider-label">名称</label>
           <input
@@ -730,7 +733,9 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
           </div>
         )}
 
-        <div className="dialog-actions">
+        </div>
+
+        <div className="provider-dialog-footer">
           <button className="btn-cancel" onClick={props.onClose}>取消</button>
           <button
             className="btn-save"
