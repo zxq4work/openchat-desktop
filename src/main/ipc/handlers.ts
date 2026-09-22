@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow, shell, dialog } from 'electron'
+import { ipcMain, BrowserWindow, shell, dialog, clipboard, nativeImage } from 'electron'
 import * as fs from 'fs'
 import type { AttachmentService } from '../services/attachments/AttachmentService'
 import type { MessageAttachment, ImageDetail, AttachmentImportResult, AttachmentUsage } from '../../shared/types/conversation'
@@ -358,6 +358,42 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
       return { saved: true }
     } catch (err) {
       return { saved: false, error: err instanceof Error ? err.message : '保存失败' }
+    }
+  })
+
+  // 复制受管图片位图到系统剪贴板。renderer 只传 attachmentId：
+  // Main 按 DB 反查受管原图路径 → 读取字节 → nativeImage 解码 → clipboard.writeImage。
+  // 始终使用原图（非缩略图），不做格式转换/压缩，保持 PNG 透明。
+  ipcMain.handle(IPC_CHANNELS.ATTACHMENTS_COPY_IMAGE, (_event, attachmentId: string): { copied: boolean; error?: string } => {
+    const att = services.attachmentService?.getAttachment(attachmentId)
+    if (!att) return { copied: false, error: '附件不存在' }
+    if (att.type !== 'image' || !att.mimeType.startsWith('image/')) {
+      return { copied: false, error: '不是图片附件' }
+    }
+    const resolved = services.attachmentService?.resolveOriginal(attachmentId)
+    if (!resolved) return { copied: false, error: '附件文件不存在' }
+
+    let bytes: Buffer
+    try {
+      bytes = fs.readFileSync(resolved.filePath)
+    } catch {
+      // 不打印路径 / 字节，只记录操作与附件身份
+      console.error('[attachments:copy-image] read failed attachmentId=%s', attachmentId)
+      return { copied: false, error: '无法读取图片文件' }
+    }
+
+    const image = nativeImage.createFromBuffer(bytes)
+    if (image.isEmpty()) {
+      console.error('[attachments:copy-image] decode failed attachmentId=%s', attachmentId)
+      return { copied: false, error: '图片解码失败' }
+    }
+
+    try {
+      clipboard.writeImage(image)
+      return { copied: true }
+    } catch (err) {
+      console.error('[attachments:copy-image] clipboard write failed attachmentId=%s', attachmentId)
+      return { copied: false, error: err instanceof Error ? err.message : '复制图片失败' }
     }
   })
 

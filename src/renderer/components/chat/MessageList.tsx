@@ -4,7 +4,9 @@ import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useImageGenerationStore } from '../../stores/imageGenerationStore'
 import { MessageItem } from './MessageItem'
 import { ContextBoundary } from './ContextBoundary'
-import { MessageListContextMenu } from './MessageListContextMenu'
+import { useUiStore } from '../../stores/uiStore'
+import { getSelectionWithinElement } from '../../packages/selectionCopy'
+import { buildSelectionMenu } from '../../packages/messageMenu'
 import { ScrollContainerContext, type ScrollFollowMode } from './ScrollContainerContext'
 import { probeLayoutRead, isConversationSwitchDiagActive } from '../../packages/layoutReadDiag'
 
@@ -31,20 +33,16 @@ export function MessageList() {
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number }>({
-    visible: false, x: 0, y: 0,
-  })
+  const openContextMenu = useUiStore((s) => s.openContextMenu)
 
+  // 消息列表空白区右键：仅当存在「属于本列表且非折叠」的选区时弹出搜索菜单。
+  // 消息根节点（UserMessage/AssistantMessage）的右键已 stopPropagation，不会走到这里。
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    const selection = window.getSelection()
-    if (!selection || selection.isCollapsed) return
+    const text = getSelectionWithinElement(e.currentTarget as Element).trim()
+    if (!text) return
     e.preventDefault()
-    setContextMenu({ visible: true, x: e.clientX, y: e.clientY })
-  }, [])
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu({ visible: false, x: 0, y: 0 })
-  }, [])
+    openContextMenu(e.clientX, e.clientY, buildSelectionMenu(text))
+  }, [openContextMenu])
 
   // 滚动跟随状态机：FOLLOWING / READING_HISTORY
   const followModeRef = useRef<ScrollFollowMode>('FOLLOWING')
@@ -548,12 +546,6 @@ export function MessageList() {
           </>
         )}
       </div>
-      <MessageListContextMenu
-        visible={contextMenu.visible}
-        x={contextMenu.x}
-        y={contextMenu.y}
-        onClose={closeContextMenu}
-      />
     </div>
       {showScrollToBottom && (
         <button

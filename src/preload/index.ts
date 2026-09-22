@@ -72,6 +72,7 @@ const IPC_CHANNELS = {
   ATTACHMENTS_LIST_DRAFTS: 'attachments:list-drafts',
   ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
   ATTACHMENTS_SAVE: 'attachments:save',
+  ATTACHMENTS_COPY_IMAGE: 'attachments:copy-image',
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',
   SHORTCUT_NEW_TOPIC: 'shortcut:new-topic',
   SHORTCUT_SETTINGS: 'shortcut:settings',
@@ -173,6 +174,9 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_SET_DETAIL, attachmentId, detail),
     save: (attachmentId: string): Promise<{ saved: boolean; canceled?: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_SAVE, attachmentId),
+    // 复制受管图片位图到系统剪贴板。只暴露 attachmentId，绝不暴露路径/字节/Buffer。
+    copyImage: (attachmentId: string): Promise<{ copied: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ATTACHMENTS_COPY_IMAGE, attachmentId),
   },
 
   settings: {

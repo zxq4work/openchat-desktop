@@ -9,6 +9,7 @@ import { parseRequestedDims, fitSlot, IMAGE_SLOT_MAX } from '../../packages/imag
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { ScrollContainerContext } from './ScrollContainerContext'
 import { probeLayoutRead } from '../../packages/layoutReadDiag'
+import { openMessageContextMenu, openImageContextMenu } from '../../packages/messageMenu'
 
 interface Props {
   message: Message
@@ -119,6 +120,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   )
   const [searchExpanded, setSearchExpanded] = useState(false)
   const reasoningPanelRef = useRef<HTMLDivElement>(null)
+  // 消息根节点：右键菜单据此限定「属于本消息的选区」，避免复制到别的消息。
+  const rootRef = useRef<HTMLDivElement>(null)
 
   // reasoning 内部滚动：用户向上滚后不再强制跟随
   const reasoningPinnedRef = useRef(true)
@@ -253,7 +256,12 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
   ) : null
 
   return (
-    <div className="message assistant-message" data-message-id={message.id}>
+    <div
+      className="message assistant-message"
+      data-message-id={message.id}
+      ref={rootRef}
+      onContextMenu={(e) => openMessageContextMenu(e, rootRef.current as HTMLElement, message.content)}
+    >
       <div className="message-role">
         Assistant
         {modelInfo}
@@ -455,7 +463,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
                 <button
                   type="button"
                   className="message-image-cell message-image-cell--generated"
-                  onClick={() => openLightbox(att)}
+                  onClick={() => openLightbox(att.id)}
+                  onContextMenu={(e) => openImageContextMenu(e, att.id, message.content)}
                   aria-label={`查看生成图片 ${att.fileName}`}
                 >
                   <img
@@ -554,7 +563,8 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
               key={att.id}
               type="button"
               className="message-image-cell message-image-cell--generated"
-              onClick={() => openLightbox(att)}
+              onClick={() => openLightbox(att.id)}
+              onContextMenu={(e) => openImageContextMenu(e, att.id, message.content)}
               aria-label={`查看生成图片 ${att.fileName}`}
             >
               {failedVisualAttachmentIds.has(att.id) ? (

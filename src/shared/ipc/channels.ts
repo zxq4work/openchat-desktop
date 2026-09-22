@@ -85,6 +85,8 @@ export const IPC_CHANNELS = {
   ATTACHMENTS_SET_DETAIL: 'attachments:set-detail',
   // 保存受管图片到用户选择的位置（renderer 不接触内部路径）
   ATTACHMENTS_SAVE: 'attachments:save',
+  // 复制受管图片位图到系统剪贴板（renderer 只传 attachmentId）
+  ATTACHMENTS_COPY_IMAGE: 'attachments:copy-image',
 
   // UI
   SHORTCUT_NEW_CONVERSATION: 'shortcut:new-conversation',

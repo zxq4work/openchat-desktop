@@ -11,6 +11,7 @@ import { buildParamOptions, isValueAllowed, PARAM_DEFAULT_VALUE, profileSupports
 import { cleanIpcErrorMessage } from '../../packages/ipcError'
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import type { MessageAttachment } from '../../../shared/types/conversation'
+import { toPreviewImage } from '../../packages/conversationPreviewImages'
 
 // 图片生成 Composer：Model / Size / Quality / Background / OutputFormat（+ 可选参考图）。
 // 全部由 Provider 的 ImageGenerationProfile 驱动：
@@ -502,7 +503,7 @@ export function ImageComposer() {
           attachments={inputAttachments}
           disabled={isGeneratingHere || importing}
           onRemove={handleRemoveInput}
-          onPreview={openLightbox}
+          onPreview={(att) => openLightbox(att.id, toPreviewImage(att))}
         />
 
         {importErrors.length > 0 && (

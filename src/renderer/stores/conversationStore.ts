@@ -5,6 +5,7 @@ import type {
   ContextSegment,
   Message,
 } from '../../shared/types/conversation'
+import { useUiStore } from './uiStore'
 
 interface ConversationState {
   summaries: ConversationSummary[]
@@ -30,11 +31,19 @@ export const useConversationStore = create<ConversationState>((set) => ({
   activeSegments: [],
 
   setSummaries: (summaries) => set({ summaries }),
-  setActiveConversationId: (id) => set({ activeConversationId: id }),
+  setActiveConversationId: (id) => {
+    set({ activeConversationId: id })
+    // 切换会话时关闭 Lightbox 与右键菜单：避免上一会话的浮层覆盖新会话。
+    useUiStore.getState().closeLightbox()
+    useUiStore.getState().closeContextMenu()
+  },
   setActiveConversation: (conversation) => set({ activeConversation: conversation }),
   setActiveMessages: (messages) => set({ activeMessages: messages }),
   setActiveSegments: (segments) => set({ activeSegments: segments }),
-  activateConversation: (id, conversation, messages, segments) =>
-    set({ activeConversationId: id, activeConversation: conversation, activeMessages: messages, activeSegments: segments }),
+  activateConversation: (id, conversation, messages, segments) => {
+    set({ activeConversationId: id, activeConversation: conversation, activeMessages: messages, activeSegments: segments })
+    useUiStore.getState().closeLightbox()
+    useUiStore.getState().closeContextMenu()
+  },
   clearAll: () => set({ summaries: [], activeConversationId: null, activeConversation: null, activeMessages: [], activeSegments: [] }),
 }))

@@ -3551,20 +3551,29 @@ html[data-theme="dark"] mark.search-highlight-current {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 40px;
   background: var(--overlay-bg);
   backdrop-filter: blur(4px);
   cursor: zoom-out;
 }
 
+/* 图片 stage：占满视口，图片在其中居中。
+   padding 为 close / prev / next / footer 预留安全空间，图片尺寸只影响图片本身。 */
+.attachment-lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 64px 88px 64px;
+}
+
+/* 图片：小图保持原始尺寸（width/height auto，不放大），大图按 stage 可用区域等比缩小。
+   不覆盖 footer / close / prev / next —— 这些是独立的 viewport 层 UI。 */
 .attachment-lightbox-image {
-  max-width: 92vw;
-  max-height: 84vh;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
@@ -3594,25 +3603,99 @@ html[data-theme="dark"] mark.search-highlight-current {
   background: rgba(0, 0, 0, 0.75);
 }
 
-.attachment-lightbox-meta {
+/* 上一张 / 下一张：固定于视口左右中部，不参与图片布局，不随图片尺寸移动 */
+.attachment-lightbox-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  max-width: 92vw;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: background 0.15s;
+  z-index: 1;
+}
+
+.attachment-lightbox-nav:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.attachment-lightbox-nav--prev {
+  left: 20px;
+}
+
+.attachment-lightbox-nav--next {
+  right: 20px;
+}
+
+/* footer：视口层，固定在窗口底部。无论图片 128×128 还是 1024×1024，
+   bottom 坐标完全不变 —— 这是本轮核心验收项。 */
+.attachment-lightbox-footer {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100vw - 32px);
+  min-width: 0;
+  height: 38px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(28, 28, 30, 0.72);
+  color: rgba(255, 255, 255, 0.9);
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.85);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+/* 左侧 metadata：唯一可被压缩的部分。counter / save 永不消失。 */
+.attachment-lightbox-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .attachment-lightbox-name {
-  max-width: 40vw;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
 }
 
+.attachment-lightbox-dims,
+.attachment-lightbox-size {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.attachment-lightbox-sep {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.attachment-lightbox-counter {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .attachment-lightbox-save {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -3633,6 +3716,29 @@ html[data-theme="dark"] mark.search-highlight-current {
 .attachment-lightbox-save:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* 响应式：窄窗口按信息优先级逐级让位（file size → filename 宽度）。
+   save 与 counter 始终保持可见。 */
+@media (max-width: 560px) {
+  .attachment-lightbox-size,
+  .attachment-lightbox-sep--size {
+    display: none;
+  }
+
+  .attachment-lightbox-name {
+    max-width: 140px;
+  }
+}
+
+@media (max-width: 460px) {
+  .attachment-lightbox-name {
+    max-width: 90px;
+  }
+
+  .attachment-lightbox-stage {
+    padding: 52px 56px 80px 56px;
+  }
 }
 
 /* ========================================

@@ -19,6 +19,7 @@ import type { MessageAttachment } from '../../../shared/types/conversation'
 import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/constants'
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import { modelSupportsImage, historyHasImage } from '../../packages/imageCapability'
+import { toPreviewImage } from '../../packages/conversationPreviewImages'
 
 function formatResetTime(resetAt: number): string {
   const d = new Date(resetAt * 1000)
@@ -376,7 +377,7 @@ export function Composer() {
           attachments={draftAttachments}
           disabled={isStreamingForCurrent || importing}
           onRemove={handleRemoveDraft}
-          onPreview={openLightbox}
+          onPreview={(att) => openLightbox(att.id, toPreviewImage(att))}
         />
         {importErrors.length > 0 && (
           <div className="composer-attachment-errors">
