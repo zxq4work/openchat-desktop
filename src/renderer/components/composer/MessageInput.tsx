@@ -11,9 +11,12 @@ interface Props {
   onPasteImages: (files: File[]) => void
   // 仅有图片、无文字时也应允许 Enter 发送
   hasDraftAttachments: boolean
+  // blocking binding / 图片能力不满足时为 true：Enter 发送同样被拦截，
+  // 保证键盘快捷键与 Send 按钮的 disabled 状态一致。
+  sendBlocked?: boolean
 }
 
-export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, hasDraftAttachments }: Props) {
+export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, hasDraftAttachments, sendBlocked }: Props) {
   const status = useChatStreamStore((s) => s.status)
   const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
@@ -38,6 +41,10 @@ export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, ha
       e.preventDefault()
       if (isCurrentConversationStreaming) {
         // 当前会话正在流式生成，忽略回车，不停止也不发送
+        return
+      } else if (sendBlocked) {
+        // binding 失效 / 图片能力不满足：与 Send 按钮 disabled 保持一致，不发送。
+        // 输入框仍可编辑、草稿保留，用户可修复配置后再发送。
         return
       } else if (text.trim() || hasDraftAttachments) {
         onSend()

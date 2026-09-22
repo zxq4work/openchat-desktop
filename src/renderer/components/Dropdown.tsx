@@ -4,6 +4,10 @@ import { createPortal } from 'react-dom'
 export interface DropdownOption {
   value: string
   label: string
+  // 失效选项（如历史绑定的 Provider 已不兼容）：可选但不可重新选中。
+  disabled?: boolean
+  // 失效/警告样式（warning 图标 + 警告色文本），仅用于展示当前无效绑定。
+  invalid?: boolean
 }
 
 interface DropdownProps {
@@ -14,6 +18,8 @@ interface DropdownProps {
   placeholder?: string
   ariaLabel?: string
   title?: string
+  // 整体禁用触发器（如 binding 失效时不允许编辑依赖当前 Model 的参数）。
+  disabled?: boolean
 }
 
 interface MenuPosition {
@@ -37,6 +43,7 @@ export function Dropdown({
   placeholder,
   ariaLabel,
   title,
+  disabled,
 }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<MenuPosition>({
@@ -128,18 +135,19 @@ export function Dropdown({
   return (
     <div
       ref={rootRef}
-      className={`dropdown${open ? ' open' : ''}${className ? ` ${className}` : ''}`}
+      className={`dropdown${open ? ' open' : ''}${className ? ` ${className}` : ''}${disabled ? ' disabled' : ''}`}
     >
       <button
         type="button"
         className="dropdown-trigger"
-        onClick={() => (open ? close() : openMenu())}
+        disabled={disabled}
+        onClick={() => (disabled ? undefined : open ? close() : openMenu())}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
         title={title}
       >
-        <span className={`dropdown-value${selected ? '' : ' placeholder'}`}>
+        <span className={`dropdown-value${selected ? '' : ' placeholder'}${selected?.invalid ? ' invalid' : ''}`}>
           {selected ? selected.label : placeholder ?? '请选择'}
         </span>
         <span className="dropdown-caret" aria-hidden="true" />
@@ -166,8 +174,9 @@ export function Dropdown({
                 type="button"
                 role="option"
                 aria-selected={opt.value === value}
-                className={`dropdown-item${opt.value === value ? ' selected' : ''}`}
-                onClick={() => handleSelect(opt.value)}
+                disabled={opt.disabled}
+                className={`dropdown-item${opt.value === value ? ' selected' : ''}${opt.invalid ? ' invalid' : ''}${opt.disabled ? ' disabled' : ''}`}
+                onClick={() => { if (!opt.disabled) handleSelect(opt.value) }}
               >
                 {opt.label}
               </button>

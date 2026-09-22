@@ -33,6 +33,8 @@ function makeProviderService(profile: ImageGenerationParameterProfile, captured:
   return {
     getImageAdapter: () => stubAdapter(captured),
     getImageGenerationProfile: () => profile,
+    // binding 兼容性门禁会查询当前 Provider registry
+    listSafe: () => [{ id: 'prov-1', name: 'Test Image', protocol: 'image_generations', models: ['custom-image-model'] }],
   } as never
 }
 
@@ -69,6 +71,8 @@ async function setup(profile: ImageGenerationParameterProfile) {
     defaultImageSize: null,
     defaultImageQuality: null,
     defaultImageBackground: null,
+    providerNameSnapshot: null,
+    modelNameSnapshot: null,
     createdAt: now,
     updatedAt: now,
   }

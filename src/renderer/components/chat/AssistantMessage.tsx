@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useContext } from 'react'
 import type { Message } from '../../../shared/types/conversation'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
+import { useConversationStore } from '../../stores/conversationStore'
 import { useModelStore } from '../../stores/modelStore'
 import { useImageGenerationStore } from '../../stores/imageGenerationStore'
 import { useUiStore } from '../../stores/uiStore'
 import { imageAttachments, thumbnailUrl } from '../../packages/attachmentUrl'
 import { parseRequestedDims, fitSlot, IMAGE_SLOT_MAX } from '../../packages/imageSlot'
+import { shouldShowWaitingIndicator, isStreamOwner, selectAnswerContent } from '../../packages/streamOwnership'
 import { MarkdownRenderer } from '../MarkdownRenderer'
 import { ScrollContainerContext } from './ScrollContainerContext'
 import { probeLayoutRead } from '../../packages/layoutReadDiag'
@@ -17,7 +19,22 @@ interface Props {
 
 export const AssistantMessage = React.memo(function AssistantMessage({ message }: Props) {
   const streamState = useChatStreamStore()
-  const isStreaming = streamState.activeAssistantMessageId === message.id && streamState.status === 'streaming'
+  // 会话类型归属：聊天语义的「生成中...」只在 chat 会话展示。
+  // 图片生成助手消息落库状态也是 'streaming'（内部生成态，由占位骨架表达），
+  // 若不按会话类型隔离，切换回图片会话会「串」出聊天用的「生成中...」。
+  const activeConversationType = useConversationStore((s) => s.activeConversation?.type)
+  // live stream 归属闸门（串台 / 重复拼接修复的核心）：
+  // 本消息必须同时匹配 streamingConversationId 与 streamingAssistantMessageId（双匹配），
+  // 才被认定为当前 live answer 的 owner。activeAssistantMessageId 只是「UI 焦点」，
+  // 不作为归属依据；DB 历史遗留的 status='streaming' 也不构成 owner。
+  const isOwner = isStreamOwner(
+    message.conversationId,
+    message.id,
+    streamState.streamingConversationId,
+    streamState.streamingAssistantMessageId
+  )
+  // 精确的单条流式判定（仅当前活跃流目标消息），用于 reasoning / 搜索等 chat-only 展示。
+  const isStreaming = isOwner && streamState.status === 'streaming'
   const openLightbox = useUiStore((s) => s.openLightbox)
   // 图片生成结果：assistant 消息此前不渲染 attachments，这里补齐图片网格。
   const generatedImages = imageAttachments(message.attachments)
@@ -137,15 +154,15 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
     : message.webSearchResults ?? []
   const hasSearchResults = searchResults.length > 0
 
-  // Answer 文本数据源：以 message.status 为准，而非 stream 的 isStreaming。
-  // 关键：completion 时 message.status 变为 'completed'，rawContent 立即只取
-  // message.content（已在同一 setActiveMessages 中原子写入完整文本），
-  // 不再拼 bufferedText，避免「final content + old buffer」或「old content + empty buffer」
-  // 的双 store 中间帧。
+  // Answer 文本数据源（唯一事实源，二选一，绝不叠加）：
+  //   - live owner → 直接用本轮 live answer（bufferedText）；
+  //   - 其它 → 用 persisted message.content。
+  // 绝不做 message.content + bufferedText —— DB 中途落盘的累积正文会与 live buffer 重复拼接，
+  // 每次 hydrate（含点击已 active 的会话）都会把已落盘前缀再拼一遍 → ABABC / ABCABC。
   const isMessageSettled = message.status === 'completed' || message.status === 'stopped' || message.status === 'failed'
   const rawContent = isMessageSettled
     ? message.content
-    : message.content + streamState.bufferedText
+    : selectAnswerContent(message.content, streamState.bufferedText, isOwner)
 
   const codexModels = useModelStore((s) => s.models)
   const isCodex = !!message.modelId && codexModels.some((m) => m.id === message.modelId)
@@ -245,7 +262,17 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
     panel.scrollTop = scrollHeight
   }, [isStreaming, reasoningDisplayMode, livePanelExpanded, liveReasoningText])
 
-  const statusBadge = message.status === 'streaming' ? '生成中...' :
+  // 唯一的「等待回答」指示（不再有第二套）。仅当本消息是 live owner、chat 会话、
+  // status 处于 in-flight（pending/streaming）、且尚无可见正文时显示。reasoning 不计入
+  // → 思考阶段仍显示；第一段正文出现后立即消失。正文数据源固定为 rawContent（见上），
+  // 因此不会出现「正文已经在流 + 底下还挂一个等待提示」两套并存。
+  const hasVisibleAnswerContent = rawContent.trim().length > 0
+  const statusBadge = shouldShowWaitingIndicator({
+    isLiveOwner: isOwner,
+    conversationType: activeConversationType,
+    messageStatus: message.status,
+    hasVisibleAnswerContent,
+  }) ? '生成中...' :
     message.status === 'stopped' ? '已停止' :
     message.status === 'failed' ? '失败' : null
 
@@ -436,10 +463,11 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
       )}
 
       <div className="message-content">
+        {/* 正文只有一种渲染分支；「等待回答」不再由这里的 “...” 表达，
+            而是统一交给下方唯一的 message-status（生成中...）指示，
+            避免同一生成同时出现两套等待提示。 */}
         {rawContent ? (
           <MarkdownRenderer messageId={message.id} settled={isMessageSettled}>{rawContent}</MarkdownRenderer>
-        ) : isStreaming ? (
-          <div>...</div>
         ) : null}
       </div>
 

@@ -42,6 +42,7 @@ export class ConversationRepository {
              current_segment_id, use_model_instructions, web_search_enabled,
              codex_search_mode, search_engine, provider_config_id,
              default_image_size, default_image_quality, default_image_background,
+             provider_name_snapshot, model_name_snapshot,
              created_at, updated_at
       FROM conversations WHERE id = ?
     `, [id])
@@ -61,8 +62,9 @@ export class ConversationRepository {
         current_segment_id, use_model_instructions, web_search_enabled,
         codex_search_mode, search_engine, provider_config_id,
         default_image_size, default_image_quality, default_image_background,
+        provider_name_snapshot, model_name_snapshot,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.type,
@@ -80,6 +82,8 @@ export class ConversationRepository {
       conversation.defaultImageSize ?? null,
       conversation.defaultImageQuality ?? null,
       conversation.defaultImageBackground ?? null,
+      conversation.providerNameSnapshot ?? null,
+      conversation.modelNameSnapshot ?? null,
       conversation.createdAt,
       conversation.updatedAt,
     ])
@@ -175,6 +179,16 @@ export class ConversationRepository {
     )
   }
 
+  // 写入 binding 名称快照（Provider/Model 失效时的展示兜底）。
+  // 仅记录「绑定时看到的名称」，不作为发送配置使用。
+  updateBindingSnapshot(id: string, providerName: string | null, modelName: string | null): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET provider_name_snapshot = ?, model_name_snapshot = ?, updated_at = ? WHERE id = ?`,
+      [providerName ?? null, modelName ?? null, Date.now(), id]
+    )
+  }
+
   updateCodexSearchMode(id: string, mode: 'hosted' | 'standalone'): void {
     const db = this.storage.database
     db.run(
@@ -219,8 +233,10 @@ export class ConversationRepository {
       defaultImageSize: row[13] ? String(row[13]) : null,
       defaultImageQuality: row[14] ? String(row[14]) : null,
       defaultImageBackground: row[15] ? String(row[15]) : null,
-      createdAt: Number(row[16]),
-      updatedAt: Number(row[17]),
+      providerNameSnapshot: row[16] ? String(row[16]) : null,
+      modelNameSnapshot: row[17] ? String(row[17]) : null,
+      createdAt: Number(row[18]),
+      updatedAt: Number(row[19]),
     }
   }
 }

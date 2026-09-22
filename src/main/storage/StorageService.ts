@@ -164,6 +164,17 @@ export class StorageService {
       changed = true
     }
 
+    // 迁移：conversations 表 binding 名称快照（Provider/Model 失效时展示历史名称）。
+    // nullable，不回填：老数据打开时按当前 registry lazy 回退，写 binding 时补写。
+    if (!convColumnNames.includes('provider_name_snapshot')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN provider_name_snapshot TEXT")
+      changed = true
+    }
+    if (!convColumnNames.includes('model_name_snapshot')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN model_name_snapshot TEXT")
+      changed = true
+    }
+
     // 迁移：provider_configs 表
     const tables = this.db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_configs'")
     if (!tables.length || !tables[0].values.length) {
@@ -441,6 +452,8 @@ export class StorageService {
         codex_search_mode TEXT NOT NULL DEFAULT 'hosted',
         search_engine TEXT NOT NULL DEFAULT 'bing',
         provider_config_id TEXT,
+        provider_name_snapshot TEXT,
+        model_name_snapshot TEXT,
         default_image_size TEXT,
         default_image_quality TEXT,
         default_image_background TEXT,

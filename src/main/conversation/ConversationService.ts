@@ -63,8 +63,13 @@ export class ConversationService {
     this.setupStreamEvents()
   }
 
-  onStreamEvent(handler: (event: StreamEvent) => void): void {
+  onStreamEvent(handler: (event: StreamEvent) => void): () => void {
     this.streamHandlers.push(handler)
+    // 返回 disposer：Retry / service 重建前先解绑旧实例，避免同一 handler 重复订阅。
+    return () => {
+      const idx = this.streamHandlers.indexOf(handler)
+      if (idx >= 0) this.streamHandlers.splice(idx, 1)
+    }
   }
 
   private emitStreamEvent(event: StreamEvent): void {
@@ -92,6 +97,8 @@ export class ConversationService {
       defaultImageSize: null,
       defaultImageQuality: null,
       defaultImageBackground: null,
+      providerNameSnapshot: null,
+      modelNameSnapshot: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
       }))
@@ -140,6 +147,8 @@ export class ConversationService {
       defaultImageSize: null,
       defaultImageQuality: null,
       defaultImageBackground: null,
+      providerNameSnapshot: null,
+      modelNameSnapshot: null,
       createdAt: now,
       updatedAt: now,
     }

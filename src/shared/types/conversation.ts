@@ -16,6 +16,11 @@ export interface Conversation {
   codexSearchMode: 'hosted' | 'standalone'
   searchEngine: 'bing' | 'baidu' | 'google'
   providerConfigId: string | null
+  // Binding 名称快照：仅用于「Provider/Model 已失效」时向用户展示历史上绑定的是什么。
+  // 绝不作为发送配置使用（发送永远按当前 registry + providerConfigId/modelId 解析）。
+  // 旧数据可能为空 —— 打开时按当前 registry lazy 回退，写 binding 时补写。
+  providerNameSnapshot: string | null
+  modelNameSnapshot: string | null
   // Image Generation 会话默认图片参数（type=image_generation 时使用）
   defaultImageSize: string | null
   defaultImageQuality: string | null

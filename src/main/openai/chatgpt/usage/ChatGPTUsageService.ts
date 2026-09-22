@@ -30,8 +30,13 @@ export class ChatGPTUsageService {
     this.client = new ChatGPTUsageClient(credentialManager)
   }
 
-  onChange(handler: UsageChangeHandler): void {
+  onChange(handler: UsageChangeHandler): () => void {
     this.listeners.push(handler)
+    // 返回 disposer：Retry / service 重建前先解绑旧实例，避免同一 handler 重复订阅。
+    return () => {
+      const idx = this.listeners.indexOf(handler)
+      if (idx >= 0) this.listeners.splice(idx, 1)
+    }
   }
 
   /**

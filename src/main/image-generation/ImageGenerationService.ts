@@ -11,6 +11,7 @@ import { ProviderConfigService } from '../providers/ProviderConfigService'
 import { AttachmentService } from '../services/attachments/AttachmentService'
 import { ImageGenerationError, type ImageGenerationErrorCode } from '../providers/imageGenerationErrors'
 import { validateRequestedParams, reconcileImageDefaults, validateInputImageCount } from '../../shared/image-generation/parameterProfile'
+import { resolveConversationBinding, bindingBlockedMessage } from '../../shared/conversation/capabilities'
 
 export interface ImageGenerationParams {
   size?: string | null
@@ -69,8 +70,13 @@ export class ImageGenerationService {
     this.attachmentService = service
   }
 
-  onStreamEvent(handler: (event: ImageGenerationStreamEvent) => void): void {
+  onStreamEvent(handler: (event: ImageGenerationStreamEvent) => void): () => void {
     this.streamHandlers.push(handler)
+    // 返回 disposer：Retry / service 重建前先解绑旧实例，避免同一 handler 重复订阅。
+    return () => {
+      const idx = this.streamHandlers.indexOf(handler)
+      if (idx >= 0) this.streamHandlers.splice(idx, 1)
+    }
   }
 
   private emit(event: ImageGenerationStreamEvent): void {
@@ -94,6 +100,18 @@ export class ImageGenerationService {
     }
 
     const providerConfigId = conversation.providerConfigId
+    // Binding 兼容性门禁：会话类型（conversation.type = image_generation）权威，
+    // Provider 协议只是兼容性约束。Provider 被改成聊天协议 / 被删除只代表「原绑定失效」，
+    // 按实际 binding 状态给出提示，不改变会话类型。
+    const binding = resolveConversationBinding({
+      conversationType: conversation.type,
+      providerConfigId,
+      modelId: conversation.defaultModelId,
+      providers: this.providerConfigService.listSafe(),
+    })
+    if (binding.status === 'provider_incompatible' || binding.status === 'provider_missing' || binding.status === 'model_missing') {
+      throw new ImageGenerationError('IMAGE_GENERATION_UNSUPPORTED', bindingBlockedMessage(binding.status, conversation.type))
+    }
     const adapter = this.providerConfigService.getImageAdapter(providerConfigId)
     if (!adapter) {
       throw new ImageGenerationError('IMAGE_GENERATION_UNSUPPORTED', '当前会话未配置 Image Generations 服务')

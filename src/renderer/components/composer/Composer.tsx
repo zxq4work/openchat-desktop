@@ -20,6 +20,8 @@ import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/constants'
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import { modelSupportsImage, historyHasImage } from '../../packages/imageCapability'
 import { toPreviewImage } from '../../packages/conversationPreviewImages'
+import { resolveConversationBinding, bindingBlockedMessage } from '../../../shared/conversation/capabilities'
+import { ComposerNotice, type ComposerNoticeData } from './ComposerNotice'
 
 function formatResetTime(resetAt: number): string {
   const d = new Date(resetAt * 1000)
@@ -65,6 +67,30 @@ export function Composer() {
   const composerRef = useRef<HTMLDivElement>(null)
 
   const currentConversation = activeConversation ?? null
+
+  // 统一 binding 解析：会话类型权威（conversation.type），Provider 协议仅作兼容性约束。
+  const binding = currentConversation
+    ? resolveConversationBinding({
+        conversationType: currentConversation.type,
+        providerConfigId: currentConversation.providerConfigId,
+        modelId: currentConversation.defaultModelId,
+        providers,
+      })
+    : null
+
+  // binding 失效：provider_missing / provider_incompatible / model_missing 才是 blocking。
+  // unconfigured 表示「未绑定 → 走 ChatGPT Codex 默认路径」，可正常发送，不阻止、不提示。
+  const bindingBlocked = !!binding && binding.status !== 'valid' && binding.status !== 'unconfigured'
+
+  // 单一 notice slot：同一时刻只渲染一条，按优先级取最高：
+  // 1) runtime error（网络 / API / IPC 等，可恢复的配置问题不应盖过它）
+  // 2) blocking binding warning（可恢复的配置问题）
+  // 注意：binding warning 不会被丢弃 —— runtime error 清除后自动重新显示。
+  const composerNotice: ComposerNoticeData | null = error
+    ? { variant: 'error', message: error }
+    : bindingBlocked && binding && currentConversation
+      ? { variant: 'warning', message: bindingBlockedMessage(binding.status, currentConversation.type) }
+      : null
 
   // 切换会话时，先持久化旧草稿，再加载新草稿与新会话的未发送图片
   useEffect(() => {
@@ -225,6 +251,8 @@ export function Composer() {
   // 且所选模型不支持图片输入 → 阻止发送并保留草稿。
   const requiresImage = draftAttachments.length > 0 || historyHasImage(activeMessages)
   const supportsImage = modelSupportsImage(currentConversation, models, providers)
+  // 图片能力不满足：有图片上下文但所选模型不支持图片输入 → 禁用发送。
+  const imageCapabilityBlocked = requiresImage && !supportsImage
 
   const handleSend = async () => {
     console.log('[Composer] handleSend entry activeConversationId=%s text=%s streamingStatus=%s currentError=%s attachments=%d', activeConversation?.id ?? 'null', text.trim() ? `"${text.trim().slice(0, 30)}"` : '(empty)', useChatStreamStore.getState().status, useChatStreamStore.getState().error, draftAttachments.length)
@@ -232,8 +260,17 @@ export function Composer() {
     if (!text.trim() && draftAttachments.length === 0) { console.log('[Composer] handleSend SKIP: empty text and no attachments'); return }
     if (isExhausted) { console.log('[Composer] handleSend SKIP: exhausted'); return }
 
+    // 会话类型权威：chat 会话的 Provider binding 失效时，先于 IPC 提示用户重新选择。
+    // 绝不把「原供应商已不再支持聊天」误报为「会话已锁定为图片生成」。
+    // 该失效文案已由统一 notice slot 常驻渲染，这里只拦截发送，
+    // 不写入 transient error，避免同一提示出现两份。
+    if (bindingBlocked) {
+      console.log('[Composer] handleSend BLOCKED: binding %s', binding?.status)
+      return
+    }
+
     // 发送前图片能力拦截（与 Main 侧门禁一致，先于 IPC 提示用户）
-    if (requiresImage && !supportsImage) {
+    if (imageCapabilityBlocked) {
       setError('当前话题包含图片上下文，所选模型不支持图片输入。请选择支持图片的模型，或开始新话题。')
       console.log('[Composer] handleSend BLOCKED: image required but model unsupported')
       return
@@ -298,6 +335,9 @@ export function Composer() {
           assistantMsg,
         ])
         setActiveAssistantMessage(assistantMsg.id)
+        // 记录本轮 live stream 的稳定身份：Main 返回的真实 assistant message id。
+        // 之后所有 live buffer 归属都以它为唯一依据，直到 turn-completed / error / stop 才清除。
+        useChatStreamStore.getState().setStreamingAssistantMessageId(assistantMsg.id)
       }
 
       if (streamState.errorCode || streamState.errorMessage) {
@@ -328,6 +368,7 @@ export function Composer() {
       setStatus('idle')
       setActiveAssistantMessage(null)
       useChatStreamStore.getState().setStreamingConversationId(null)
+      useChatStreamStore.getState().setStreamingAssistantMessageId(null)
     }
   }
 
@@ -335,6 +376,7 @@ export function Composer() {
     setStatus('stopping')
     setActiveAssistantMessage(null)
     useChatStreamStore.getState().setStreamingConversationId(null)
+    useChatStreamStore.getState().setStreamingAssistantMessageId(null)
     await window.openchat.chat.interrupt()
 
     // 刷新消息列表以获取更新后的状态（stopped）
@@ -370,8 +412,11 @@ export function Composer() {
             {usage.resetAt ? `，将于 ${formatResetTime(usage.resetAt)} 恢复。` : '。'}
           </div>
         )}
-        {error && (
-          <div className="composer-error">{error}</div>
+        {/* 统一提示条：同一时刻只渲染一个 notice slot（runtime error 优先于 binding warning） */}
+        {composerNotice && (
+          <ComposerNotice variant={composerNotice.variant}>
+            {composerNotice.message}
+          </ComposerNotice>
         )}
         <AttachmentStrip
           attachments={draftAttachments}
@@ -393,6 +438,7 @@ export function Composer() {
           onStop={handleStop}
           onPasteImages={handleImport}
           hasDraftAttachments={draftAttachments.length > 0}
+          sendBlocked={bindingBlocked || imageCapabilityBlocked}
         />
         <div className="composer-controls">
           <AttachButton onClick={handlePickImages} disabled={isStreamingForCurrent || importing || !currentConversation} />
@@ -403,7 +449,13 @@ export function Composer() {
           <CodexSearchModeSelector />
           <SearchEngineSelector />
           <div className="composer-spacer" />
-          <SendButton onSend={handleSend} onStop={handleStop} hasText={(text.trim().length > 0 || draftAttachments.length > 0) && !isExhausted} />
+          <SendButton
+            onSend={handleSend}
+            onStop={handleStop}
+            hasText={(text.trim().length > 0 || draftAttachments.length > 0) && !isExhausted}
+            blockedByBinding={bindingBlocked}
+            blockedByImageCapability={imageCapabilityBlocked}
+          />
         </div>
       </div>
       {dragOver && !isStreamingForCurrent && (

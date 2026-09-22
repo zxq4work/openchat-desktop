@@ -20,7 +20,7 @@ import type { SearchEngine } from '../web-search/WebSearchService'
 import { googleSearchBrowser } from '../web-search/GoogleSearchBrowserService'
 import { writeBootTheme, type BootTheme } from '../bootstrap/BootPreferences'
 
-interface Services {
+export interface Services {
   appServerProcess: { isRunning: boolean } | null
   settingsRepository: {
     get: (key: string) => string | null
@@ -41,7 +41,7 @@ interface Services {
     cancelLogin: () => Promise<void>
     logout: () => Promise<void>
     currentStatus: string
-    onStatusChange?: (handler: (status: string) => void) => void
+    onStatusChange?: (handler: (status: string) => void) => void | (() => void)
   } | null
   modelService: {
     fetchModels: () => Promise<ModelInfo[]>
@@ -67,13 +67,14 @@ interface Services {
     newTopic: (id: string) => ContextSegment | null
     sendMessage: (id: string, text: string, attachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
-    onStreamEvent: (handler: (event: unknown) => void) => void
+    // 返回 disposer：ChatGPT 路径与 appserver legacy ConversationService 均已返回解绑函数。
+    onStreamEvent: (handler: (event: unknown) => void) => () => void
   } | null
   imageGenerationService: {
     generate: (conversationId: string, prompt: string, params: { size?: string | null; quality?: string | null; background?: string | null; outputFormat?: string | null }, inputAttachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message }>
     interrupt: () => Promise<void>
     listGenerations: (conversationId: string) => import('../../shared/types/conversation').ImageGeneration[]
-    onStreamEvent: (handler: (event: unknown) => void) => void
+    onStreamEvent: (handler: (event: unknown) => void) => () => void
   } | null
   credentialManager: OAuthCredentialManager | null
   usageService: ChatGPTUsageService | null
@@ -606,10 +607,30 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
   ipcMain.handle(IPC_CHANNELS.GOOGLE_SEARCH_OPEN_SESSION, (): void => {
     googleSearchBrowser.openSession()
   })
+}
+
+// ===== Service Runtime Event Forwarders (Main -> Renderer) =====
+// 与「静态 IPC handler 注册」解耦的原因：
+// registerIpcHandlers 现在会在 services 初始化之前早期执行（保证错误页 / Retry / get-state 任意时刻可用）。
+// 若在此刻用可选链挂接 service 事件订阅，services 尚为 null 会被静默跳过，导致流式事件（CHAT_DELTA /
+// turn-completed / image-generation-* / usage）永远送不到 Renderer —— 即「生成完成但界面停在等待」。
+// 因此把「依赖 service 实例已存在」的 listener 注册拆到本函数，只在 services 真正就绪后调用。
+//
+// 幂等：重复调用（Retry / 多次 init-success）会先 dispose 上一组订阅，再重新绑定当前实例，
+// 保证「同一时刻只有一组 forwarding listener」，绝不重复订阅。
+let serviceEventDisposers: Array<() => void> = []
+
+export function bindServiceEventForwarders(services: Services, getMainWindow: () => BrowserWindow | null): void {
+  console.log('[event-forwarder] disposing previous bindings')
+  for (const dispose of serviceEventDisposers) {
+    try { dispose() } catch (err) { console.error('[event-forwarder] dispose failed:', err) }
+  }
+  serviceEventDisposers = []
 
   // ===== Auth Events (Main -> Renderer) =====
   if (services.authService?.onStatusChange) {
-    services.authService.onStatusChange((status: string) => {
+    console.log('[event-forwarder] binding auth service')
+    const dispose = services.authService.onStatusChange((status: string) => {
       const win = getMainWindow()
       if (!win) return
       win.webContents.send(IPC_CHANNELS.AUTH_CHANGED, status)
@@ -622,78 +643,101 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
         services.usageService?.stopAutoRefresh()
       }
     })
+    if (typeof dispose === 'function') serviceEventDisposers.push(dispose)
   }
 
-  // ===== Events (Main -> Renderer) =====
-  services.usageService?.onChange((view) => {
-    const win = getMainWindow()
-    if (!win) return
-    win.webContents.send(IPC_CHANNELS.CODEX_USAGE_CHANGED, view)
-  })
+  // ===== Usage (Main -> Renderer) =====
+  if (services.usageService) {
+    console.log('[event-forwarder] binding usage service')
+    const usageService = services.usageService
+    const dispose = usageService.onChange((view) => {
+      const win = getMainWindow()
+      if (!win) return
+      win.webContents.send(IPC_CHANNELS.CODEX_USAGE_CHANGED, view)
+    })
+    if (typeof dispose === 'function') serviceEventDisposers.push(dispose)
+  }
 
-  services.imageGenerationService?.onStreamEvent((event) => {
-    const win = getMainWindow()
-    if (!win) return
-    const e = event as { type: string }
-    switch (e.type) {
-      case 'image-generation-started':
-        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_STARTED, event)
-        break
-      case 'image-generation-completed':
-        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, event)
-        break
-      case 'image-generation-failed':
-        win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_FAILED, event)
-        break
-    }
-  })
+  // ===== Image Generation (Main -> Renderer) =====
+  if (services.imageGenerationService) {
+    console.log('[event-forwarder] binding image generation service')
+    const imageGenerationService = services.imageGenerationService
+    const dispose = imageGenerationService.onStreamEvent((event) => {
+      const win = getMainWindow()
+      if (!win) return
+      const e = event as { type: string }
+      switch (e.type) {
+        case 'image-generation-started':
+          win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_STARTED, event)
+          break
+        case 'image-generation-completed':
+          console.log('[event-forwarder] image completed')
+          win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, event)
+          break
+        case 'image-generation-failed':
+          console.log('[event-forwarder] image failed')
+          win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_FAILED, event)
+          break
+      }
+    })
+    if (typeof dispose === 'function') serviceEventDisposers.push(dispose)
+  }
 
-  services.conversationService?.onStreamEvent((event) => {
-    const win = getMainWindow()
-    if (!win) return
+  // ===== Chat (Main -> Renderer) =====
+  if (services.conversationService) {
+    console.log('[event-forwarder] binding conversation service')
+    const conversationService = services.conversationService
+    const dispose = conversationService.onStreamEvent((event) => {
+      const win = getMainWindow()
+      if (!win) return
 
-    const e = event as { type: string; conversationId?: string }
+      const e = event as { type: string; conversationId?: string }
 
-    switch (e.type) {
-      case 'delta':
-        win.webContents.send(IPC_CHANNELS.CHAT_DELTA, event)
-        break
-      case 'reasoning-started':
-        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_STARTED, event)
-        break
-      case 'reasoning-delta':
-        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_DELTA, event)
-        break
-      case 'reasoning-completed':
-        win.webContents.send(IPC_CHANNELS.CHAT_REASONING_COMPLETED, event)
-        break
-      case 'turn-completed':
-        win.webContents.send(IPC_CHANNELS.CHAT_TURN_COMPLETED, event)
-        break
-      case 'error':
-        win.webContents.send(IPC_CHANNELS.CHAT_ERROR, event)
-        break
-      case 'web-search-started':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_STARTED, event)
-        break
-      case 'web-search-completed':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_COMPLETED, event)
-        break
-      case 'web-search-error':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, event)
-        break
-      case 'web-search-call-started':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_STARTED, event)
-        break
-      case 'web-search-call-completed':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_COMPLETED, event)
-        break
-      case 'web-search-call-failed':
-        win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_FAILED, event)
-        break
-      case 'stream-reset':
-        win.webContents.send(IPC_CHANNELS.CHAT_STREAM_RESET, event)
-        break
-    }
-  })
+      switch (e.type) {
+        case 'delta':
+          win.webContents.send(IPC_CHANNELS.CHAT_DELTA, event)
+          break
+        case 'reasoning-started':
+          win.webContents.send(IPC_CHANNELS.CHAT_REASONING_STARTED, event)
+          break
+        case 'reasoning-delta':
+          win.webContents.send(IPC_CHANNELS.CHAT_REASONING_DELTA, event)
+          break
+        case 'reasoning-completed':
+          win.webContents.send(IPC_CHANNELS.CHAT_REASONING_COMPLETED, event)
+          break
+        case 'turn-completed':
+          console.log('[event-forwarder] chat turn-completed')
+          win.webContents.send(IPC_CHANNELS.CHAT_TURN_COMPLETED, event)
+          break
+        case 'error':
+          win.webContents.send(IPC_CHANNELS.CHAT_ERROR, event)
+          break
+        case 'web-search-started':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_STARTED, event)
+          break
+        case 'web-search-completed':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_COMPLETED, event)
+          break
+        case 'web-search-error':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_ERROR, event)
+          break
+        case 'web-search-call-started':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_STARTED, event)
+          break
+        case 'web-search-call-completed':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_COMPLETED, event)
+          break
+        case 'web-search-call-failed':
+          win.webContents.send(IPC_CHANNELS.CHAT_WEB_SEARCH_CALL_FAILED, event)
+          break
+        case 'stream-reset':
+          win.webContents.send(IPC_CHANNELS.CHAT_STREAM_RESET, event)
+          break
+      }
+    })
+    if (typeof dispose === 'function') serviceEventDisposers.push(dispose)
+  }
+
+  console.log(`[event-forwarder] bound ${serviceEventDisposers.length} forwarder(s)`)
 }

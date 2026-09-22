@@ -48,6 +48,14 @@ export function ConversationItem({ summary, active }: Props) {
   }, [menuOpen])
 
   const handleClick = async () => {
+    // 点击当前已 active 的会话应为 no-op：不重新拉取、不重新 hydrate activeMessages。
+    // 否则会在流式期间用 DB 中途落盘的 content 覆盖 live 渲染基线，触发正文重复拼接/抖动。
+    // 这是一层 UI 保护；底层 live answer 数据源本身也已做到 hydrate 幂等（见 streamOwnership）。
+    if (summary.id === activeConversationId) {
+      console.log('[stream-debug] conversation-click clicked=%s active=%s same=true (no-op)', summary.id.slice(0, 8), (activeConversationId ?? 'null').slice(0, 8))
+      return
+    }
+    console.log('[stream-debug] conversation-click clicked=%s active=%s same=false', summary.id.slice(0, 8), (activeConversationId ?? 'null').slice(0, 8))
     const t0 = performance.now()
     markConversationSwitch()
     const data = await window.openchat.conversations.get(summary.id)

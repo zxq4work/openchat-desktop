@@ -138,7 +138,7 @@ export function App() {
     rlog('renderer ready sent')
 
     // 主动拉取一次（覆盖「push 已发出但早于 listener」的历史丢失）
-    const applyState = (state: { canFinish: boolean; initError: { timedOut: boolean; message: string } | null }, src: string) => {
+    const applyState = (state: { canFinish: boolean; servicesReady: boolean; initError: { timedOut: boolean; message: string } | null }, src: string) => {
       rlog(`BOOT_GET_STATE response canFinish=${state.canFinish} servicesReady=${state.servicesReady} initError=${state.initError ? 'yes' : 'no'}`)
       if (cancelled) return
       // 持久错误态：即便错过 BOOT_INIT_ERROR push，也能进入降级界面。
@@ -305,6 +305,12 @@ export function App() {
         }
         pendingDeltas.push(e.text)
         startFlush()
+        // 临时诊断：确认 delta 归属，不打印正文，仅长度/ID（验证后删除）。
+        const st = useChatStreamStore.getState()
+        console.log('[stream-debug] delta conv=%s streamMsg=%s deltaLen=%d bufferLen=%d',
+          (e.conversationId ?? '?').slice(0, 8),
+          (st.streamingAssistantMessageId ?? 'null').slice(0, 8),
+          e.text.length, st.bufferedText.length)
       }
     }))
 
@@ -574,6 +580,7 @@ export function App() {
       reasoningTextAccum = ''
       useChatStreamStore.getState().setStatus('idle')
       useChatStreamStore.getState().setStreamingConversationId(null)
+      useChatStreamStore.getState().setStreamingAssistantMessageId(null)
       useChatStreamStore.getState().setActiveAssistantMessage(null)
       useChatStreamStore.getState().setBufferedText('')
       useChatStreamStore.getState().setReasoningStatus('idle')

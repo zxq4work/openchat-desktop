@@ -4,11 +4,13 @@ import { useImageGenerationStore } from '../../stores/imageGenerationStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useUiStore } from '../../stores/uiStore'
-import { Dropdown } from '../Dropdown'
+import { Dropdown, type DropdownOption } from '../Dropdown'
 import { AttachButton } from './AttachButton'
 import { AttachmentStrip } from './AttachmentStrip'
+import { ComposerNotice, type ComposerNoticeData } from './ComposerNotice'
 import { buildParamOptions, isValueAllowed, PARAM_DEFAULT_VALUE, profileSupportsImageToImage, maxInputImagesForProfile } from '../../packages/imageGenerationParams'
 import { cleanIpcErrorMessage } from '../../packages/ipcError'
+import { resolveConversationBinding, invalidBindingLabel, bindingBlockedMessage, canUseProviderModels, canEditImageParams } from '../../../shared/conversation/capabilities'
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import type { MessageAttachment } from '../../../shared/types/conversation'
 import { toPreviewImage } from '../../packages/conversationPreviewImages'
@@ -37,6 +39,7 @@ export function ImageComposer() {
   const genConversationId = useImageGenerationStore((s) => s.conversationId)
   const setError = useChatStreamStore((s) => s.setError)
   const openLightbox = useUiStore((s) => s.openLightbox)
+  const focusRequestId = useUiStore((s) => s.focusRequestId)
   // 输入框上方只提示「发送前」可预见的错误：本地校验 + Main 发送前校验拒绝。
   // 这些错误发生在消息创建之前，没有对应的 AssistantMessage 可承载，只能在此提示。
   // 生成过程中的失败（image-generation-failed）已落库到 assistant message 并由
@@ -52,16 +55,71 @@ export function ImageComposer() {
 
   const isGeneratingHere = phase === 'generating' && genConversationId === activeConversationId
 
+  // 会话切换、新建或复用空白会话时聚焦 prompt 输入框（与 Chat 的 MessageInput 同一生命周期语义）。
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus()
+    })
+  }, [activeConversationId, focusRequestId])
+
   // 图片生成服务商：只列出 protocol=image_generations 的 Provider
   const imageProviders = providers.filter((p) => p.protocol === 'image_generations')
-  const currentProvider = activeConversation?.providerConfigId
+  // 统一 binding 解析：会话类型权威（conversation.type = image_generation）。
+  // Provider 被改成聊天协议 / 被删除时，binding 失效但会话类型不变。
+  const binding = activeConversation
+    ? resolveConversationBinding({
+        conversationType: activeConversation.type,
+        providerConfigId: activeConversation.providerConfigId,
+        modelId: activeConversation.defaultModelId,
+        providers,
+      })
+    : null
+  const currentProvider = binding?.provider ?? null
+  // 完整类型的 registry Provider（binding.provider 是窄化的 BindingProviderLike）。
+  // Profile 只在它是当前绑定的 Provider 时才有意义。
+  const registryProvider = activeConversation?.providerConfigId
     ? providers.find((p) => p.id === activeConversation.providerConfigId) ?? null
     : null
-  const isImageProvider = currentProvider?.protocol === 'image_generations'
+  // Provider 层是否可用（未被删除、协议仍兼容 image_generation）→ 可展示其 models。
+  // 关键：model_missing（Provider 有效、原图片模型失效）仍为 true，继续展示该 Provider 其余图片模型；
+  // provider_incompatible（已改成聊天协议）时为 false —— 其 models 已是聊天模型，绝不能进图片模型 Select。
+  const canUseCurrentProviderModels = canUseProviderModels(currentProvider, binding?.status)
+  // 发送门禁更严：必须 Provider + Model 全部有效（valid）才允许生成。
+  const bindingValid = binding?.status === 'valid'
   const currentModelId = activeConversation?.defaultModelId ?? null
 
+  // Provider 层失效：Provider 已删除或协议不兼容时，补一个 disabled 的 synthetic option，
+  // 避免 Select 空白。model_missing 时 Provider 本身可用（已在 imageProviders 中），无需补。
+  const buildInvalidProviderOption = (): DropdownOption | null => {
+    if (!activeConversation || !binding) return null
+    if (binding.status !== 'provider_incompatible' && binding.status !== 'provider_missing') return null
+    const label = invalidBindingLabel({
+      status: binding.status,
+      conversationType: activeConversation.type,
+      providerName: currentProvider?.name ?? activeConversation.providerNameSnapshot ?? null,
+      modelName: activeConversation.modelNameSnapshot ?? activeConversation.defaultModelId,
+    })
+    if (!label) return null
+    return { value: activeConversation.providerConfigId ?? '__invalid_binding__', label, disabled: true, invalid: true }
+  }
+  const invalidProviderOption = buildInvalidProviderOption()
+  const providerOptions: DropdownOption[] = invalidProviderOption
+    ? [invalidProviderOption, ...imageProviders.map((p) => ({ value: p.id, label: p.name }))]
+    : imageProviders.map((p) => ({ value: p.id, label: p.name }))
+
+  // binding 失效：provider_missing / provider_incompatible / model_missing 才是 blocking。
+  // unconfigured 走下方「自动选中第一个图片服务」引导，不提示。
+  const bindingBlocked = !!binding && binding.status !== 'valid' && binding.status !== 'unconfigured'
+
+  // 图片参数是否可编辑/可操作：仅当 binding 完全 valid 时才允许。
+  // 关键：registryProvider 是按 id 查到的 Provider，即使其协议已改成 chat 仍会命中，
+  // 且 DB 中可能残留旧的 image_generation_profile_json —— 因此绝不能用「Provider 对象存在」
+  // 来驱动参数可编辑性，必须叠加 binding 判定，否则 incompatible 后旧 Profile 仍会让参数可编辑。
+  // 禁止编辑不代表清空：会话已保存的参数值原样保留，binding 恢复 valid 后自动重新可编辑。
+  const paramsEditable = canEditImageParams(binding?.status)
+
   // Profile 驱动的参数可见性：未启用的参数不渲染下拉，且不发送该字段。
-  const profile = currentProvider?.imageGenerationProfile
+  const profile = registryProvider?.imageGenerationProfile
   const sizeConfig = profile?.size
   const qualityConfig = profile?.quality
   const backgroundConfig = profile?.background
@@ -91,14 +149,14 @@ export function ImageComposer() {
     setCustomSizeInput('')
   }, [currentProvider?.id])
 
-  // Profile 收紧（禁用尺寸 / 关闭自定义）时收起自定义尺寸输入，
-  // 否则输入框会停留在已不再支持的状态。
+  // Profile 收紧（禁用尺寸 / 关闭自定义）或 binding 失效（参数不可编辑）时收起自定义尺寸输入，
+  // 否则输入框会停留在已不再支持 / 不应可编辑的状态。
   useEffect(() => {
-    if (!sizeConfig?.enabled || !sizeConfig.allowCustom) {
+    if (!paramsEditable || !sizeConfig?.enabled || !sizeConfig.allowCustom) {
       setCustomSizeOpen(false)
       setCustomSizeInput('')
     }
-  }, [sizeConfig?.enabled, sizeConfig?.allowCustom])
+  }, [paramsEditable, sizeConfig?.enabled, sizeConfig?.allowCustom])
 
   // 尺寸下拉选项：预定义值 + 若当前保存的是自定义值（不在预定义列表）则补一项，保证下拉能正确显示它。
   // 关键：仅当该已保存值在当前 Profile 下仍然合法时才补。否则用户收紧 Provider 参数
@@ -185,15 +243,16 @@ export function ImageComposer() {
     if (importErrorTimerRef.current) clearTimeout(importErrorTimerRef.current)
   }, [])
 
-  // 自动选中第一个图片服务商，避免新会话无 Provider 可用
+  // 自动选中第一个图片服务商，避免新会话无 Provider 可用。
+  // 仅对「未配置」binding 生效，绝不替失效的历史绑定自动切换 Provider。
   useEffect(() => {
     if (!activeConversation) return
-    if (isImageProvider) return
+    if (binding?.status !== 'unconfigured') return
     if (imageProviders.length === 0) return
     const first = imageProviders[0]
     void handleProviderChange(first.id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConversation?.id, isImageProvider, imageProviders.length])
+  }, [activeConversation?.id, binding?.status, imageProviders.length])
 
   const handleProviderChange = async (providerId: string) => {
     if (!activeConversation) return
@@ -383,8 +442,14 @@ export function ImageComposer() {
     if (!activeConversation) return
     const prompt = text.trim()
     if (!prompt) return
-    if (!isImageProvider) {
-      setError('请先在设置中配置图片生成服务，并为本会话选择该服务。')
+    if (!bindingValid) {
+      // binding 失效（provider_missing / provider_incompatible / model_missing）时，
+      // 该文案已由上方 persistent warning 常驻渲染，这里只拦截生成，
+      // 不再写入 transient error，避免同一提示出现两份。
+      // 仅「未配置」没有 persistent warning，才用 transient error 引导用户去配置。
+      if (!binding || binding.status === 'unconfigured') {
+        setError('请先在设置中配置图片生成服务，并为本会话选择该服务。')
+      }
       return
     }
     if (!currentModelId) {
@@ -467,12 +532,49 @@ export function ImageComposer() {
 
   if (!activeConversation) return null
 
-  const modelOptions = (currentProvider?.models ?? []).map((m) => ({ value: m, label: m }))
+  // 仅 Provider 层可用时才列出其 models；provider_incompatible / provider_missing 时不展示
+  // （其 models 可能属于另一协议域，如图片会话里原 Provider 已改成聊天协议）。
+  const modelOptions: DropdownOption[] = canUseCurrentProviderModels
+    ? (currentProvider?.models ?? []).map((m) => ({ value: m, label: m }))
+    : []
+  // binding 失效时补 model 的 synthetic option，避免模型 Select 空白
+  if (
+    binding &&
+    binding.status !== 'valid' &&
+    binding.status !== 'unconfigured' &&
+    !modelOptions.some((o) => o.value === activeConversation.defaultModelId)
+  ) {
+    const modelName = activeConversation.modelNameSnapshot ?? activeConversation.defaultModelId
+    modelOptions.unshift({
+      value: activeConversation.defaultModelId ?? '__invalid_model__',
+      label: modelName ? `${modelName}（模型已不可用）` : '原模型已不可用',
+      disabled: true,
+      invalid: true,
+    })
+  }
 
   // 有参考图时切换占位文案，提示用户描述"如何修改"。
   const placeholder = inputAttachments.length > 0
     ? '描述你想如何修改或融合这些图片…'
     : '描述你想生成的图片…'
+
+  // 生成门禁：必须 binding 完全有效且有模型，才允许生成。与按钮 disabled 一致。
+  const generateBlocked = !bindingValid || !currentModelId
+
+  // 单一 notice slot（与 Chat 同组件、同优先级），同一时刻只渲染一条：
+  // 1) runtime error（发送前校验 / IPC 拒绝）
+  // 2) blocking binding warning（Provider/Model 失效）
+  // 3) 参考图能力不匹配 warning（有参考图但当前 Provider 不支持 —— 阻塞生成）
+  // 4) info：尚未配置任何图片服务（无 warning 时兜底）
+  const composerNotice: ComposerNoticeData | null = error
+    ? { variant: 'error', message: error }
+    : bindingBlocked && binding
+      ? { variant: 'warning', message: bindingBlockedMessage(binding.status, activeConversation.type) }
+      : inputAttachments.length > 0 && !supportsImageToImage
+        ? { variant: 'warning', message: '当前图片供应商不支持参考图生成。可切换回支持参考图的服务，或删除参考图。' }
+        : imageProviders.length === 0
+          ? { variant: 'info', message: '尚未配置图片生成服务，请在「设置 › 模型服务」中添加协议为 Image Generations 的服务。' }
+          : null
 
   return (
     <div
@@ -484,19 +586,11 @@ export function ImageComposer() {
       onDrop={handleDrop}
     >
       <div className="composer-inner">
-        {error && <div className="composer-error">{error}</div>}
-
-        {imageProviders.length === 0 && (
-          <div className="composer-image-hint">
-            尚未配置图片生成服务，请在「设置 › 模型服务」中添加协议为 Image Generations 的服务。
-          </div>
-        )}
-
-        {/* 参考图存在但当前 Provider 不支持：给出明确提示，保留参考图不静默丢弃 */}
-        {inputAttachments.length > 0 && !supportsImageToImage && (
-          <div className="composer-image-hint composer-image-hint--warn">
-            当前图片供应商不支持参考图生成。可切换回支持参考图的服务，或删除参考图。
-          </div>
+        {/* 统一提示条：与 Chat 使用同一 ComposerNotice，同一时刻只渲染一个 notice slot */}
+        {composerNotice && (
+          <ComposerNotice variant={composerNotice.variant}>
+            {composerNotice.message}
+          </ComposerNotice>
         )}
 
         <AttachmentStrip
@@ -537,9 +631,9 @@ export function ImageComposer() {
           )}
           <Dropdown
             className="provider-selector"
-            value={currentProvider?.id ?? ''}
+            value={activeConversation.providerConfigId ?? ''}
             placeholder={imageProviders.length ? '选择图片服务' : '无服务'}
-            options={imageProviders.map((p) => ({ value: p.id, label: p.name }))}
+            options={providerOptions}
             onChange={(v) => void handleProviderChange(v)}
             ariaLabel="选择图片生成服务"
           />
@@ -569,6 +663,7 @@ export function ImageComposer() {
                 }}
                 ariaLabel="选择图片尺寸"
                 title="尺寸"
+                disabled={!paramsEditable}
               />
               {customSizeOpen && (
                 <div className="image-custom-size-row">
@@ -604,6 +699,7 @@ export function ImageComposer() {
               onChange={(v) => void handleImageDefaultChange('quality', v)}
               ariaLabel="选择图片质量"
               title="质量"
+              disabled={!paramsEditable}
             />
           )}
           {backgroundConfig?.enabled && (
@@ -615,6 +711,7 @@ export function ImageComposer() {
               onChange={(v) => void handleImageDefaultChange('background', v)}
               ariaLabel="选择图片背景"
               title="背景"
+              disabled={!paramsEditable}
             />
           )}
           {outputFormatConfig?.enabled && (
@@ -626,6 +723,7 @@ export function ImageComposer() {
               onChange={(v) => setOutputFormatValue(v === PARAM_DEFAULT_VALUE ? '' : v)}
               ariaLabel="选择输出格式"
               title="输出格式"
+              disabled={!paramsEditable}
             />
           )}
           <div className="composer-spacer" />
@@ -639,7 +737,7 @@ export function ImageComposer() {
             <button
               className="send-btn"
               onClick={() => void handleGenerate()}
-              disabled={!text.trim() || !isImageProvider || !currentModelId}
+              disabled={!text.trim() || generateBlocked}
               title="生成图片"
               aria-label="生成图片"
             >

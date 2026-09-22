@@ -23,8 +23,13 @@ export class AuthService {
     return { ...this.accountInfo }
   }
 
-  onStatusChange(handler: (status: AuthStatus) => void): void {
+  onStatusChange(handler: (status: AuthStatus) => void): () => void {
     this.statusChangeHandlers.push(handler)
+    // 返回 disposer：Retry / service 重建前先解绑旧实例，避免同一 handler 重复订阅。
+    return () => {
+      const idx = this.statusChangeHandlers.indexOf(handler)
+      if (idx >= 0) this.statusChangeHandlers.splice(idx, 1)
+    }
   }
 
   private emitStatusChange(): void {

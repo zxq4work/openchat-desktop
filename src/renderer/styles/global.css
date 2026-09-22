@@ -60,6 +60,9 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
   --danger-hover: #DC2626;
   --danger-bg: rgba(239, 68, 68, 0.06);
   --danger-border: rgba(239, 68, 68, 0.12);
+  --warning: #B45309;
+  --warning-bg: rgba(217, 119, 6, 0.08);
+  --warning-border: rgba(217, 119, 6, 0.28);
   --success: #22C55E;
 
   --user-bg: #EAF3FF;
@@ -120,6 +123,9 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
   --danger-hover: #EF4444;
   --danger-bg: rgba(248, 113, 113, 0.1);
   --danger-border: rgba(248, 113, 113, 0.2);
+  --warning: #FBBF24;
+  --warning-bg: rgba(251, 191, 36, 0.12);
+  --warning-border: rgba(251, 191, 36, 0.3);
   --success: #34D399;
 
   --user-bg: #1E3A5F;
@@ -1145,16 +1151,51 @@ textarea {
   }
 }
 
-.composer-error {
+/* 统一 Composer 提示条（Chat / Image 共用同一视觉组件 ComposerNotice）。
+   三种 variant 结构完全一致，仅颜色不同；紧凑单行，自适应换行。
+   每个 Composer 同一时刻只渲染一个 notice slot。 */
+.composer-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   margin-bottom: 10px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
-  background: var(--danger-bg);
-  color: var(--danger);
   font-size: 13px;
+  line-height: 18px;
+  border: 1px solid transparent;
   white-space: pre-wrap;
   word-break: break-word;
-  border: 1px solid var(--danger-border);
+}
+
+.composer-notice-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 1px;
+}
+
+.composer-notice-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.composer-notice--warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: var(--warning-border);
+}
+
+.composer-notice--error {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.composer-notice--info {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-color: var(--border-color);
 }
 
 .composer-controls {
@@ -1510,6 +1551,42 @@ textarea {
 .dropdown-item.selected {
   background: var(--accent-light);
   color: var(--accent);
+}
+
+/* 失效 binding 选项：warning 图标 + 警告色文本 + 不可重新选择 */
+.dropdown-item.invalid {
+  color: var(--danger);
+}
+
+.dropdown-item.invalid::before {
+  content: '⚠ ';
+}
+
+.dropdown-item.invalid.selected {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.dropdown-item.disabled {
+  cursor: default;
+}
+
+.dropdown-item.disabled:hover {
+  background: transparent;
+  color: var(--danger);
+}
+
+.dropdown-item.disabled.selected:hover {
+  background: var(--danger-bg);
+}
+
+.dropdown-value.invalid {
+  color: var(--danger);
+}
+
+.dropdown.disabled .dropdown-trigger {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* ========================================
@@ -3880,23 +3957,6 @@ html[data-theme="dark"] mark.search-highlight-current {
   align-items: center;
   margin-right: 8px;
   color: var(--text-secondary);
-}
-
-/* 图片生成 Composer 提示 */
-.composer-image-hint {
-  margin-bottom: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-/* 参考图不受当前供应商支持时的警示提示（保留参考图，不静默丢弃） */
-.composer-image-hint--warn {
-  color: var(--danger, #d9534f);
-  border-color: var(--danger, #d9534f);
 }
 
 /* 生成能力编辑器（文生图 / 参考图生成） */

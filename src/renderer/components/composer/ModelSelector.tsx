@@ -3,7 +3,8 @@ import { useModelStore } from '../../stores/modelStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useProviderStore } from '../../stores/providerStore'
 import type { ModelInfo } from '../../../shared/types/model'
-import { Dropdown } from '../Dropdown'
+import { Dropdown, type DropdownOption } from '../Dropdown'
+import { resolveConversationBinding, invalidBindingLabel, canUseProviderModels } from '../../../shared/conversation/capabilities'
 
 export function ModelSelector() {
   const models = useModelStore((s) => s.models)
@@ -12,26 +13,49 @@ export function ModelSelector() {
   const providers = useProviderStore((s) => s.providers)
 
   const currentModelId = conversation?.defaultModelId ?? null
-  const currentProvider = conversation?.providerConfigId
-    ? providers.find((p) => p.id === conversation.providerConfigId)
+
+  // 统一 binding 解析：会话类型权威（conversation.type），Provider 协议仅作兼容性约束。
+  const binding = conversation
+    ? resolveConversationBinding({
+        conversationType: conversation.type,
+        providerConfigId: conversation.providerConfigId,
+        modelId: conversation.defaultModelId,
+        providers,
+      })
     : null
 
-  // 自定义服务：从服务商的模型列表中选择
-  const isCustomProvider = !!currentProvider
+  const currentProvider = binding?.provider ?? null
+  // 仅当当前 Provider 本身「可用」时才用它的模型列表：
+  //   valid / unconfigured / model_missing → 用当前 Provider 的 models。
+  // 关键：model_missing（Provider 有效、原模型失效）必须仍走自定义 Provider 路径，
+  // 展示 synthetic 旧模型 + 该 Provider 其余可用模型；绝不能掉进 Codex 默认模型列表。
+  // 仅 provider_missing / provider_incompatible（Provider 层失效）才不允许使用其 models；
+  // provider_incompatible 时 provider 的 models 属于另一协议域（图片模型），绝不能列进 chat Select。
+  const isCustomProvider = canUseProviderModels(currentProvider, binding?.status)
 
-  // 如果在离线状态下创建会话导致 defaultModelId 为空，恢复网络后自动补上默认模型
+  // 如果在离线状态下创建会话导致 defaultModelId 为空，恢复网络后自动补上默认模型。
+  // 仅在有效 / 未配置的 binding 下补默认值，绝不替失效的历史绑定自动切换 Provider。
   useEffect(() => {
     if (!conversation) return
     if (isCustomProvider) return
+    if (binding && binding.status !== 'unconfigured') return
     if (conversation.defaultModelId) return
     if (models.length === 0) return
 
     const defaultModel = models[0]
     handleChange(defaultModel)
-  }, [conversation?.id, isCustomProvider, models])
+  }, [conversation?.id, isCustomProvider, models, binding?.status])
 
   const handleChange = (model: ModelInfo) => {
     if (!conversation) return
+    // 从失效的历史绑定切到 Codex 默认路径：同步清空不兼容 / 已删除的 providerConfigId，
+    // 否则 binding 仍停留在 provider_incompatible，发送门禁会继续拦截。
+    const clearsProvider =
+      !!conversation.providerConfigId &&
+      (binding?.status === 'provider_incompatible' || binding?.status === 'provider_missing')
+    if (clearsProvider) {
+      window.openchat.conversations.updateProviderConfig(conversation.id, null)
+    }
     window.openchat.conversations.updateModel(conversation.id, model.id)
 
     // 推理强度修正
@@ -50,17 +74,34 @@ export function ModelSelector() {
     window.openchat.conversations.updateEffort(conversation.id, newEffort ?? '')
     setActiveConversation({
       ...conversation,
+      providerConfigId: clearsProvider ? null : conversation.providerConfigId,
       defaultModelId: model.id,
       defaultReasoningEffort: newEffort,
     })
   }
 
+  // 失效绑定的 synthetic option：仅展示当前历史绑定，disabled 不允许重选。
+  const buildInvalidOption = (): DropdownOption | null => {
+    if (!conversation || !binding) return null
+    if (binding.status === 'valid' || binding.status === 'unconfigured') return null
+    const label = invalidBindingLabel({
+      status: binding.status,
+      conversationType: conversation.type,
+      providerName: currentProvider?.name ?? conversation.providerNameSnapshot ?? null,
+      modelName: conversation.modelNameSnapshot ?? conversation.defaultModelId,
+    })
+    if (!label) return null
+    return { value: conversation.defaultModelId ?? '__invalid_binding__', label, disabled: true, invalid: true }
+  }
+  const invalidOption = buildInvalidOption()
+
   // 自定义服务模式：从 provider.models 构建可切换的下拉选项
-  if (isCustomProvider) {
-    const modelOptions = (currentProvider.models || []).map((m) => ({
+  if (isCustomProvider && currentProvider) {
+    const modelOptions: DropdownOption[] = (currentProvider.models || []).map((m) => ({
       value: m,
       label: m,
     }))
+    const options: DropdownOption[] = invalidOption ? [invalidOption, ...modelOptions] : modelOptions
 
     const handleCustomModelChange = (modelId: string) => {
       if (!conversation) return
@@ -74,21 +115,24 @@ export function ModelSelector() {
     return (
       <Dropdown
         className="model-selector"
-        value={currentModelId ?? (currentProvider.models[0] || '')}
+        value={currentModelId ?? (currentProvider.models?.[0] || '')}
         placeholder="无模型"
-        options={modelOptions}
+        options={options}
         onChange={handleCustomModelChange}
         ariaLabel="选择模型"
       />
     )
   }
 
+  // Codex 默认路径（无 Provider 绑定 / 历史 Provider 已失效）：
+  // Provider 已删除或协议不兼容时，补 synthetic option 展示历史绑定，避免 Select 空白。
+  const codexOptions: DropdownOption[] = models.map((model) => ({ value: model.id, label: model.displayName }))
   return (
     <Dropdown
       className="model-selector"
       value={currentModelId ?? ''}
       placeholder="无模型"
-      options={models.map((model) => ({ value: model.id, label: model.displayName }))}
+      options={invalidOption ? [invalidOption, ...codexOptions] : codexOptions}
       onChange={(id) => {
         const model = models.find((m) => m.id === id)
         if (model) handleChange(model)

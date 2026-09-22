@@ -13,7 +13,7 @@ import { SettingsRepository } from '../storage/SettingsRepository'
 import { ConversationService } from '../conversation/ConversationService'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import { APP_NAME, APP_TITLE, MIN_SPLASH_TOTAL_VISIBLE_MS, SPLASH_FADE_MS, SERVICE_INIT_TIMEOUT_MS, SERVICE_INIT_STAGE_WARN_MS } from '../../shared/constants'
-import { registerIpcHandlers } from '../ipc/handlers'
+import { registerIpcHandlers, bindServiceEventForwarders } from '../ipc/handlers'
 
 // ChatGPT Direct Provider
 import { ChatGPTSubscriptionProvider } from '../openai/chatgpt/ChatGPTSubscriptionProvider'
@@ -984,6 +984,10 @@ function markServicesReady(reason: string): void {
   servicesReady = true
   // 清除持久错误态（错误态下 Retry 成功时）。
   pendingInitError = null
+  // services 已就绪：绑定 service 运行时事件转发（流式 delta / turn-completed / image / usage）。
+  // 必须在此刻（而非 registerIpcHandlers 早期注册时）挂接，否则 services 尚为 null 会被静默跳过。
+  // 幂等：内部会先 dispose 上一组订阅，Retry / 多次 init-success 不会重复订阅。
+  bindServiceEventForwarders(services, () => mainWindow)
   // 通知 Renderer：Main 数据层就绪，应立即（重新）加载会话列表等数据。
   // 用 push + 短延时补发：Renderer 若在错误页/尚未挂载，可通过 getBootState().servicesReady 拉取。
   notifyRendererHydrate()

@@ -5,6 +5,7 @@ import { MessageRepository } from '../../storage/MessageRepository'
 import { ImageGenerationRepository } from '../../storage/ImageGenerationRepository'
 import { StorageService } from '../../storage/StorageService'
 import { resolveProviderSwitch } from '../../conversation/typeLocking'
+import { resolveConversationBinding, bindingBlockedMessage } from '../../../shared/conversation/capabilities'
 import { reconcileImageDefaults } from '../../../shared/image-generation/parameterProfile'
 import type {
   Conversation,
@@ -257,8 +258,13 @@ export class ChatGPTConversationService {
     this.webSearchConfig = webSearchConfig ?? { ...DEFAULT_WEB_SEARCH_CONFIG }
   }
 
-  onStreamEvent(handler: (event: StreamEvent) => void): void {
+  onStreamEvent(handler: (event: StreamEvent) => void): () => void {
     this.streamHandlers.push(handler)
+    // 返回 disposer：Retry / service 重建前先解绑旧实例，避免同一 handler 重复订阅。
+    return () => {
+      const idx = this.streamHandlers.indexOf(handler)
+      if (idx >= 0) this.streamHandlers.splice(idx, 1)
+    }
   }
 
   setAttachmentService(service: AttachmentService): void {
@@ -298,6 +304,8 @@ export class ChatGPTConversationService {
       defaultImageSize: null,
       defaultImageQuality: null,
       defaultImageBackground: null,
+      providerNameSnapshot: null,
+      modelNameSnapshot: null,
       createdAt: 0,
       updatedAt: s.updatedAt,
       }))
@@ -349,6 +357,8 @@ export class ChatGPTConversationService {
       defaultImageSize: null,
       defaultImageQuality: null,
       defaultImageBackground: null,
+      providerNameSnapshot: null,
+      modelNameSnapshot: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -448,13 +458,14 @@ export class ChatGPTConversationService {
 
   async updateModel(id: string, modelId: string): Promise<void> {
     const conversation = this.conversations.getById(id)
-    // chat 会话不得把模型切到图片生成 Provider 下的模型
-    if (conversation && conversation.type !== 'image_generation'
-      && conversation.providerConfigId
-      && this.providerConfigService.isImageGenerationProvider(conversation.providerConfigId)) {
-      throw new Error('当前会话已锁定为图片生成类型，不能切换到聊天模型')
-    }
+    if (!conversation) throw new Error('会话不存在')
+    // 记录 Provider/Model 名称快照，供失效时展示历史绑定。自定义 Provider 的模型名即 modelId。
+    // 不改变会话类型：模型切换只影响下一条消息使用的 model。
+    const provider = conversation.providerConfigId
+      ? this.providerConfigService.listSafe().find((p) => p.id === conversation.providerConfigId) ?? null
+      : null
     this.conversations.updateModel(id, modelId)
+    this.conversations.updateBindingSnapshot(id, provider?.name ?? conversation.providerNameSnapshot, modelId)
     await this.storage.save()
   }
 
@@ -517,9 +528,17 @@ export class ChatGPTConversationService {
     if (conversation.type === 'image_generation') {
       throw new Error('当前会话为图片生成会话，不能发送聊天消息')
     }
-    // 图片生成 Provider 不得用于 chat 会话
-    if (conversation.providerConfigId && this.providerConfigService.isImageGenerationProvider(conversation.providerConfigId)) {
-      throw new Error('当前会话已锁定为图片生成类型，不能切换到聊天模型')
+    // Provider binding 兼容性门禁。会话类型由 conversation.type 决定（权威），
+    // Provider 协议只是兼容性约束：Provider 被改成 image_generations 只代表「原绑定失效」，
+    // 绝不改变会话类型，也绝不把错误表述成「会话已锁定为图片生成」。
+    const binding = resolveConversationBinding({
+      conversationType: conversation.type,
+      providerConfigId: conversation.providerConfigId,
+      modelId: conversation.defaultModelId,
+      providers: this.providerConfigService.listSafe(),
+    })
+    if (binding.status === 'provider_incompatible' || binding.status === 'provider_missing' || binding.status === 'model_missing') {
+      throw new Error(bindingBlockedMessage(binding.status, conversation.type))
     }
 
     const segment = this.segments.getById(conversation.currentSegmentId)
@@ -2197,12 +2216,20 @@ User message: ${userText}${contextHint}`
       hasMessages,
     })
 
+    // Provider 名称快照 + 新 Provider 的第一个模型名快照（供失效时展示历史绑定）
+    const nextProvider = providerConfigId
+      ? this.providerConfigService.listSafe().find((p) => p.id === providerConfigId) ?? null
+      : null
+    const nextProviderName = nextProvider?.name ?? null
+    const nextModelName = nextProvider?.models?.[0] ?? conversation.modelNameSnapshot
+
     switch (action.kind) {
       case 'reject':
         throw new Error(action.reason)
       case 'update-provider':
         // 同类型内更换（或保持）Provider
         this.conversations.updateProviderConfigId(id, providerConfigId)
+        this.conversations.updateBindingSnapshot(id, nextProviderName, nextModelName)
         // 图片生成会话：Provider 切换后按新 Profile 做参数 reconciliation，
         // 清除新 Provider 不支持 / 非法的遗留默认值（不强行替换为新 Profile 的默认值）。
         if (conversation.type === 'image_generation') {
@@ -2214,11 +2241,13 @@ User message: ${userText}${contextHint}`
         // 空会话：image_generation → chat
         this.conversations.updateType(id, 'chat')
         this.conversations.updateProviderConfigId(id, providerConfigId)
+        this.conversations.updateBindingSnapshot(id, nextProviderName, nextModelName)
         await this.storage.save()
         return
       case 'lock-image':
         // 空会话：chat → image_generation，从此锁定
         this.conversations.lockImageGeneration(id, providerConfigId)
+        this.conversations.updateBindingSnapshot(id, nextProviderName, nextModelName)
         await this.storage.save()
         return
     }
