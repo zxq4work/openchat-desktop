@@ -88,10 +88,16 @@ const IPC_CHANNELS = {
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
   APP_READY: 'app:ready',
   BOOT_FINISH_SPLASH: 'boot:finish-splash',
+  BOOT_RENDERER_READY: 'boot:renderer-ready',
+  BOOT_GET_STATE: 'boot:get-state',
   BOOT_SET_THEME: 'boot:set-theme',
   BOOT_WINDOW_SHOWN: 'boot:window-shown',
   BOOT_SPLASH_PAINTED: 'boot:splash-painted',
   BOOT_OPACITY_GATE_READY: 'boot:opacity-gate-ready',
+  BOOT_INIT_ERROR: 'boot:init-error',
+  BOOT_RETRY_INIT: 'boot:retry-init',
+  BOOT_FINISH_ACK: 'boot:finish-ack',
+  BOOT_SERVICES_READY: 'boot:services-ready',
 } as const
 
 const openchat = {
@@ -329,6 +335,28 @@ const openchat = {
       ipcRenderer.on(IPC_CHANNELS.BOOT_FINISH_SPLASH, handler)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.BOOT_FINISH_SPLASH, handler)
     },
+    // 显式握手：Renderer 注册好 onFinishSplash listener 后主动声明，Main 据此才发送 finish。
+    notifyRendererReady: () => ipcRenderer.send(IPC_CHANNELS.BOOT_RENDERER_READY),
+    // 主动拉取 boot 状态（持久化补救路径，弥补任何丢失的 push）。
+    getBootState: (): Promise<{ canFinish: boolean; rendererFailed: boolean; servicesReady: boolean; initError: { timedOut: boolean; message: string } | null }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOOT_GET_STATE),
+    // Main services 就绪 → 触发 Renderer 数据 hydrate（会话列表等）。
+    onServicesReady: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on(IPC_CHANNELS.BOOT_SERVICES_READY, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BOOT_SERVICES_READY, handler)
+    },
+    // 完成 Splash 切换后的确认，仅用于让 Main 停止 resend 兜底。
+    ackFinishSplash: () => ipcRenderer.send(IPC_CHANNELS.BOOT_FINISH_ACK),
+    // 初始化失败 / 超时的错误态推送。
+    onInitError: (cb: (payload: { timedOut: boolean; message: string }) => void) => {
+      const handler = (_e: unknown, payload: { timedOut: boolean; message: string }) => cb(payload)
+      ipcRenderer.on(IPC_CHANNELS.BOOT_INIT_ERROR, handler)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.BOOT_INIT_ERROR, handler)
+    },
+    // 错误态下请求重试初始化。
+    retryInit: (): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.BOOT_RETRY_INIT),
     setBootTheme: (theme: 'light' | 'dark' | 'system') => ipcRenderer.invoke(IPC_CHANNELS.BOOT_SET_THEME, theme),
     onWindowShown: (cb: () => void) => {
       const handler = () => cb()

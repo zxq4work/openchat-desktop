@@ -36,3 +36,12 @@ export const SPLASH_CLEANUP_TIMEOUT_MS = SPLASH_FADE_MS + 100
 // Splash 背景色（与 index.html #boot-splash 及 global.css 主题一致）
 export const SPLASH_BG_LIGHT = '#F7F8FC'
 export const SPLASH_BG_DARK = '#0F172A'
+
+// services 初始化硬超时：超过后不再无限阻塞 Splash，而是进入错误态（展示「重试初始化」）。
+// 该值必须远大于冷启动正常路径（首次安装 / 冷启动含 token 刷新，实测最坏数秒）。
+export const SERVICE_INIT_TIMEOUT_MS = 20000
+// 单个初始化阶段的软超时：仅用于日志告警，不中断（阶段耗时超过即打印 [init-warn]）。
+export const SERVICE_INIT_STAGE_WARN_MS = 6000
+// Renderer 侧安全网：自 listener 注册起，若超过该时长仍未完成 Splash，
+// 主动调用 BOOT_GET_STATE 拉取 Main 当前状态，弥补任何丢失的 push。
+export const RENDERER_BOOT_STATE_POLL_MS = 4000

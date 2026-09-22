@@ -25,11 +25,14 @@ export class OAuthCredentialManager {
     this.oauthClient = oauthClient
   }
 
-  async initialize(): Promise<void> {
+  async initialize(opts: { deferTokenRefresh?: boolean } = {}): Promise<void> {
     this.credential = await this.store.load()
 
-    // 旧版本凭证可能缺少 email/planType/userId，强制刷新以获取 ID Token
-    if (this.credential && (!this.credential.email || !this.credential.planType || !this.credential.userId)) {
+    // 旧版本凭证可能缺少 email/planType/userId，正常情况下强制刷新以获取 ID Token。
+    // deferTokenRefresh=true 时跳过（网络操作），交由后台 ensureProfile() 补齐，
+    // 使启动阻塞路径只做本地文件读取，不因网络刷新卡住 Splash。
+    if (!opts.deferTokenRefresh &&
+      this.credential && (!this.credential.email || !this.credential.planType || !this.credential.userId)) {
       try {
         await this.refreshToken()
       } catch {
@@ -39,6 +42,17 @@ export class OAuthCredentialManager {
 
     if (this.credential) {
       console.log('[Account] logged in:', this.credential.email, '| plan:', this.credential.planType || 'unknown', '| userId:', this.credential.userId || 'unknown')
+    }
+  }
+
+  // 后台补齐旧版本凭证缺失的 ID Token 字段。幂等：字段齐全时立即返回，不发请求。
+  async ensureProfile(): Promise<void> {
+    if (!this.credential) return
+    if (this.credential.email && this.credential.planType && this.credential.userId) return
+    try {
+      await this.refreshToken()
+    } catch {
+      // 后台刷新失败保留现有凭证
     }
   }
 

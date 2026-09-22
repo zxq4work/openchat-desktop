@@ -1,4 +1,5 @@
 // 极轻量的启动入口：只做早期同步主题设置，然后立即加载 React 应用。
+import { rlog } from './boot-log'
 
 // 早期同步读取用户主题设置，让 Splash 首帧尽量匹配用户自定义主题
 const THEME_KEY = 'openchat.themeMode'
@@ -25,6 +26,7 @@ window.openchat.app.onWindowShown(() => {
 })
 
 window.openchat.app.notifyOpacityGateReady()
+rlog('bootstrap: opacity gate ready sent')
 
 // 立即加载 React 应用
 void import('./main')

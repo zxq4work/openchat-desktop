@@ -25,7 +25,10 @@ export class ChatGPTSubscriptionProvider {
     this.codexClient = codexClient
   }
 
-  async initialize(): Promise<void> {
-    await this.credentialManager.initialize()
+  // deferTokenRefresh：为 true 时只加载本地凭证，不在此处强制网络刷新 token。
+  // 启动阻塞路径只做本地文件读取；缺字段的旧凭证由后台 ensureProfile() 补齐，
+  // 避免首次安装 / 冷启动时 token 刷新（网络）长时间阻塞 Splash。
+  async initialize(opts: { deferTokenRefresh?: boolean } = {}): Promise<void> {
+    await this.credentialManager.initialize({ deferTokenRefresh: opts.deferTokenRefresh })
   }
 }

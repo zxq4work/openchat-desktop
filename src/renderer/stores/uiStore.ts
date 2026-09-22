@@ -42,6 +42,9 @@ interface UiState {
   setCurrentMatchIndex: (index: number) => void
   goToNextMatch: () => void
   goToPrevMatch: () => void
+  // 初始化失败 / 超时的降级错误态：非 null 时主界面替换为错误页 + 「重试初始化」。
+  initError: { timedOut: boolean; message: string } | null
+  initRetrying: boolean
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -88,4 +91,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     const prev = (currentMatchIndex - 1 + searchMatches.length) % searchMatches.length
     set({ currentMatchIndex: prev })
   },
+  initError: null,
+  initRetrying: false,
+  setInitError: (error) => set({ initError: error, initRetrying: false }),
+  setInitRetrying: (retrying) => set({ initRetrying: retrying }),
 }))

@@ -7,7 +7,6 @@ import { useThemeStore } from '../../stores/themeStore'
 import { ConversationList } from './ConversationList'
 
 export function Sidebar() {
-  const summaries = useConversationStore((s) => s.summaries)
   const setSummaries = useConversationStore((s) => s.setSummaries)
   const setActiveConversationId = useConversationStore((s) => s.setActiveConversationId)
   const setActiveConversation = useConversationStore((s) => s.setActiveConversation)
@@ -44,13 +43,8 @@ export function Sidebar() {
     ? `跟随系统（${resolvedTheme === 'light' ? '浅色' : '深色'}）`
     : themeMode === 'light' ? '浅色' : '深色'
 
-  useEffect(() => {
-    async function load() {
-      const list = await window.openchat.conversations.list()
-      setSummaries(list)
-    }
-    load()
-  }, [setSummaries])
+  // 会话列表的首次加载由 App 的 hydrateApplicationData() 统一负责（services-ready 驱动）。
+  // 此处不再做一次性 mount 加载：若 Main services 尚未就绪，列表 IPC 会返回空数组并被误记为已加载。
 
   const handleNewConversation = useCallback(async (type: 'chat' | 'image_generation' = 'chat') => {
     // 若当前活跃会话是空白且类型相同，直接复用，不新建

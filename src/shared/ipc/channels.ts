@@ -113,10 +113,22 @@ export const IPC_CHANNELS = {
   // App
   APP_READY: 'app:ready',
   BOOT_FINISH_SPLASH: 'boot:finish-splash',
+  // Renderer 显式声明自己已注册好 BOOT_FINISH_SPLASH listener（不再依赖 5s 推测）。
+  BOOT_RENDERER_READY: 'boot:renderer-ready',
+  // Renderer 主动拉取当前 boot 状态（错过 push 时的持久化补救路径）。
+  BOOT_GET_STATE: 'boot:get-state',
   BOOT_SET_THEME: 'boot:set-theme',
   BOOT_WINDOW_SHOWN: 'boot:window-shown',
   BOOT_SPLASH_PAINTED: 'boot:splash-painted',
   BOOT_OPACITY_GATE_READY: 'boot:opacity-gate-ready',
+  // 主界面错误态：初始化失败/超时后由 Main 推送给 Renderer，展示错误与「重试初始化」。
+  BOOT_INIT_ERROR: 'boot:init-error',
+  // Renderer 请求重试初始化（错误态下用户点击重试）。
+  BOOT_RETRY_INIT: 'boot:retry-init',
+  // Renderer 完成 Splash 切换后的确认，仅用于停止 resend 兜底。
+  BOOT_FINISH_ACK: 'boot:finish-ack',
+  // Main services 真正 Ready（首次成功或 Retry 成功后）推送，触发 Renderer 数据 hydrate。
+  BOOT_SERVICES_READY: 'boot:services-ready',
 
   // Google Search Session
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',

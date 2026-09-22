@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react'
+import React, { useEffect, useCallback, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useAuthStore } from '../stores/authStore'
@@ -12,13 +12,15 @@ import { useCodexUsageStore } from '../stores/codexUsageStore'
 import { useProviderStore, type SafeProviderConfig } from '../stores/providerStore'
 import { Sidebar } from '../components/sidebar/Sidebar'
 import { ChatView } from '../components/chat/ChatView'
+import { InitErrorScreen } from '../components/InitErrorScreen'
 import { ConversationSettingsDialog } from '../components/settings/ConversationSettingsDialog'
 import { SettingsDialog } from '../components/settings/SettingsDialog'
 import { presentSearchResults } from '../packages/SearchResultPresenter'
 import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
-import { STREAM_FLUSH_MS } from '../../shared/constants'
+import { STREAM_FLUSH_MS, RENDERER_BOOT_STATE_POLL_MS } from '../../shared/constants'
 import { finishBootSplash } from './boot-splash'
+import { rlog } from './boot-log'
 import { hastCacheStats, hastCacheResetStats, hastCacheClear } from '../packages/markdownHastCache'
 
 export function App() {
@@ -30,6 +32,13 @@ export function App() {
   const conversationSettingsOpen = useUiStore((s) => s.conversationSettingsOpen)
   const toast = useUiStore((s) => s.toast)
   const clearToast = useUiStore((s) => s.clearToast)
+  const initError = useUiStore((s) => s.initError)
+  const setInitError = useUiStore((s) => s.setInitError)
+
+  // 一次性挂载副作用去重：StrictMode 下 effect 会 mount→unmount→mount 执行两次，
+  // 导致 init()（models.refresh）、providers.list、codexUsage.get 等一次性拉取重复触发。
+  // 用 ref 标记「已发起过」，避免 dev 下重复请求；生产（StrictMode 不双调用）不受影响。
+  const bootInitStartedRef = useRef(false)
 
   useEffect(() => {
     if (toast) {
@@ -98,46 +107,99 @@ export function App() {
     }
   }, [])
 
-  // React 首次渲染完成后立即通知主进程（APP_READY）。
-  // 主进程根据 Splash 已显示时长决定何时回发 FINISH_SPLASH。
+  // Splash 结束：持久状态 + 双向握手。
+  // 1) 先注册 onFinishSplash listener（push 快速路径）。
+  // 2) 注册完成后显式 notifyRendererReady —— Main 只在此后才发 finish，杜绝「send 早于 listener」丢失。
+  // 3) 主动 getBootState 拉取（pull 补救路径）：即便错过 push，也能据 canFinish 立即结束 Splash。
+  // 4) 安全网定时轮询 getBootState，直到成功完成一次切换。
+  // 所有 finish 操作幂等（finishBootSplash 内部去重）。
   useEffect(() => {
     let cancelled = false
+    let finished = false
 
-    window.openchat.app.notifyReady()
-
-    const cleanupFinish = window.openchat.app.onFinishSplash(() => {
-      if (cancelled) return
+    const doFinish = (src: string) => {
+      if (cancelled || finished) return
+      finished = true
+      rlog(`splash finish via ${src}`)
+      // 立刻向 Main 确认，停止其 resend 兜底（不改变完成条件，仅去噪）。
+      window.openchat.app.ackFinishSplash()
       finishBootSplash()
+    }
+
+    // 先注册 listener
+    const cleanupFinish = window.openchat.app.onFinishSplash(() => {
+      rlog('BOOT_FINISH_SPLASH received')
+      doFinish('push')
     })
+    rlog('finish listener registered')
+
+    // 再声明 ready（顺序严格：listener 必先于 ready）
+    window.openchat.app.notifyRendererReady()
+    rlog('renderer ready sent')
+
+    // 主动拉取一次（覆盖「push 已发出但早于 listener」的历史丢失）
+    const applyState = (state: { canFinish: boolean; initError: { timedOut: boolean; message: string } | null }, src: string) => {
+      rlog(`BOOT_GET_STATE response canFinish=${state.canFinish} servicesReady=${state.servicesReady} initError=${state.initError ? 'yes' : 'no'}`)
+      if (cancelled) return
+      // 持久错误态：即便错过 BOOT_INIT_ERROR push，也能进入降级界面。
+      if (state.initError) setInitError(state.initError)
+      if (state.canFinish) doFinish(src)
+    }
+
+    window.openchat.app.getBootState().then((state) => applyState(state, 'get-state-initial'))
+      .catch(() => { /* 拉取失败由安全网轮询重试 */ })
+
+    // 安全网轮询：直到完成一次切换。间隔见 RENDERER_BOOT_STATE_POLL_MS。
+    const poll = window.setInterval(() => {
+      if (cancelled || finished) { window.clearInterval(poll); return }
+      window.openchat.app.getBootState().then((state) => applyState(state, 'get-state-poll'))
+        .catch(() => { /* 忽略，下轮再试 */ })
+    }, RENDERER_BOOT_STATE_POLL_MS)
+
+    // 首帧渲染完成通知主进程（APP_READY）。语义为「可结束的许可」，而非「已就绪」。
+    window.openchat.app.notifyReady()
+    rlog('APP_READY sent')
 
     return () => {
       cancelled = true
+      window.clearInterval(poll)
       cleanupFinish()
     }
   }, [])
 
+  // 初始化失败 / 超时：订阅 Main 推送的错误态，切到降级界面。
+  useEffect(() => {
+    const cleanup = window.openchat.app.onInitError((payload) => {
+      rlog(`init-error received: timedOut=${payload.timedOut} message=${payload.message}`)
+      setInitError(payload)
+    })
+    return () => { cleanup() }
+  }, [setInitError])
+
   // 初始化认证和模型
   useEffect(() => {
-    async function init() {
-      const account = await window.openchat.auth.getStatus()
-      setAuthStatus(account.loggedIn ? 'logged-in' : 'logged-out')
-      setAccount(account.email, account.planType, account.userId, account.accountId)
-
-      if (account.loggedIn) {
-        const models = await window.openchat.models.refresh()
-        setModels(models)
+    // services-ready 驱动的统一数据初始化：会话列表 / Provider / Usage / 认证。
+    // 幂等：可在「首次挂载」与「Main services 就绪推送」两个时机调用（含 Retry 成功场景）。
+    // 关键：会话列表不在 mount 时一次性加载 —— 若 Main services 尚未就绪，IPC 返回空数组，
+    // 会被误记为「已加载」；改为等 services-ready（或 getBootState().servicesReady）后再加载。
+    const hydrateApplicationData = async () => {
+      rlog('hydrate: conversations.list')
+      try {
+        const list = await window.openchat.conversations.list()
+        useConversationStore.getState().setSummaries(list)
+      } catch (err) {
+        rlog(`hydrate: conversations.list failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    init()
 
-    // 初始化 Provider 列表
-    window.openchat.providers.list().then((list) => {
-      useProviderStore.getState().setProviders(list as SafeProviderConfig[])
-    })
-
-    // 初始化 Codex Usage 状态
-    window.openchat.codexUsage.get().then((view) => {
-      useCodexUsageStore.getState().setUsage(view)
+    // 订阅务必无条件建立（不受下方一次性去重影响），否则 StrictMode 第二次 mount 会丢失监听。
+    const cleanupServicesReady = window.openchat.app.onServicesReady(() => {
+      rlog('services-ready received → hydrate')
+      // services 真正就绪：清除任何先前的初始化错误态（超时后底层 attempt 最终成功、
+      // 或 Retry 成功），使界面从错误页自愈回到主界面。
+      setInitError(null)
+      hydrateApplicationData()
+      loadProviders()
     })
 
     const cleanupUsage = window.openchat.codexUsage.onChanged((view) => {
@@ -163,7 +225,45 @@ export function App() {
       }
     })
 
+    // 一次性拉取组：StrictMode 会 mount→unmount→mount 执行两次 effect，
+    // 用 ref 保证认证 / 模型 / Provider / Usage 的首次拉取只发起一次（生产不受影响）。
+    if (!bootInitStartedRef.current) {
+      bootInitStartedRef.current = true
+
+      async function init() {
+        const account = await window.openchat.auth.getStatus()
+        setAuthStatus(account.loggedIn ? 'logged-in' : 'logged-out')
+        setAccount(account.email, account.planType, account.userId, account.accountId)
+
+        if (account.loggedIn) {
+          const models = await window.openchat.models.refresh()
+          setModels(models)
+        }
+      }
+      init()
+
+      loadProviders()
+
+      // 会话列表：只在 services 就绪后加载（避免拿到空数组）。
+      window.openchat.app.getBootState().then((state) => {
+        if (state.servicesReady) hydrateApplicationData()
+      }).catch(() => { /* 忽略，等服务-ready 推送 */ })
+
+      // 初始化 Codex Usage 状态
+      window.openchat.codexUsage.get().then((view) => {
+        useCodexUsageStore.getState().setUsage(view)
+      })
+    }
+
+    // Provider / Usage 初始化（services-ready 前可能为空列表/unknown，就绪后由推送再次刷新）
+    function loadProviders() {
+      window.openchat.providers.list().then((list) => {
+        useProviderStore.getState().setProviders(list as SafeProviderConfig[])
+      })
+    }
+
     return () => {
+      cleanupServicesReady()
       cleanupAuth()
       cleanupUsage()
     }
@@ -791,6 +891,11 @@ export function App() {
       useConversationStore.getState().setActiveSegments([])
     }
   }, [])
+
+  // 初始化失败 / 超时：进入降级错误界面，不渲染正常主界面。
+  if (initError) {
+    return <InitErrorScreen />
+  }
 
   return (
     <div className="app-container">
