@@ -621,7 +621,6 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 let serviceEventDisposers: Array<() => void> = []
 
 export function bindServiceEventForwarders(services: Services, getMainWindow: () => BrowserWindow | null): void {
-  console.log('[event-forwarder] disposing previous bindings')
   for (const dispose of serviceEventDisposers) {
     try { dispose() } catch (err) { console.error('[event-forwarder] dispose failed:', err) }
   }
@@ -629,7 +628,6 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
 
   // ===== Auth Events (Main -> Renderer) =====
   if (services.authService?.onStatusChange) {
-    console.log('[event-forwarder] binding auth service')
     const dispose = services.authService.onStatusChange((status: string) => {
       const win = getMainWindow()
       if (!win) return
@@ -648,7 +646,6 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
 
   // ===== Usage (Main -> Renderer) =====
   if (services.usageService) {
-    console.log('[event-forwarder] binding usage service')
     const usageService = services.usageService
     const dispose = usageService.onChange((view) => {
       const win = getMainWindow()
@@ -660,7 +657,6 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
 
   // ===== Image Generation (Main -> Renderer) =====
   if (services.imageGenerationService) {
-    console.log('[event-forwarder] binding image generation service')
     const imageGenerationService = services.imageGenerationService
     const dispose = imageGenerationService.onStreamEvent((event) => {
       const win = getMainWindow()
@@ -671,11 +667,9 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
           win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_STARTED, event)
           break
         case 'image-generation-completed':
-          console.log('[event-forwarder] image completed')
           win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_COMPLETED, event)
           break
         case 'image-generation-failed':
-          console.log('[event-forwarder] image failed')
           win.webContents.send(IPC_CHANNELS.IMAGE_GENERATION_FAILED, event)
           break
       }
@@ -685,7 +679,6 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
 
   // ===== Chat (Main -> Renderer) =====
   if (services.conversationService) {
-    console.log('[event-forwarder] binding conversation service')
     const conversationService = services.conversationService
     const dispose = conversationService.onStreamEvent((event) => {
       const win = getMainWindow()
@@ -707,7 +700,6 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
           win.webContents.send(IPC_CHANNELS.CHAT_REASONING_COMPLETED, event)
           break
         case 'turn-completed':
-          console.log('[event-forwarder] chat turn-completed')
           win.webContents.send(IPC_CHANNELS.CHAT_TURN_COMPLETED, event)
           break
         case 'error':
@@ -738,6 +730,4 @@ export function bindServiceEventForwarders(services: Services, getMainWindow: ()
     })
     if (typeof dispose === 'function') serviceEventDisposers.push(dispose)
   }
-
-  console.log(`[event-forwarder] bound ${serviceEventDisposers.length} forwarder(s)`)
 }

@@ -19,7 +19,9 @@ export function Sidebar() {
   const resolvedTheme = useThemeStore((s) => s.resolved)
   const cycleTheme = useThemeStore((s) => s.cycle)
 
-  // 「新对话」拆分为主按钮（新建聊天）+ 下拉箭头（可新建图片生成会话）。
+  // 存在图片生成供应商时，「新对话」才拆分为主按钮 + 下拉箭头（可新建图片生成会话）。
+  // 否则保持界面简洁，直接一个按钮创建聊天会话。
+  const hasImageProvider = providers.some((p) => p.protocol === 'image_generations')
   const [menuOpen, setMenuOpen] = useState(false)
   const newBtnRef = useRef<HTMLDivElement>(null)
 
@@ -111,55 +113,61 @@ export function Sidebar() {
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <div className="new-conversation-split" ref={newBtnRef}>
+        {hasImageProvider ? (
+          <div className="new-conversation-split" ref={newBtnRef}>
+            <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
+              + 新对话
+            </button>
+            <button
+              className="new-conversation-caret"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="更多新建选项"
+              aria-label="更多新建选项"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="new-conversation-menu" role="menu">
+                <button
+                  className="new-conversation-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    void handleNewConversation('chat')
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                  新建聊天
+                </button>
+                <button
+                  className="new-conversation-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    void handleNewConversation('image_generation')
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                  </svg>
+                  新建图片生成
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
           <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
             + 新对话
           </button>
-          <button
-            className="new-conversation-caret"
-            onClick={() => setMenuOpen((v) => !v)}
-            title="更多新建选项"
-            aria-label="更多新建选项"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M6 9l6 6 6-6" />
-            </svg>
-          </button>
-          {menuOpen && (
-            <div className="new-conversation-menu" role="menu">
-              <button
-                className="new-conversation-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false)
-                  void handleNewConversation('chat')
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
-                新建聊天
-              </button>
-              <button
-                className="new-conversation-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false)
-                  void handleNewConversation('image_generation')
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="M21 15l-5-5L5 21" />
-                </svg>
-                新建图片生成
-              </button>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       <ConversationList />

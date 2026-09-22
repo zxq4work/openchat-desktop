@@ -305,12 +305,6 @@ export function App() {
         }
         pendingDeltas.push(e.text)
         startFlush()
-        // 临时诊断：确认 delta 归属，不打印正文，仅长度/ID（验证后删除）。
-        const st = useChatStreamStore.getState()
-        console.log('[stream-debug] delta conv=%s streamMsg=%s deltaLen=%d bufferLen=%d',
-          (e.conversationId ?? '?').slice(0, 8),
-          (st.streamingAssistantMessageId ?? 'null').slice(0, 8),
-          e.text.length, st.bufferedText.length)
       }
     }))
 
