@@ -3,10 +3,7 @@ import { ResponsesStreamParser } from './ResponsesStreamParser'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { createRequest } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
-import {
-  CHATGPT_MODEL_CATALOG_CLIENT_VERSION,
-  CHATGPT_MODEL_CATALOG_FALLBACK_VERSION,
-} from '../models/modelCatalogVersion'
+import { CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL } from '../models/modelCatalogDiscovery'
 
 // ---- Error Types ----
 
@@ -158,6 +155,7 @@ const BASE_URL = 'https://chatgpt.com'
 // ---- Pure helpers（导出以便单测；不含网络）----
 
 // 模型目录 URL：client_version 只能出现在这里，绝不出现在 /responses。
+// 参数本身由 backend 要求（省略会 400），其值使用 catalog discovery sentinel。
 export function buildModelsCatalogUrl(clientVersion: string): string {
   return `${BASE_URL}/backend-api/codex/models?client_version=${encodeURIComponent(clientVersion)}`
 }
@@ -186,38 +184,6 @@ export function buildResponsesHeaders(
     headers['x-openai-internal-codex-responses-lite'] = 'true'
   }
   return headers
-}
-
-// 判断 /models 的 4xx 响应是否表示 client_version 参数非法（而非鉴权/权限问题）。
-// 只有明确指向版本参数时才回退，避免把 401/403 误当作版本问题。
-//
-// 「version too old」是特例：它说明当前兼容版本已经过旧，再回退到更旧的 fallback 只会更旧，
-// 不可能解决问题，因此必须显式排除（否则 "client_version is too old" 会命中 client_version）。
-// 该情况交由上层打印安全日志并保留原错误路径，绝不自动猜新版本。
-//
-// 匹配语义：<version 标识> + 可选 "is" + "too old"，其中 version 标识为
-// client_version / client version / version（下划线或空格分隔均可）。
-// 覆盖全部常见写法，尤其是 "client_version is too old"（旧版 includes 漏掉的正是这一种）。
-const TOO_OLD_PATTERN = /\b(?:client[_ ]?version|version)\s+(?:is\s+)?too\s+old\b/i
-
-export function isCatalogVersionTooOld(status: number, body: string): boolean {
-  if (status < 400 || status >= 500) return false
-  if (status === 401 || status === 403) return false
-  return TOO_OLD_PATTERN.test(body)
-}
-
-export function isInvalidCatalogVersionStatus(status: number, body: string): boolean {
-  if (status < 400 || status >= 500) return false
-  if (status === 401 || status === 403) return false
-  // too-old 明确排除，绝不回退到更旧版本。
-  if (isCatalogVersionTooOld(status, body)) return false
-  const lower = body.toLowerCase()
-  return (
-    lower.includes('client_version') ||
-    lower.includes('client version') ||
-    lower.includes('unsupported version') ||
-    lower.includes('invalid version')
-  )
 }
 
 // 已知的 Responses SSE event 类型集合。未知 event 一律宽松忽略（不 throw、不终止 stream），
@@ -342,36 +308,21 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
   }
 
   async listModels(): Promise<ChatGPTModel[]> {
-    console.log('[Models] catalog compatibility version=%s', CHATGPT_MODEL_CATALOG_CLIENT_VERSION)
+    // Discovery 模式：只用 catalog discovery sentinel 请求当前完整 catalog。
+    // 没有 release-version fallback，也不根据 error body 猜测另一个 Codex release。
+    // 失败一律交给上层（ChatGPTModelService 刷新失败时保留既有 model state）。
+    console.log('[Models] catalog discovery sentinel=%s', CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL)
 
-    const primary = await this.fetchModelCatalog(CHATGPT_MODEL_CATALOG_CLIENT_VERSION)
-    if (primary.ok) {
-      return this.parseModelCatalog(primary.json)
+    const result = await this.fetchModelCatalog(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL)
+    if (!result.ok) {
+      throw new Error(`Failed to list models: ${result.status}`)
     }
-
-    // 「version too old」：当前兼容版本已过旧，回退到更旧版本无意义，直接保留原错误。
-    if (isCatalogVersionTooOld(primary.status, primary.body)) {
-      console.log('[Models] catalog client version rejected as too old; fallback skipped')
-      throw new Error(`Failed to list models: ${primary.status}`)
-    }
-
-    // 保守回退：仅当服务器明确因 client_version 非法返回 4xx 时尝试 fallback 版本。
-    if (isInvalidCatalogVersionStatus(primary.status, primary.body)) {
-      console.log('[Models] catalog version rejected (status=%d), retrying fallback=%s',
-        primary.status, CHATGPT_MODEL_CATALOG_FALLBACK_VERSION)
-      const fallback = await this.fetchModelCatalog(CHATGPT_MODEL_CATALOG_FALLBACK_VERSION)
-      if (fallback.ok) {
-        return this.parseModelCatalog(fallback.json)
-      }
-      throw new Error(`Failed to list models: ${fallback.status}`)
-    }
-
-    throw new Error(`Failed to list models: ${primary.status}`)
+    return this.parseModelCatalog(result.json)
   }
 
   private async fetchModelCatalog(
     clientVersion: string
-  ): Promise<{ ok: boolean; status: number; json: unknown; body: string }> {
+  ): Promise<{ ok: boolean; status: number; json: unknown }> {
     const token = await this.credentialManager.getAccessToken()
     const accountId = await this.credentialManager.getAccountId()
 
@@ -388,7 +339,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
       }
     }
 
-    return { ok: response.ok, status: response.status, json, body }
+    return { ok: response.ok, status: response.status, json }
   }
 
   private parseModelCatalog(data: unknown): ChatGPTModel[] {

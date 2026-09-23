@@ -28,6 +28,8 @@ export interface ModelInfo {
   isDefault?: boolean
 
   // ── 能力 metadata（全部 optional；缺失时保持旧行为，绝不因缺失改变请求）──
+  // minimalClientVersion 仅作 diagnostic metadata：官方 Codex client 的最低 release requirement。
+  // 不参与 visibility / 默认模型 / request 阻塞等任何 capability 判定。
   minimalClientVersion?: string
   supportedInApi?: boolean
   priority?: number

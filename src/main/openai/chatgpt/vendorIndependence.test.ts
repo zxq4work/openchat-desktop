@@ -13,7 +13,7 @@ function stripComments(src: string): string {
 
 describe('vendor independence (model catalog)', () => {
   const files = [
-    'src/main/openai/chatgpt/models/modelCatalogVersion.ts',
+    'src/main/openai/chatgpt/models/modelCatalogDiscovery.ts',
     'src/main/openai/chatgpt/models/ChatGPTModelService.ts',
     'src/main/openai/chatgpt/transport/ChatGPTCodexClient.ts',
   ]
@@ -29,9 +29,8 @@ describe('vendor independence (model catalog)', () => {
     }
   })
 
-  it('catalog version constant is the declared 0.155.0', async () => {
-    const mod = await import('./models/modelCatalogVersion')
-    expect(mod.CHATGPT_MODEL_CATALOG_CLIENT_VERSION).toBe('0.155.0')
-    expect(mod.CHATGPT_MODEL_CATALOG_FALLBACK_VERSION).toBe('0.154.0')
+  it('TEST 14: discovery sentinel is the declared 99.99.99', async () => {
+    const mod = await import('./models/modelCatalogDiscovery')
+    expect(mod.CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL).toBe('99.99.99')
   })
 })

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ChatGPTModelService, isModelVisible } from './ChatGPTModelService'
-import { CHATGPT_MODEL_CATALOG_CLIENT_VERSION } from './modelCatalogVersion'
 import type { ChatGPTCodexClient, ChatGPTModel } from '../transport/ChatGPTCodexClient'
 import { MODELS_CATALOG_FIXTURE } from './fixtures/modelsCatalog.fixture'
 
@@ -146,25 +145,45 @@ describe('isModelVisible', () => {
   })
 })
 
-describe('minimal_client_version safety net', () => {
+describe('minimal_client_version is diagnostic metadata only', () => {
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'log').mockImplementation(() => {})
   })
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('TEST 20: model requiring newer client than catalog version is hidden', async () => {
-    const futureVersion = '999.0.0'
+  it('TEST 6: high minimal_client_version (999.0.0) does NOT hide a listed model', async () => {
     const svc = new ChatGPTModelService(new FakeClient([
-      { slug: 'too-new', display_name: 'Too New', visibility: 'list', supported_in_api: true, minimal_client_version: futureVersion },
+      { slug: 'too-new', display_name: 'Too New', visibility: 'list', supported_in_api: true, minimal_client_version: '999.0.0' },
       { slug: 'ok', display_name: 'OK', visibility: 'list', supported_in_api: true, minimal_client_version: '0.100.0' },
     ]))
     const models = await svc.fetchModels()
-    expect(models.find((m) => m.id === 'too-new')?.hidden).toBe(true)
+    // discovery 模式下 99.99.99 不是 compatibility version，minimal_client_version 不参与 visibility
+    expect(models.find((m) => m.id === 'too-new')?.hidden).toBe(false)
     expect(models.find((m) => m.id === 'ok')?.hidden).toBe(false)
   })
 
-  it('catalog version is 0.155.0 by default (env override respected)', () => {
-    expect(CHATGPT_MODEL_CATALOG_CLIENT_VERSION).toBe('0.155.0')
+  it('TEST 7: visibility=hide stays hidden regardless of minimal_client_version', async () => {
+    const svc = new ChatGPTModelService(new FakeClient([
+      { slug: 'hidden-low', display_name: 'Hidden Low', visibility: 'hide', supported_in_api: true, minimal_client_version: '0.100.0' },
+    ]))
+    const models = await svc.fetchModels()
+    expect(models.find((m) => m.id === 'hidden-low')?.hidden).toBe(true)
+  })
+
+  it('TEST 8: supported_in_api=false stays hidden regardless of minimal_client_version', async () => {
+    const svc = new ChatGPTModelService(new FakeClient([
+      { slug: 'not-in-api', display_name: 'Not In API', visibility: 'list', supported_in_api: false, minimal_client_version: '0.100.0' },
+    ]))
+    const models = await svc.fetchModels()
+    expect(models.find((m) => m.id === 'not-in-api')?.hidden).toBe(true)
+  })
+
+  it('TEST 9: minimalClientVersion is still persisted as raw metadata', async () => {
+    const svc = new ChatGPTModelService(new FakeClient([
+      { slug: 'meta', display_name: 'Meta', visibility: 'list', supported_in_api: true, minimal_client_version: '0.155.0' },
+    ]))
+    const models = await svc.fetchModels()
+    expect(models.find((m) => m.id === 'meta')?.minimalClientVersion).toBe('0.155.0')
   })
 })

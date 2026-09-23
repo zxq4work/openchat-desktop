@@ -1,7 +1,5 @@
 import type { ModelInfo, SupportedReasoningEffort, ServiceTierInfo } from '../../../../shared/types/model'
 import type { ChatGPTCodexClient, ChatGPTModel } from '../transport/ChatGPTCodexClient'
-import { CHATGPT_MODEL_CATALOG_CLIENT_VERSION } from './modelCatalogVersion'
-import { compareSemver } from '../../../../shared/utils/semver'
 
 export interface ModelPrompt {
   modelId: string
@@ -130,16 +128,6 @@ export class ChatGPTModelService {
 
     const defaultLevel = normalizeReasoningLevel(item.default_reasoning_level)
 
-    // minimal_client_version 超过当前 catalog 兼容版本：安全兜底，不作为正常可用模型。
-    let catalogIncompatible = false
-    if (item.minimal_client_version && compareSemver(item.minimal_client_version, CHATGPT_MODEL_CATALOG_CLIENT_VERSION) > 0) {
-      catalogIncompatible = true
-      console.warn(
-        '[Models] Model %s requires client version %s, catalog compatibility version is %s',
-        item.slug, item.minimal_client_version, CHATGPT_MODEL_CATALOG_CLIENT_VERSION
-      )
-    }
-
     const serviceTiers: ServiceTierInfo[] | undefined = Array.isArray(item.service_tiers)
       ? item.service_tiers
           .filter((t): t is { id?: string; name?: string; description?: string } => !!t && typeof t === 'object')
@@ -153,13 +141,15 @@ export class ChatGPTModelService {
       model: item.slug,
       displayName: item.display_name ?? item.slug,
       description: item.description,
-      hidden: !isModelVisible(item) || catalogIncompatible,
+      hidden: !isModelVisible(item),
       defaultReasoningEffort: defaultLevel?.effort ?? null,
       supportedReasoningEfforts,
       inputModalities: item.input_modalities,
       supportsPersonality: item.supports_personality,
       isDefault: item.is_default,
 
+      // 仅作 diagnostic metadata：官方 Codex client 的最低 release requirement。
+      // 不参与 visibility / 默认模型 / request 阻塞等任何 capability 判定。
       minimalClientVersion: item.minimal_client_version,
       supportedInApi: item.supported_in_api,
       priority: item.priority,

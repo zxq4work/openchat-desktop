@@ -8,7 +8,7 @@ vi.mock('electron', () => ({
 }))
 
 // 桩掉 createRequest：记录每次请求的 client_version，并按脚本返回状态/body。
-// 用于验证真实 listModels() 的 fallback 决策（是否会请求 fallback 版本）。
+// 用于验证真实 listModels() 在 discovery 模式下「只请求一次 sentinel」。
 const netStub = vi.hoisted(() => ({
   responses: [] as Array<{ status: number; body: string }>,
   requestedVersions: [] as string[],
@@ -39,37 +39,28 @@ import {
   buildResponsesUrl,
   buildResponsesHeaders,
   buildResponsesBody,
-  isInvalidCatalogVersionStatus,
-  isCatalogVersionTooOld,
   isKnownSSEEventType,
   summarizeResponsesShape,
   RealChatGPTCodexClient,
 } from './ChatGPTCodexClient'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
-import {
-  CHATGPT_MODEL_CATALOG_CLIENT_VERSION,
-  CHATGPT_MODEL_CATALOG_FALLBACK_VERSION,
-} from '../models/modelCatalogVersion'
+import { CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL } from '../models/modelCatalogDiscovery'
 import { CODEX_VERSION } from '../../../../shared/constants'
 import { ResponsesStreamParser } from './ResponsesStreamParser'
 
-describe('catalog version decoupling', () => {
-  it('TEST 1: /models URL uses catalog version query', () => {
-    expect(buildModelsCatalogUrl(CHATGPT_MODEL_CATALOG_CLIENT_VERSION))
-      .toBe('https://chatgpt.com/backend-api/codex/models?client_version=0.155.0')
+describe('catalog discovery', () => {
+  it('TEST 1: /models URL uses the discovery sentinel query', () => {
+    expect(buildModelsCatalogUrl(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL))
+      .toBe('https://chatgpt.com/backend-api/codex/models?client_version=99.99.99')
   })
 
-  it('TEST 2: catalog version has no dependency on CODEX_VERSION', () => {
-    expect(CHATGPT_MODEL_CATALOG_CLIENT_VERSION).not.toBe(CODEX_VERSION)
-    expect(CHATGPT_MODEL_CATALOG_CLIENT_VERSION).toBe('0.155.0')
+  it('TEST 2: discovery sentinel has no dependency on CODEX_VERSION', () => {
+    expect(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL).not.toBe(CODEX_VERSION)
+    expect(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL).toBe('99.99.99')
     expect(CODEX_VERSION).toBe('0.148.0')
   })
 
-  it('fallback version is the conservative 0.154.0', () => {
-    expect(CHATGPT_MODEL_CATALOG_FALLBACK_VERSION).toBe('0.154.0')
-  })
-
-  it('TEST 4: /responses URL carries NO client_version', () => {
+  it('TEST 13: /responses URL carries NO client_version', () => {
     const url = buildResponsesUrl()
     expect(url).toBe('https://chatgpt.com/backend-api/codex/responses')
     expect(url).not.toContain('client_version')
@@ -99,68 +90,21 @@ describe('responses-lite header (metadata driven)', () => {
     expect(headers['version']).toBeUndefined()
   })
 
+  it('TEST 13: /responses headers never include client_version', () => {
+    const headers = buildResponsesHeaders('tok', 'acct', true)
+    for (const key of Object.keys(headers)) {
+      expect(key.toLowerCase()).not.toContain('client_version')
+    }
+    expect(JSON.stringify(headers)).not.toContain('client_version')
+  })
+
   it('adds account id only when present', () => {
     expect(buildResponsesHeaders('tok', 'acct', false)['ChatGPT-Account-Id']).toBe('acct')
     expect(buildResponsesHeaders('tok', null, false)['ChatGPT-Account-Id']).toBeUndefined()
   })
 })
 
-describe('catalog version-invalid fallback detection', () => {
-  it('detects explicit client_version 4xx errors', () => {
-    expect(isInvalidCatalogVersionStatus(400, 'invalid client_version')).toBe(true)
-    expect(isInvalidCatalogVersionStatus(422, 'unsupported version')).toBe(true)
-  })
-  it('does NOT treat 401/403 as version problems', () => {
-    expect(isInvalidCatalogVersionStatus(401, 'client_version')).toBe(false)
-    expect(isInvalidCatalogVersionStatus(403, 'client_version')).toBe(false)
-  })
-  it('does NOT treat 5xx or unrelated errors as version problems', () => {
-    expect(isInvalidCatalogVersionStatus(500, 'server error')).toBe(false)
-    expect(isInvalidCatalogVersionStatus(400, 'bad request')).toBe(false)
-    expect(isInvalidCatalogVersionStatus(429, 'rate limited')).toBe(false)
-  })
-
-  // P2：version too old 必须排除 fallback（回退更旧版本无意义，只会更旧）。
-  // 关键 regression：旧版用的是 includes('version too old') 等三种字符串，
-  // 漏掉了带 "is" 的写法（尤其 "client_version is too old"）—— 正是本次要修的现象。
-  const TOO_OLD_STRINGS = [
-    'version too old',
-    'version is too old',
-    'client version too old',
-    'client version is too old',
-    'client_version too old',
-    'client_version is too old',
-  ]
-
-  it.each(TOO_OLD_STRINGS)('TEST P2: 400 "%s" → tooOld=true 且 invalid=false（不回退）', (body) => {
-    expect(isCatalogVersionTooOld(400, body)).toBe(true)
-    expect(isInvalidCatalogVersionStatus(400, body)).toBe(false)
-  })
-
-  it('TEST P2-2b: 旧 includes 漏掉的 "client_version is too old" 现在被识别（核心 regression）', () => {
-    // 旧代码：includes('version too old') / includes('client version too old') / includes('client_version too old')
-    // 三者皆无法命中 "client_version is too old"，导致 isInvalidCatalogVersionStatus=true → 错误 fallback。
-    expect(isCatalogVersionTooOld(400, 'client_version is too old')).toBe(true)
-    expect(isInvalidCatalogVersionStatus(400, 'client_version is too old')).toBe(false)
-  })
-
-  it('TEST P2-4: 401/403/5xx + too old 均不视为版本问题', () => {
-    for (const body of TOO_OLD_STRINGS) {
-      expect(isCatalogVersionTooOld(401, body)).toBe(false)
-      expect(isCatalogVersionTooOld(403, body)).toBe(false)
-      expect(isCatalogVersionTooOld(500, body)).toBe(false)
-    }
-    expect(isInvalidCatalogVersionStatus(401, 'client_version too old')).toBe(false)
-    expect(isInvalidCatalogVersionStatus(403, 'invalid version')).toBe(false)
-    expect(isInvalidCatalogVersionStatus(500, 'client_version')).toBe(false)
-  })
-  it('TEST P2-5: 普通 4xx（含 client_version）仍允许回退', () => {
-    expect(isInvalidCatalogVersionStatus(400, 'client_version is not recognized')).toBe(true)
-    expect(isCatalogVersionTooOld(400, 'client_version is not recognized')).toBe(false)
-  })
-})
-
-describe('listModels 真实流程 — version too old 绝不请求 fallback', () => {
+describe('listModels 真实流程 — discovery 只请求一次，绝不 fallback 旧 release', () => {
   const stubCreds = {
     getAccessToken: async () => 'tok',
     getAccountId: async () => 'acct',
@@ -172,30 +116,53 @@ describe('listModels 真实流程 — version too old 绝不请求 fallback', ()
     netStub.callIndex = 0
     const client = new RealChatGPTCodexClient(stubCreds)
     let error: unknown = null
+    let models: unknown = null
     try {
-      await client.listModels()
+      models = await client.listModels()
     } catch (err) {
       error = err
     }
-    return { error, requestedVersions: netStub.requestedVersions }
+    return { error, models, requestedVersions: netStub.requestedVersions }
   }
 
-  it('TEST: primary 0.155.0 返回 400 "client_version is too old" → 绝不请求 0.154.0', async () => {
+  it('TEST 2: 400 → 只请求 sentinel 一次，绝不尝试 0.154 / 0.155 / 其他 release', async () => {
     const { error, requestedVersions } = await run([{ status: 400, body: '{"error":"client_version is too old"}' }])
-    expect(requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_CLIENT_VERSION])
-    expect(requestedVersions).not.toContain(CHATGPT_MODEL_CATALOG_FALLBACK_VERSION)
+    expect(requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
+    expect(requestedVersions).not.toContain('0.154.0')
+    expect(requestedVersions).not.toContain('0.155.0')
     expect(error).toBeInstanceOf(Error)
   })
 
-  it('TEST: 普通 400 "client_version is not recognized" → 仍请求 fallback 0.154.0', async () => {
-    const { requestedVersions } = await run([
-      { status: 400, body: '{"error":"client_version is not recognized"}' },
-      { status: 200, body: '{"models":[]}' },
+  it('TEST 3: 500 → 只请求 sentinel 一次，正常抛错', async () => {
+    const { error, requestedVersions } = await run([{ status: 500, body: 'server error' }])
+    expect(requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
+    expect(error).toBeInstanceOf(Error)
+  })
+
+  it('TEST 4: 401 / 403 → 只请求 sentinel 一次', async () => {
+    const unauthorized = await run([{ status: 401, body: '{}' }])
+    expect(unauthorized.requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
+    expect(unauthorized.error).toBeInstanceOf(Error)
+
+    const forbidden = await run([{ status: 403, body: '{}' }])
+    expect(forbidden.requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
+    expect(forbidden.error).toBeInstanceOf(Error)
+  })
+
+  it('TEST 5: HTTP 200 + models=[] → 返回空 catalog，不 fallback', async () => {
+    const { error, models, requestedVersions } = await run([{ status: 200, body: '{"models":[]}' }])
+    expect(error).toBeNull()
+    expect(models).toEqual([])
+    expect(requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
+  })
+
+  it('HTTP 200 + 有效 catalog → 只请求 sentinel 一次并解析', async () => {
+    const { error, models, requestedVersions } = await run([
+      { status: 200, body: '{"models":[{"slug":"gpt-6-astra","visibility":"list"}]}' },
     ])
-    expect(requestedVersions).toEqual([
-      CHATGPT_MODEL_CATALOG_CLIENT_VERSION,
-      CHATGPT_MODEL_CATALOG_FALLBACK_VERSION,
-    ])
+    expect(error).toBeNull()
+    expect((models as Array<{ slug: string }>)[0].slug).toBe('gpt-6-astra')
+    expect(requestedVersions).toEqual([CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL])
   })
 })
 
