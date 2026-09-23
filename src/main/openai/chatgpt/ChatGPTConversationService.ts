@@ -36,6 +36,8 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../../shared/types/settings'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
+import { supportsImageFromModalities } from '../../../shared/utils/imageCapability'
+import { resolveEffectiveResponsesLite } from './transport/responsesTransportPolicy'
 import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandaloneSearchClient'
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
@@ -154,13 +156,14 @@ const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available 
 - If the user explicitly asks you to search or look something up, simply say you're unable to look that up right now and suggest they try enabling web search.`
 
 // 判断某个模型是否支持图片输入。
-// - ChatGPT Codex：以模型 metadata 的 inputModalities 为准（含 'image' 才支持）
+// - ChatGPT Codex：以模型 metadata 的 inputModalities 为准（三态语义，见 supportsImageFromModalities）
+//   inputModalities 缺失 = 能力未知 = 不阻止图片；只有明确返回不含 'image' 的数组才阻止。
 // - 自定义 Provider：无可靠 metadata，使用 Provider 配置的显式 imageInput 开关
-// 未知能力一律视为不支持（unknown = text only），绝不根据模型名猜测。
+// 绝不根据模型名猜测。
 function modelSupportsImage(modelId: string, models: ModelInfo[], adapter: ModelAdapter): boolean {
   if (adapter.protocol === 'chatgpt_codex') {
     const model = models.find((m) => m.id === modelId)
-    return !!model && (model.inputModalities ?? []).includes('image')
+    return !!model && supportsImageFromModalities(model.inputModalities)
   }
   return adapter.capabilities.supportsImageInput
 }
@@ -505,16 +508,21 @@ export class ChatGPTConversationService {
     }
   }
 
-  async updateModel(id: string, modelId: string): Promise<void> {
+  // modelId 允许为 null：用于「无可用可见模型」时把会话置回「未选择模型」态
+  // （与 createConversation(null) 同一语义）。空串同样归一化为 null，避免写入不可用 id。
+  async updateModel(id: string, modelId: string | null): Promise<void> {
     const conversation = this.conversations.getById(id)
     if (!conversation) throw new Error('会话不存在')
+    const normalized = modelId && modelId.length > 0 ? modelId : null
     // 记录 Provider/Model 名称快照，供失效时展示历史绑定。自定义 Provider 的模型名即 modelId。
-    // 不改变会话类型：模型切换只影响下一条消息使用的 model。
+    // 不改变会话类型：模型切换只影响下一条消息使用的 model。清空模型时不覆盖旧名称快照。
     const provider = conversation.providerConfigId
       ? this.providerConfigService.listSafe().find((p) => p.id === conversation.providerConfigId) ?? null
       : null
-    this.conversations.updateModel(id, modelId)
-    this.conversations.updateBindingSnapshot(id, provider?.name ?? conversation.providerNameSnapshot, modelId)
+    this.conversations.updateModel(id, normalized)
+    if (normalized) {
+      this.conversations.updateBindingSnapshot(id, provider?.name ?? conversation.providerNameSnapshot, normalized)
+    }
     await this.storage.save()
   }
 
@@ -791,6 +799,21 @@ export class ChatGPTConversationService {
     return `${providerConfigId ?? 'codex-default'}|${adapter.protocol}|${modelId}|${endpoint}`
   }
 
+  // 正式 Transport Policy 入口：在 search strategy resolve 完成之后、buildCanonicalRequest 之前，
+  // 计算本次请求唯一的 effectiveResponsesLite（驱动 header / reasoning.context /
+  // parallel_tool_calls / tool serializer / include / tool_choice）。
+  // 依据 model metadata 的 useResponsesLite + resolved searchStrategy，绝不做 env / slug 特判。
+  private computeEffectiveResponsesLiteForRequest(modelId: string, searchStrategy: string): boolean {
+    const modelWantsResponsesLite = this.modelService.getModelInfo(modelId)?.useResponsesLite === true
+    const effective = resolveEffectiveResponsesLite({ modelWantsResponsesLite, searchStrategy })
+    // dev invariant：codex-hosted 必须得到 Non-Lite；若为 true 说明 Policy 被破坏。
+    // 生产环境不 crash，仅记录明确 error，由 Adapter 安全防线阻止非法 request。
+    if (searchStrategy === 'codex-hosted' && effective && process.env.NODE_ENV !== 'production') {
+      console.error('[Codex Transport] INVARIANT VIOLATION: searchStrategy=codex-hosted but effectiveResponsesLite=true (model=%s)', modelId)
+    }
+    return effective
+  }
+
   // 检测 API 返回的错误是否表示不支持 tools（仅明确的 HTTP/API 错误）
   // 以下情况不能标记 unsupported：tool_choice required 不支持、timeout、HTTP 500、SSE 异常、模型本轮没调用工具
   private isToolsUnsupportedError(err: unknown): boolean {
@@ -857,14 +880,42 @@ export class ChatGPTConversationService {
       const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
 
       const searchStrategy = this.resolveSearchStrategy(providerConfigId, webSearchEnabled, codexSearchMode)
-      const engineLabel = searchStrategy === 'codex-hosted'
+      // 模型 catalog 明确声明不支持 hosted search（supports_search_tool === false）时，
+      // 绝不发送已知不支持的 hosted-search tool；降级为无搜索直答并提示用户。
+      // 仅 false 触发，undefined（服务器未声明）保持现有行为。
+      let effectiveStrategy = searchStrategy
+      if (searchStrategy === 'codex-hosted') {
+        const modelInfo = this.modelService.getModelInfo(modelId)
+        if (modelInfo?.supportsSearchTool === false) {
+          console.log('[Search Strategy] model=%s supports_search_tool=false, downgrading hosted → none', modelId)
+          effectiveStrategy = 'none'
+          this.emitStreamEvent({
+            type: 'web-search-error',
+            conversationId,
+            toolCallId: 'capability-guard',
+            toolCallError: 'Selected model does not support hosted web search.',
+          })
+        }
+      }
+      const engineLabel = effectiveStrategy === 'codex-hosted'
         ? 'codex-hosted'
-        : searchStrategy === 'codex-standalone'
+        : effectiveStrategy === 'codex-standalone'
           ? 'codex-standalone'
-          : searchStrategy === 'openchat-custom'
+          : effectiveStrategy === 'openchat-custom'
             ? searchEngine
             : 'none'
-      console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', searchStrategy, engineLabel)
+      console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', effectiveStrategy, engineLabel)
+
+      // 正式 Transport Policy：search strategy resolve 完成后、发请求之前，
+      // 计算本次唯一的 effectiveResponsesLite（codex-hosted → 强制 Non-Lite）。
+      // 该值统一下传给所有 codex 生成路径，驱动 header / reasoning.context /
+      // parallel_tool_calls / tool serializer / include / tool_choice。
+      const effectiveResponsesLite = this.computeEffectiveResponsesLiteForRequest(modelId, effectiveStrategy)
+      if (effectiveStrategy === 'codex-hosted' || effectiveStrategy === 'codex-standalone') {
+        console.log('[Codex Transport] model=%s modelResponsesLite=%s effectiveResponsesLite=%s reason=%s',
+          modelId, String(this.modelService.getModelInfo(modelId)?.useResponsesLite === true),
+          String(effectiveResponsesLite), effectiveStrategy)
+      }
 
       // 自定义 Provider 时切换到当前会话的搜索引擎偏好
       const prevEngine = this.webSearchService.getEngineName()
@@ -872,16 +923,18 @@ export class ChatGPTConversationService {
         this.webSearchService.setEngine(getSearchEngine(searchEngine), searchEngine)
       }
 
-      switch (searchStrategy) {
+      switch (effectiveStrategy) {
         case 'codex-hosted':
           await this.runGenerationWithCodexHostedSearch(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController,
+            effectiveResponsesLite
           )
           break
 
         case 'codex-standalone':
           await this.runGenerationWithCodexStandaloneSearch(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController,
+            effectiveResponsesLite
           )
           break
 
@@ -923,7 +976,8 @@ export class ChatGPTConversationService {
 
         case 'none':
           await this.runGenerationDirect(
-            conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
+            conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController,
+            effectiveResponsesLite
           )
           break
       }
@@ -1199,7 +1253,8 @@ export class ChatGPTConversationService {
     assistantMessageId: string,
     userText: string,
     segmentId: string,
-    abortController: AbortController
+    abortController: AbortController,
+    effectiveResponsesLite: boolean
   ): Promise<void> {
     let accumulatedContent = ''
     const citationBuf = new CitationStreamBuffer()
@@ -1213,7 +1268,9 @@ export class ChatGPTConversationService {
     const fullInstructions = instructions + '\n\n' + CODEX_SEARCH_INSTRUCTIONS
     const semIdx = fullInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
     console.log('[Codex Search Semantics] mode=hosted snippet=%s', semIdx >= 0 ? fullInstructions.slice(semIdx, semIdx + 200) : 'NOT_FOUND')
-    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort, adapter.protocol)
+    // effectiveResponsesLite 由 runGeneration 的 Transport Policy 统一计算并传入：
+    // codex-hosted 恒为 Non-Lite（Lite 模型在此自动降级），无需任何 debug env。
+    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort, adapter.protocol, false, effectiveResponsesLite)
     request.tools = [{
       name: 'web_search',
       description: '',
@@ -1364,9 +1421,6 @@ export class ChatGPTConversationService {
         protocol: 'chatgpt_codex',
         items: webSearchCallItems.map((i) => ({ type: 'web_search_call' as const, id: i.id, status: i.status, action: i.action })),
       })
-      for (const i of webSearchCallItems) {
-        console.log('[Hosted Replay Probe] persisted=', JSON.stringify({ id: i.id, status: i.status, action: i.action }))
-      }
       console.log('[Provider History] save assistantId=%s provider=codex items=%d types=%s', assistantMessageId.slice(0, 8), webSearchCallItems.length, webSearchCallItems.map(() => 'web_search_call').join(','))
     }
 
@@ -1384,7 +1438,8 @@ export class ChatGPTConversationService {
     assistantMessageId: string,
     userText: string,
     segmentId: string,
-    abortController: AbortController
+    abortController: AbortController,
+    effectiveResponsesLite: boolean
   ): Promise<void> {
     let accumulatedContent = ''
     const citationBuf = new CitationStreamBuffer()
@@ -1397,7 +1452,8 @@ export class ChatGPTConversationService {
     const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
     const semIdx2 = standaloneInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
     console.log('[Codex Search Semantics] mode=standalone snippet=%s', semIdx2 >= 0 ? standaloneInstructions.slice(semIdx2, semIdx2 + 200) : 'NOT_FOUND')
-    const request = this.buildCanonicalRequest(modelId, standaloneInstructions, segmentId, userText, effort, adapter.protocol)
+    // standalone 不需 Non-Lite transport：effectiveResponsesLite 继续尊重模型 metadata（由 Policy 传入）。
+    const request = this.buildCanonicalRequest(modelId, standaloneInstructions, segmentId, userText, effort, adapter.protocol, undefined, effectiveResponsesLite)
 
     // 构建 web.run 工具注册表
     const standaloneToolRegistry = new ToolRegistry()
@@ -1775,10 +1831,11 @@ User message: ${userText}${contextHint}`
     effort: string,
     assistantMessageId: string,
     segmentId: string,
-    abortController: AbortController
+    abortController: AbortController,
+    effectiveResponsesLite?: boolean
   ): Promise<void> {
     const noSearchInstructions = instructions + '\n\n' + NO_SEARCH_CAPABILITY_NOTICE
-    const request = this.buildCanonicalRequest(modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true)
+    const request = this.buildCanonicalRequest(modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true, effectiveResponsesLite)
     await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
   }
 
@@ -1942,7 +1999,8 @@ User message: ${userText}${contextHint}`
     userText: string,
     effort: string,
     targetProtocol?: ProviderProtocol,
-    skipWebSearchHistory?: boolean
+    skipWebSearchHistory?: boolean,
+    effectiveResponsesLite?: boolean
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
@@ -2009,9 +2067,7 @@ User message: ${userText}${contextHint}`
               }
 
               if (webSearchCalls && webSearchCalls.length > 0) {
-                for (const i of webSearchCalls) {
-                  console.log('[Hosted Replay Probe] restored=', JSON.stringify({ id: i.id, status: i.status, action: i.action }))
-                }
+                console.log('[Provider History] restore assistantId=%s webSearchCalls=%d', msg.id.slice(0, 8), webSearchCalls.length)
               }
               if (orderedToolItems.length > 0) {
                 console.log('[Provider History] restore assistantId=%s types=%s', msg.id.slice(0, 8), orderedToolItems.map(i => i.type).join(','))
@@ -2146,6 +2202,12 @@ User message: ${userText}${contextHint}`
       messages,
       attachmentResolver: this.attachmentResolver(),
       ...(effort ? { reasoningEffort: effort } : {}),
+      // Responses Lite 由 Transport Policy 决定（chatgpt_codex 路径）；自定义 Provider 无此 metadata → undefined。
+      // effectiveResponsesLite 由调用方在 search strategy resolve 后计算并显式传入（如 codex-hosted 降级为 Non-Lite）；
+      // 未显式传入时回落到模型 metadata（none / codex-standalone 均与 Policy 结果一致）。
+      ...(targetProtocol === 'chatgpt_codex'
+        ? { responsesLite: effectiveResponsesLite ?? this.modelService.getModelInfo(modelId)?.useResponsesLite }
+        : {}),
     }
   }
 

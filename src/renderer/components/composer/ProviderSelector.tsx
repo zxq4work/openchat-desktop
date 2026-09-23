@@ -5,6 +5,7 @@ import { useModelStore } from '../../stores/modelStore'
 import type { ModelInfo } from '../../../shared/types/model'
 import { Dropdown, type DropdownOption } from '../Dropdown'
 import { isChatProtocol, invalidBindingLabel } from '../../../shared/conversation/capabilities'
+import { visibleModels, resolveReasoningEffort } from '../../packages/modelPresentation'
 
 const DEFAULT_OPTION_VALUE = '__openchat_default__'
 
@@ -48,23 +49,13 @@ export function ProviderSelector() {
   //   切回 ChatGPT Codex → 使用 Codex 模型列表的第一个模型，推理强度按该模型能力修正。
   // 旧模型 id 若不属于新域，ModelSelector 无法匹配 → 显示占位「无模型」，
   // 而列表里其实存在可选模型（本 bug 的根因）。
-  const supportedEffortsOf = (m: ModelInfo | null): string[] =>
-    m?.supportedReasoningEfforts.map((e) => e.reasoningEffort) ?? []
-
+  // effort 一律复用统一的 resolveReasoningEffort，绝不保留新模型不支持的旧 effort。
   const resolveSwitchModel = (
     firstModel: ModelInfo | null,
     prevEffort: string | null
   ): { modelId: string | null; effort: string | null } => {
-    const supported = supportedEffortsOf(firstModel)
-    let effort: string | null = null
-    if (prevEffort && supported.includes(prevEffort)) {
-      effort = prevEffort
-    } else if (firstModel?.defaultReasoningEffort && supported.includes(firstModel.defaultReasoningEffort)) {
-      effort = firstModel.defaultReasoningEffort
-    } else if (supported.length > 0) {
-      effort = supported[0]
-    }
-    return { modelId: firstModel?.id ?? null, effort }
+    if (!firstModel) return { modelId: null, effort: null }
+    return { modelId: firstModel.id, effort: resolveReasoningEffort(firstModel, prevEffort) }
   }
 
   const handleChange = async (value: string) => {
@@ -74,7 +65,7 @@ export function ProviderSelector() {
       // 切回 ChatGPT Codex：必须同步切到 Codex 模型列表的第一个模型。
       // 之前只清空 providerConfigId，defaultModelId 仍是自定义 provider 的模型 id，
       // binding 变为 unconfigured 后走 Codex 路径却匹配不到该 id → 「无模型」。
-      const firstModel = codexModels.length > 0 ? codexModels[0] : null
+      const firstModel = visibleModels(codexModels)[0] ?? null
       const { modelId, effort } = resolveSwitchModel(firstModel, conversation.defaultReasoningEffort)
       await window.openchat.conversations.updateProviderConfig(conversation.id, null)
       if (modelId) {

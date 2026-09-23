@@ -78,6 +78,9 @@ export interface CanonicalModelRequest {
   tools?: OpenChatToolDefinition[]
   toolChoice?: 'auto' | 'none' | 'required'
   reasoningEffort?: string
+  // 模型能力：来自 /models metadata（ModelInfo.useResponsesLite）。
+  // 仅 chatgpt_codex 协议消费；undefined 表示 metadata 未声明，保持旧行为。
+  responsesLite?: boolean
   maxOutputTokens?: number
   temperature?: number
 }

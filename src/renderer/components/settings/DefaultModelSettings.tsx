@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useModelStore } from '../../stores/modelStore'
 import { useProviderStore, type SafeProviderConfig } from '../../stores/providerStore'
-import { EFFORT_LABELS } from '../../../shared/constants'
 import { Dropdown } from '../Dropdown'
+import { visibleModels, reasoningEffortOptions, resolveReasoningEffort, resolveVisibleModel } from '../../packages/modelPresentation'
 
 const DEFAULT_PROVIDER_VALUE = '__openchat_default__'
 
@@ -70,7 +70,7 @@ export function DefaultModelSettings() {
   // 模型选项
   const modelOptions = isCustomProvider
     ? (currentProvider?.models ?? []).map((m) => ({ value: m, label: m }))
-    : models.filter((m) => !m.hidden).map((m) => ({ value: m.id, label: m.displayName }))
+    : visibleModels(models).map((m) => ({ value: m.id, label: m.displayName }))
 
   // 推理强度选项
   const currentModelId = defaults.modelId
@@ -81,11 +81,9 @@ export function DefaultModelSettings() {
 
   const handleProviderChange = (value: string) => {
     if (value === DEFAULT_PROVIDER_VALUE) {
-      // 切换回 ChatGPT Codex，使用 models[0] 作为默认
-      const firstModel = models.length > 0 ? models[0] : null
-      const firstEffort = firstModel?.defaultReasoningEffort
-        ?? firstModel?.supportedReasoningEfforts[0]?.reasoningEffort
-        ?? null
+      // 切换回 ChatGPT Codex，使用第一个「可见」模型作为默认
+      const firstModel = resolveVisibleModel(models, null)
+      const firstEffort = firstModel ? resolveReasoningEffort(firstModel, null) : null
       const next = { providerId: null, modelId: firstModel?.id ?? null, effort: firstEffort }
       setDefaults(next)
       defaultsRef.current = next
@@ -108,11 +106,8 @@ export function DefaultModelSettings() {
       doSave(next)
     } else {
       const model = models.find((m) => m.id === modelId)
-      const supported = model?.supportedReasoningEfforts.map((e) => e.reasoningEffort) ?? []
-      let newEffort = defaultsRef.current.effort
-      if (newEffort && !supported.includes(newEffort)) {
-        newEffort = model?.defaultReasoningEffort ?? supported[0] ?? null
-      }
+      // 统一归一化：绝不保留新模型不支持的旧 effort，也不选 unsupported 的 default。
+      const newEffort = model ? resolveReasoningEffort(model, defaultsRef.current.effort) : null
       const next = { ...defaultsRef.current, modelId, effort: newEffort }
       setDefaults(next)
       defaultsRef.current = next
@@ -170,10 +165,7 @@ export function DefaultModelSettings() {
             className="default-model-dropdown"
             value={defaults.effort ?? ''}
             placeholder="（无）"
-            options={effortOptions.map((e) => ({
-              value: e.reasoningEffort,
-              label: EFFORT_LABELS[e.reasoningEffort] ?? e.reasoningEffort,
-            }))}
+            options={reasoningEffortOptions(effortOptions)}
             onChange={handleEffortChange}
             ariaLabel="选择默认推理强度"
           />

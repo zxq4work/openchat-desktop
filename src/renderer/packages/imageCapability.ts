@@ -1,6 +1,7 @@
 import type { Conversation, Message } from '../../shared/types/conversation'
 import type { ModelInfo } from '../../shared/types/model'
 import { imageAttachments } from './attachmentUrl'
+import { supportsImageFromModalities } from '../../shared/utils/imageCapability'
 
 interface ProviderLike {
   id: string
@@ -9,8 +10,8 @@ interface ProviderLike {
 
 // 能力判定（与 Main 侧 modelSupportsImage 保持一致）：
 // - 自定义 Provider：以用户在设置中显式声明的 imageInput 为准（绝不从模型名猜测）
-// - Codex 内置：以模型 metadata 的 inputModalities 为准
-// - 未知：视为不支持（text only）
+// - Codex 内置：以模型 metadata 的 inputModalities 为准（三态语义，见 supportsImageFromModalities）
+//   inputModalities 缺失 = 能力未知 = 不阻止图片；只有明确返回不含 'image' 的数组才阻止。
 export function modelSupportsImage(
   conversation: Conversation | null,
   models: ModelInfo[],
@@ -22,7 +23,7 @@ export function modelSupportsImage(
     return provider?.imageInput ?? false
   }
   const model = models.find((m) => m.id === conversation.defaultModelId)
-  return !!model && (model.inputModalities ?? []).includes('image')
+  return !!model && supportsImageFromModalities(model.inputModalities)
 }
 
 // 当前 segment 内是否已有历史图片需要 replay（用于发送前能力提示）。

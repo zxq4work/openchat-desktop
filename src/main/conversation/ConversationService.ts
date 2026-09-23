@@ -251,7 +251,7 @@ export class ConversationService {
     }
   }
 
-  async updateModel(id: string, modelId: string): Promise<void> {
+  async updateModel(id: string, modelId: string | null): Promise<void> {
     this.conversations.updateModel(id, modelId)
     await this.storage.save()
   }

@@ -150,7 +150,7 @@ export class ConversationRepository {
     )
   }
 
-  updateModel(id: string, modelId: string): void {
+  updateModel(id: string, modelId: string | null): void {
     const db = this.storage.database
     db.run(`UPDATE conversations SET default_model_id = ?, updated_at = ? WHERE id = ?`, [
       modelId,

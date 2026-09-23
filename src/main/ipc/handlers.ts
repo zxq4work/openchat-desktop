@@ -56,7 +56,7 @@ export interface Services {
     removeConversation: (id: string) => Promise<void>
     removeAllConversations: () => Promise<void>
     updateRole: (id: string, prompt: string) => void
-    updateModel: (id: string, modelId: string) => Promise<void>
+    updateModel: (id: string, modelId: string | null) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
     updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>

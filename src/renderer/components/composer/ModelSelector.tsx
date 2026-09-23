@@ -5,6 +5,7 @@ import { useProviderStore } from '../../stores/providerStore'
 import type { ModelInfo } from '../../../shared/types/model'
 import { Dropdown, type DropdownOption } from '../Dropdown'
 import { resolveConversationBinding, invalidBindingLabel, canUseProviderModels } from '../../../shared/conversation/capabilities'
+import { visibleModels, resolveVisibleModel, resolveReasoningEffort, shouldClearModelForNoVisible } from '../../packages/modelPresentation'
 
 export function ModelSelector() {
   const models = useModelStore((s) => s.models)
@@ -33,18 +34,33 @@ export function ModelSelector() {
   // provider_incompatible 时 provider 的 models 属于另一协议域（图片模型），绝不能列进 chat Select。
   const isCustomProvider = canUseProviderModels(currentProvider, binding?.status)
 
-  // 如果在离线状态下创建会话导致 defaultModelId 为空，恢复网络后自动补上默认模型。
-  // 仅在有效 / 未配置的 binding 下补默认值，绝不替失效的历史绑定自动切换 Provider。
+  // 仅在纯 Codex 路径（无 Provider 绑定）自动归一化当前模型：
+  //   1. defaultModelId 为空（离线创建会话）→ 补第一个可见模型；
+  //   2. defaultModelId 指向已 hidden / 从 catalog 消失的模型 → fallback 到第一个可见模型；
+  //   3. catalog 非空但全部 hidden → 清空为「未选择模型」态，绝不继续以 hidden 模型发送。
+  // 绝不替失效的历史绑定自动切换 Provider。
+  // 仅在「确实需要变更」时写入，避免每次 render 写库 / 无限 useEffect loop。
   useEffect(() => {
     if (!conversation) return
     if (isCustomProvider) return
     if (binding && binding.status !== 'unconfigured') return
-    if (conversation.defaultModelId) return
     if (models.length === 0) return
 
-    const defaultModel = models[0]
-    handleChange(defaultModel)
-  }, [conversation?.id, isCustomProvider, models, binding?.status])
+    // catalog 非空但全部 hidden：隐藏模型绝不继续可用 —— 把会话置回「未选择模型」态，
+    // Main 侧 sendMessage 的 `if (!modelId) throw` 门禁随之生效，未选模型无法发送。
+    if (shouldClearModelForNoVisible(models, conversation.defaultModelId)) {
+      window.openchat.conversations.updateModel(conversation.id, null)
+      window.openchat.conversations.updateEffort(conversation.id, '')
+      setActiveConversation({ ...conversation, defaultModelId: null, defaultReasoningEffort: null })
+      return
+    }
+
+    const resolved = resolveVisibleModel(models, conversation.defaultModelId)
+    if (!resolved) return
+    if (resolved.id === conversation.defaultModelId) return
+
+    handleChange(resolved)
+  }, [conversation?.id, conversation?.defaultModelId, isCustomProvider, models, binding?.status])
 
   const handleChange = (model: ModelInfo) => {
     if (!conversation) return
@@ -58,18 +74,8 @@ export function ModelSelector() {
     }
     window.openchat.conversations.updateModel(conversation.id, model.id)
 
-    // 推理强度修正
-    const prevEffort = conversation.defaultReasoningEffort
-    const supported = model.supportedReasoningEfforts.map((s) => s.reasoningEffort)
-    let newEffort: string | null = null
-
-    if (prevEffort && supported.includes(prevEffort)) {
-      newEffort = prevEffort
-    } else if (model.defaultReasoningEffort && supported.includes(model.defaultReasoningEffort)) {
-      newEffort = model.defaultReasoningEffort
-    } else if (supported.length > 0) {
-      newEffort = supported[0]
-    }
+    // 推理强度：统一复用 resolveReasoningEffort，绝不保留新模型不支持的旧 effort。
+    const newEffort = resolveReasoningEffort(model, conversation.defaultReasoningEffort)
 
     window.openchat.conversations.updateEffort(conversation.id, newEffort ?? '')
     setActiveConversation({
@@ -126,7 +132,7 @@ export function ModelSelector() {
 
   // Codex 默认路径（无 Provider 绑定 / 历史 Provider 已失效）：
   // Provider 已删除或协议不兼容时，补 synthetic option 展示历史绑定，避免 Select 空白。
-  const codexOptions: DropdownOption[] = models.map((model) => ({ value: model.id, label: model.displayName }))
+  const codexOptions: DropdownOption[] = visibleModels(models).map((model) => ({ value: model.id, label: model.displayName }))
   return (
     <Dropdown
       className="model-selector"

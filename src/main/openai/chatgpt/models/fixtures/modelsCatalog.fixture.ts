@@ -1,0 +1,96 @@
+// 离线测试 fixture：模拟 GET /backend-api/codex/models 的真实响应形状。
+// 来源为 2026-09-23 外部核实过的 openai/codex models.json 快照，仅保留 OpenChat
+// 真正关注的字段。仅供 unit test / 人工排查使用，绝不作为生产运行时数据源。
+//
+// 最后一个 gpt-x-future-model 是故意添加的：用于证明 OpenChat 对未来未知 slug
+// 与未知 metadata 不会解析失败。
+
+export const MODELS_CATALOG_FIXTURE = {
+  models: [
+    {
+      slug: 'gpt-6-astra',
+      display_name: 'GPT-6-Astra',
+      description: 'Our most capable model for complex, demanding work.',
+      default_reasoning_level: 'low',
+      supported_reasoning_levels: [
+        { effort: 'low', description: 'Fast responses with lighter reasoning' },
+        { effort: 'medium', description: 'Balances speed and reasoning depth for everyday tasks' },
+        { effort: 'high', description: 'Greater reasoning depth for complex problems' },
+        { effort: 'xhigh', description: 'Extra high reasoning depth for complex problems' },
+        { effort: 'max', description: 'Maximum reasoning depth for the hardest problems' },
+        { effort: 'ultra', description: 'Maximum reasoning with automatic task delegation' },
+      ],
+      visibility: 'list',
+      minimal_client_version: '0.153.0',
+      supported_in_api: true,
+      priority: 1,
+      use_responses_lite: true,
+      supports_reasoning_effort_updates: true,
+      supports_parallel_tool_calls: true,
+      input_modalities: ['text', 'image'],
+      supports_image_detail_original: true,
+      context_window: 272000,
+      max_context_window: 872000,
+      supports_search_tool: true,
+      tool_mode: 'code_mode_only',
+    },
+    {
+      slug: 'gpt-6-sol',
+      display_name: 'GPT-6-Sol',
+      default_reasoning_level: 'medium',
+      supported_reasoning_levels: [
+        { effort: 'low', description: 'Low' },
+        { effort: 'medium', description: 'Medium' },
+        { effort: 'high', description: 'High' },
+        { effort: 'xhigh', description: 'Extra High' },
+        { effort: 'max', description: 'Maximum' },
+        { effort: 'ultra', description: 'Ultra' },
+      ],
+      visibility: 'list',
+      minimal_client_version: '0.155.0',
+      supported_in_api: true,
+      priority: 2,
+      use_responses_lite: true,
+      input_modalities: ['text', 'image'],
+      context_window: 272000,
+      max_context_window: 872000,
+      tool_mode: 'code_mode_only',
+    },
+    {
+      slug: 'gpt-6-luna',
+      display_name: 'GPT-6-Luna',
+      default_reasoning_level: 'medium',
+      supported_reasoning_levels: [
+        { effort: 'low', description: 'Low' },
+        { effort: 'medium', description: 'Medium' },
+        { effort: 'high', description: 'High' },
+        { effort: 'xhigh', description: 'Extra High' },
+        { effort: 'max', description: 'Maximum' },
+      ],
+      visibility: 'list',
+      minimal_client_version: '0.155.0',
+      supported_in_api: true,
+      priority: 3,
+      use_responses_lite: true,
+      input_modalities: ['text', 'image'],
+      context_window: 272000,
+      max_context_window: 872000,
+      tool_mode: 'code_mode_only',
+    },
+    {
+      slug: 'gpt-x-future-model',
+      display_name: 'GPT X Future',
+      default_reasoning_level: 'future-level',
+      supported_reasoning_levels: [
+        { effort: 'future-level', description: 'Future Reasoning' },
+      ],
+      visibility: 'list',
+      minimal_client_version: '0.155.0',
+      supported_in_api: true,
+      priority: 4,
+      use_responses_lite: false,
+      input_modalities: ['text'],
+      future_unknown_capability: { enabled: true },
+    },
+  ],
+} as const

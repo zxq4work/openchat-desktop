@@ -129,7 +129,7 @@ const openchat = {
     removeAll: () => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_REMOVE_ALL),
     updateRole: (id: string, prompt: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_ROLE, id, prompt),
-    updateModel: (id: string, modelId: string) =>
+    updateModel: (id: string, modelId: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_MODEL, id, modelId),
     updateEffort: (id: string, effort: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_EFFORT, id, effort),

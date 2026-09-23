@@ -3,6 +3,10 @@ import { ResponsesStreamParser } from './ResponsesStreamParser'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { createRequest } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
+import {
+  CHATGPT_MODEL_CATALOG_CLIENT_VERSION,
+  CHATGPT_MODEL_CATALOG_FALLBACK_VERSION,
+} from '../models/modelCatalogVersion'
 
 // ---- Error Types ----
 
@@ -21,23 +25,58 @@ export class UsageLimitReachedError extends Error {
 
 // ---- Types ----
 
+// ChatGPT /models 原始响应模型。
+// 故意宽松：所有能力 metadata 均为 optional，并保留 [key: string]: unknown，
+// 使 OpenAI 未来新增字段（或未知模型）都不会导致整个列表解析失败。
+// 注意：Codex Agent 私有 metadata（model_messages / guardian / confirmation_policies /
+// multi_agent prompt / permissions 等）在此不作强类型声明，OpenChat 不消费它们。
 export interface ChatGPTModel {
   slug: string
-  id: string
-  display_name: string
-  default_reasoning_level: string | { effort?: string; level?: string; reasoning_effort?: string; reasoning_level?: string; value?: string } | null
-  supported_reasoning_levels: Array<string | { effort?: string; level?: string; reasoning_effort?: string; reasoning_level?: string; value?: string }>
-  input_modalities: string[]
-  supports_personality: boolean
-  is_default: boolean
-  base_instructions?: string
+  id?: string
+  display_name?: string
+  description?: string
+
+  default_reasoning_level?: string | { effort?: string; level?: string; reasoning_effort?: string; reasoning_level?: string; value?: string } | null
+  supported_reasoning_levels?: Array<string | { effort?: string; level?: string; reasoning_effort?: string; reasoning_level?: string; value?: string; description?: string }>
+
+  visibility?: string
+  supported_in_api?: boolean
+  minimal_client_version?: string
+  priority?: number
+
   use_responses_lite?: boolean
-  web_search_tool_type?: string | null
+  supports_reasoning_effort_updates?: boolean
+  supports_parallel_tool_calls?: boolean
+
+  input_modalities?: string[]
+  supports_image_detail_original?: boolean
+
+  context_window?: number
+  max_context_window?: number
+  effective_context_window_percent?: number
+
   supports_search_tool?: boolean
-  model_messages?: {
-    instructions_template?: string
-    instructions_variables?: unknown
-  }
+  web_search_tool_type?: string | null
+
+  support_verbosity?: boolean
+  default_verbosity?: string
+
+  tool_mode?: string | null
+  multi_agent_version?: string | null
+  multi_agent_reasoning_effort?: string | null
+
+  service_tiers?: Array<{ id?: string; name?: string; description?: string }>
+  default_service_tier?: string | null
+  additional_speed_tiers?: string[]
+
+  experimental_supported_tools?: string[]
+
+  // 兼容旧解析路径
+  supports_personality?: boolean
+  is_default?: boolean
+  base_instructions?: string
+
+  [key: string]: unknown
 }
 
 // Codex 用户消息的多模态内容项（与 vendor codex ContentItem schema 一致）。
@@ -115,7 +154,185 @@ export interface ChatGPTCodexClient {
 // ---- Real Implementation ----
 
 const BASE_URL = 'https://chatgpt.com'
-const CLIENT_VERSION = '0.148.0'
+
+// ---- Pure helpers（导出以便单测；不含网络）----
+
+// 模型目录 URL：client_version 只能出现在这里，绝不出现在 /responses。
+export function buildModelsCatalogUrl(clientVersion: string): string {
+  return `${BASE_URL}/backend-api/codex/models?client_version=${encodeURIComponent(clientVersion)}`
+}
+
+// 真正的聊天端点：不携带 client_version（catalog version 仅属于 /models）。
+export function buildResponsesUrl(): string {
+  return `${BASE_URL}/backend-api/codex/responses`
+}
+
+// 构造 /responses 请求 headers。Responses Lite 仅在 useResponsesLite === true 时发送 header。
+// 不伪造 Codex CLI 身份（不加 originator / User-Agent / version）。
+export function buildResponsesHeaders(
+  token: string,
+  accountId: string | null,
+  useResponsesLite?: boolean
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'text/event-stream',
+  }
+  if (accountId) {
+    headers['ChatGPT-Account-Id'] = accountId
+  }
+  if (useResponsesLite === true) {
+    headers['x-openai-internal-codex-responses-lite'] = 'true'
+  }
+  return headers
+}
+
+// 判断 /models 的 4xx 响应是否表示 client_version 参数非法（而非鉴权/权限问题）。
+// 只有明确指向版本参数时才回退，避免把 401/403 误当作版本问题。
+//
+// 「version too old」是特例：它说明当前兼容版本已经过旧，再回退到更旧的 fallback 只会更旧，
+// 不可能解决问题，因此必须显式排除（否则 "client_version is too old" 会命中 client_version）。
+// 该情况交由上层打印安全日志并保留原错误路径，绝不自动猜新版本。
+//
+// 匹配语义：<version 标识> + 可选 "is" + "too old"，其中 version 标识为
+// client_version / client version / version（下划线或空格分隔均可）。
+// 覆盖全部常见写法，尤其是 "client_version is too old"（旧版 includes 漏掉的正是这一种）。
+const TOO_OLD_PATTERN = /\b(?:client[_ ]?version|version)\s+(?:is\s+)?too\s+old\b/i
+
+export function isCatalogVersionTooOld(status: number, body: string): boolean {
+  if (status < 400 || status >= 500) return false
+  if (status === 401 || status === 403) return false
+  return TOO_OLD_PATTERN.test(body)
+}
+
+export function isInvalidCatalogVersionStatus(status: number, body: string): boolean {
+  if (status < 400 || status >= 500) return false
+  if (status === 401 || status === 403) return false
+  // too-old 明确排除，绝不回退到更旧版本。
+  if (isCatalogVersionTooOld(status, body)) return false
+  const lower = body.toLowerCase()
+  return (
+    lower.includes('client_version') ||
+    lower.includes('client version') ||
+    lower.includes('unsupported version') ||
+    lower.includes('invalid version')
+  )
+}
+
+// 已知的 Responses SSE event 类型集合。未知 event 一律宽松忽略（不 throw、不终止 stream），
+// 便于 OpenAI 协议演进时不破坏整个流；已知的错误类 event（error）仍正常上报。
+export const KNOWN_SSE_EVENT_TYPES = new Set<string>([
+  'response.created',
+  'response.output_item.added',
+  'response.output_item.done',
+  'response.output_text.delta',
+  'response.output_text.done',
+  'response.reasoning_text.delta',
+  'response.reasoning_text.done',
+  'response.reasoning_summary_text.delta',
+  'response.reasoning_summary_text.done',
+  'response.web_search_call.started',
+  'response.web_search_call.in_progress',
+  'response.web_search_call.searching',
+  'response.web_search_call.completed',
+  'response.web_search_call.failed',
+  'response.completed',
+  'error',
+])
+
+function isDevelopment(): boolean {
+  return process.env.NODE_ENV !== 'production'
+}
+
+// 未知 event 返回 false：调用方据此宽松忽略该 event（不 throw、不结束 stream）。
+export function isKnownSSEEventType(type: string): boolean {
+  return KNOWN_SSE_EVENT_TYPES.has(type)
+}
+
+// 构造 /responses 请求 body。纯函数，导出以便单测断言 Lite 固定字段：
+//   - Lite：parallel_tool_calls=false；绝不因 hosted tools 注入 tools/include。
+//   - non-Lite：保持既有行为（tools/include 原样）。
+export function buildResponsesBody(request: ResponsesRequest): Record<string, unknown> {
+  return {
+    model: request.model,
+    instructions: request.instructions,
+    input: request.input,
+    store: false,
+    stream: true,
+    ...(request.useResponsesLite ? { parallel_tool_calls: false } : {}),
+    ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
+    ...(request.include && request.include.length > 0 ? { include: request.include } : {}),
+    ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+    ...(request.reasoning ? { reasoning: { ...request.reasoning, summary: request.reasoning.summary ?? 'auto' } } : {}),
+  }
+}
+
+// 多模态 input content 的脱敏摘要：仅返回 content item 的 type 列表（如 input_text / input_image）。
+// 绝不返回 text、image_url、base64、本地路径。
+export function summarizeInputContentTypes(request: ResponsesRequest): Array<string[]> {
+  const result: Array<string[]> = []
+  for (const item of request.input) {
+    if ('content' in item && Array.isArray(item.content)) {
+      result.push(item.content.map((c) => c.type))
+    }
+  }
+  return result
+}
+
+// 从 data URL 前缀提取 MIME（如 data:image/png;base64 → image/png）。
+// 仅返回 MIME 段，绝不返回 base64 内容或完整 data URL。
+export function extractDataUrlMime(imageUrl: string): string | null {
+  const m = /^data:([^;,]+)[;,]/.exec(imageUrl)
+  return m ? m[1] : null
+}
+
+// 脱敏的 Responses 请求 shape 摘要（仅供开发诊断）。
+// 绝不含 token / account id / prompt / 用户消息 / 图片 base64 / 完整 tool schema。
+export function summarizeResponsesShape(request: ResponsesRequest): Record<string, unknown> {
+  const inputTypes = request.input.map((i) => ('type' in i && typeof i.type === 'string' ? i.type : i.role))
+  const additionalTools = request.input
+    .filter((i): i is { type: 'additional_tools'; role: string; tools: unknown[] } => 'type' in i && i.type === 'additional_tools')
+    .flatMap((i) => i.tools)
+    .map((t) => {
+      const o = t as { type?: string; name?: string }
+      return { type: o.type, name: o.name }
+    })
+  const topLevelTools = (request.tools ?? []).map((t) => {
+    const o = t as { type?: string; name?: string }
+    return { type: o.type, name: o.name }
+  })
+  // 多模态脱敏摘要：content item 的 type 序列 + 图片数量 + MIME（绝不含 base64 / 路径）。
+  const inputContentTypes = summarizeInputContentTypes(request)
+  const imageMimeTypes: string[] = []
+  for (const item of request.input) {
+    if ('content' in item && Array.isArray(item.content)) {
+      for (const c of item.content) {
+        if (c.type === 'input_image') {
+          const mime = extractDataUrlMime(c.image_url)
+          if (mime) imageMimeTypes.push(mime)
+        }
+      }
+    }
+  }
+  return {
+    model: request.model,
+    effectiveResponsesLite: request.useResponsesLite === true,
+    hasLiteHeader: request.useResponsesLite === true,
+    hasTopLevelTools: topLevelTools.length > 0,
+    topLevelToolCount: topLevelTools.length,
+    topLevelTools,
+    include: request.include ?? [],
+    toolChoice: request.toolChoice ?? 'none',
+    inputTypes,
+    inputContentTypes,
+    imageInputCount: imageMimeTypes.length,
+    imageMimeTypes,
+    additionalTools,
+    parallelToolCalls: request.useResponsesLite === true ? false : undefined,
+    reasoningContext: request.reasoning?.context ?? 'none',
+  }
+}
 
 export class RealChatGPTCodexClient implements ChatGPTCodexClient {
   private credentialManager: OAuthCredentialManager
@@ -125,22 +342,69 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
   }
 
   async listModels(): Promise<ChatGPTModel[]> {
+    console.log('[Models] catalog compatibility version=%s', CHATGPT_MODEL_CATALOG_CLIENT_VERSION)
+
+    const primary = await this.fetchModelCatalog(CHATGPT_MODEL_CATALOG_CLIENT_VERSION)
+    if (primary.ok) {
+      return this.parseModelCatalog(primary.json)
+    }
+
+    // 「version too old」：当前兼容版本已过旧，回退到更旧版本无意义，直接保留原错误。
+    if (isCatalogVersionTooOld(primary.status, primary.body)) {
+      console.log('[Models] catalog client version rejected as too old; fallback skipped')
+      throw new Error(`Failed to list models: ${primary.status}`)
+    }
+
+    // 保守回退：仅当服务器明确因 client_version 非法返回 4xx 时尝试 fallback 版本。
+    if (isInvalidCatalogVersionStatus(primary.status, primary.body)) {
+      console.log('[Models] catalog version rejected (status=%d), retrying fallback=%s',
+        primary.status, CHATGPT_MODEL_CATALOG_FALLBACK_VERSION)
+      const fallback = await this.fetchModelCatalog(CHATGPT_MODEL_CATALOG_FALLBACK_VERSION)
+      if (fallback.ok) {
+        return this.parseModelCatalog(fallback.json)
+      }
+      throw new Error(`Failed to list models: ${fallback.status}`)
+    }
+
+    throw new Error(`Failed to list models: ${primary.status}`)
+  }
+
+  private async fetchModelCatalog(
+    clientVersion: string
+  ): Promise<{ ok: boolean; status: number; json: unknown; body: string }> {
     const token = await this.credentialManager.getAccessToken()
     const accountId = await this.credentialManager.getAccountId()
 
-    const url = `${BASE_URL}/backend-api/codex/models?client_version=${CLIENT_VERSION}`
-
+    const url = buildModelsCatalogUrl(clientVersion)
     const response = await this.fetchWithAuth(url, token, accountId)
+    const body = response.text()
 
-    if (!response.ok) {
-      throw new Error(`Failed to list models: ${response.status}`)
+    let json: unknown = undefined
+    if (response.ok && body) {
+      try {
+        json = JSON.parse(body)
+      } catch {
+        json = undefined
+      }
     }
 
-    const data = await response.json() as { models?: ChatGPTModel[] } | ChatGPTModel[]
-    const models = Array.isArray(data) ? data : (data.models ?? [])
-    if (models.length > 0) {
-      console.log('[ChatGPTCodexClient] Models loaded:', models.length, 'first:', models[0].id, '|', models[0].display_name)
+    return { ok: response.ok, status: response.status, json, body }
+  }
+
+  private parseModelCatalog(data: unknown): ChatGPTModel[] {
+    // 宽松兼容：{ models: [...] } 或 { data: [...] } 或裸数组。
+    let models: ChatGPTModel[] = []
+    if (Array.isArray(data)) {
+      models = data as ChatGPTModel[]
+    } else if (data && typeof data === 'object') {
+      const obj = data as { models?: unknown; data?: unknown }
+      if (Array.isArray(obj.models)) {
+        models = obj.models as ChatGPTModel[]
+      } else if (Array.isArray(obj.data)) {
+        models = obj.data as ChatGPTModel[]
+      }
     }
+    console.log('[Models] fetched %d models', models.length)
     return models
   }
 
@@ -148,20 +412,9 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     const token = await this.credentialManager.getAccessToken()
     const accountId = await this.credentialManager.getAccountId()
 
-    const body = JSON.stringify({
-      model: request.model,
-      instructions: request.instructions,
-      input: request.input,
-      store: false,
-      stream: true,
-      ...(request.useResponsesLite ? { parallel_tool_calls: false } : {}),
-      ...(request.tools && request.tools.length > 0 ? { tools: request.tools } : {}),
-      ...(request.include && request.include.length > 0 ? { include: request.include } : {}),
-      ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
-      ...(request.reasoning ? { reasoning: { ...request.reasoning, summary: request.reasoning.summary ?? 'auto' } } : {}),
-    })
+    const body = JSON.stringify(buildResponsesBody(request))
 
-    const parsedUrl = new URL(`${BASE_URL}/backend-api/codex/responses`)
+    const parsedUrl = new URL(buildResponsesUrl())
 
     console.log('[ChatGPT Request]')
     console.log('endpoint=POST', parsedUrl.href)
@@ -183,6 +436,9 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     if (request.useResponsesLite) {
       console.log('[Codex Responses] responsesLite=true')
     }
+    if (isDevelopment()) {
+      console.log('[Responses Request Shape]', JSON.stringify(summarizeResponsesShape(request)))
+    }
 
     const parser = new ResponsesStreamParser()
     const startTime = Date.now()
@@ -201,12 +457,13 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     }
   }
 
-  private async fetchWithAuth(url: string, token: string, accountId: string | null): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
+  private async fetchWithAuth(url: string, token: string, accountId: string | null): Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text: () => string }> {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url)
       const headers: Record<string, string> = {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       }
       if (accountId) {
         headers['ChatGPT-Account-Id'] = accountId
@@ -229,6 +486,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
               ok: res.statusCode != null && res.statusCode >= 200 && res.statusCode < 300,
               status: res.statusCode ?? 0,
               json: async () => JSON.parse(data),
+              text: () => data,
             })
           })
         }
@@ -249,17 +507,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     statusRef?: { status: number },
     useResponsesLite?: boolean
   ): AsyncIterable<ResponsesSSEEvent> {
-    const headers: Record<string, string> = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'text/event-stream',
-    }
-    if (accountId) {
-      headers['ChatGPT-Account-Id'] = accountId
-    }
-    if (useResponsesLite) {
-      headers['x-openai-internal-codex-responses-lite'] = 'true'
-    }
+    const headers = buildResponsesHeaders(token, accountId, useResponsesLite)
 
     let abortHandler: (() => void) | null = null
 
@@ -384,25 +632,12 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
             if (!parsed.type) {
               continue
             }
-            if (parsed.type && (
-              parsed.type === 'response.created' ||
-              parsed.type === 'response.output_item.added' ||
-              parsed.type === 'response.output_item.done' ||
-              parsed.type === 'response.output_text.delta' ||
-              parsed.type === 'response.output_text.done' ||
-              parsed.type === 'response.reasoning_text.delta' ||
-              parsed.type === 'response.reasoning_text.done' ||
-              parsed.type === 'response.reasoning_summary_text.delta' ||
-              parsed.type === 'response.reasoning_summary_text.done' ||
-              parsed.type === 'response.web_search_call.started' ||
-              parsed.type === 'response.web_search_call.in_progress' ||
-              parsed.type === 'response.web_search_call.searching' ||
-              parsed.type === 'response.web_search_call.completed' ||
-              parsed.type === 'response.web_search_call.failed' ||
-              parsed.type === 'response.completed' ||
-              parsed.type === 'error'
-            )) {
+            if (isKnownSSEEventType(parsed.type)) {
               yield parsed as ResponsesSSEEvent
+            } else if (isDevelopment()) {
+              // 未知 SSE event：宽松忽略，不终止整个 stream，后续已知 event 继续处理。
+              // 仅开发环境告警，便于发现协议演进；生产环境静默忽略。
+              console.warn('[ChatGPTCodexClient] unknown SSE event type=%s (ignored)', String(parsed.type))
             }
           } catch {
             // 跳过无法解析的 SSE 数据
@@ -462,8 +697,14 @@ export class MockChatGPTCodexClient implements ChatGPTCodexClient {
         id: 'gpt-5',
         display_name: 'GPT-5',
         default_reasoning_level: 'medium',
-        supported_reasoning_levels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+        supported_reasoning_levels: [
+          { effort: 'none' }, { effort: 'minimal' }, { effort: 'low' },
+          { effort: 'medium' }, { effort: 'high' }, { effort: 'xhigh' },
+        ],
         input_modalities: ['text'],
+        visibility: 'list',
+        supported_in_api: true,
+        use_responses_lite: false,
         supports_personality: true,
         is_default: true,
       },
@@ -472,8 +713,10 @@ export class MockChatGPTCodexClient implements ChatGPTCodexClient {
         id: 'gpt-5-mini',
         display_name: 'GPT-5 Mini',
         default_reasoning_level: 'low',
-        supported_reasoning_levels: ['none', 'low', 'medium'],
+        supported_reasoning_levels: [{ effort: 'none' }, { effort: 'low' }, { effort: 'medium' }],
         input_modalities: ['text'],
+        visibility: 'list',
+        supported_in_api: true,
         supports_personality: false,
         is_default: false,
       },
@@ -484,6 +727,8 @@ export class MockChatGPTCodexClient implements ChatGPTCodexClient {
         default_reasoning_level: null,
         supported_reasoning_levels: [],
         input_modalities: ['text', 'image'],
+        visibility: 'list',
+        supported_in_api: true,
         supports_personality: true,
         is_default: false,
       },

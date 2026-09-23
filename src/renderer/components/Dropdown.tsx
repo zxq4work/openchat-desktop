@@ -4,6 +4,9 @@ import { createPortal } from 'react-dom'
 export interface DropdownOption {
   value: string
   label: string
+  // 辅助说明文本（如 reasoning effort 的服务器 description）：仅作 hover tooltip，
+  // 绝不作为主文本。
+  description?: string
   // 失效选项（如历史绑定的 Provider 已不兼容）：可选但不可重新选中。
   disabled?: boolean
   // 失效/警告样式（warning 图标 + 警告色文本），仅用于展示当前无效绑定。
@@ -145,7 +148,7 @@ export function Dropdown({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
-        title={title}
+        title={title ?? selected?.description}
       >
         <span className={`dropdown-value${selected ? '' : ' placeholder'}${selected?.invalid ? ' invalid' : ''}`}>
           {selected ? selected.label : placeholder ?? '请选择'}
@@ -175,6 +178,7 @@ export function Dropdown({
                 role="option"
                 aria-selected={opt.value === value}
                 disabled={opt.disabled}
+                title={opt.description}
                 className={`dropdown-item${opt.value === value ? ' selected' : ''}${opt.invalid ? ' invalid' : ''}${opt.disabled ? ' disabled' : ''}`}
                 onClick={() => { if (!opt.disabled) handleSelect(opt.value) }}
               >

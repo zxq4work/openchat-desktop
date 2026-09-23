@@ -9,6 +9,7 @@ import { ConversationList } from './ConversationList'
 import { ConversationSearchPanel } from '../search/ConversationSearchPanel'
 import { Tooltip } from '../Tooltip'
 import { SEARCH_CONVERSATIONS_SHORTCUT, NEW_CONVERSATION_SHORTCUT } from '../../packages/shortcut'
+import { resolveNewConversationDefaults } from '../../packages/modelPresentation'
 
 export function Sidebar() {
   const setSummaries = useConversationStore((s) => s.setSummaries)
@@ -91,18 +92,9 @@ export function Sidebar() {
     const defaultWebSearch = await window.openchat.settings.getDefaultWebSearch()
     const defaultSearchEngine = await window.openchat.settings.getWebSearchEngine()
 
-    let defaultModel = saved.modelId
-    let defaultEffort = saved.effort
-
-    if (!defaultModel && models.length > 0) {
-      defaultModel = models[0].id
-    }
-    if (!defaultEffort && models.length > 0) {
-      defaultEffort = models[0].defaultReasoningEffort
-        ?? (models[0].supportedReasoningEfforts.length > 0
-          ? models[0].supportedReasoningEfforts[0].reasoningEffort
-          : null)
-    }
+    // 仅 ChatGPT Codex（providerId 为空）才用 Codex catalog 归一化 saved.modelId；
+    // 自定义 Provider 的 saved.modelId 属于另一模型域，原样沿用（见 resolveNewConversationDefaults）。
+    const { modelId: defaultModel, effort: defaultEffort } = resolveNewConversationDefaults(models, saved)
 
     const conv = await window.openchat.conversations.create(defaultModel, defaultEffort, undefined, saved.providerId, defaultWebSearch, defaultSearchEngine, 'chat')
     if (conv) {

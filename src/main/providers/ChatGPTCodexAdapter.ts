@@ -14,8 +14,8 @@ import type {
 } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { UnsupportedImageInputError } from './errors'
 
-export interface CodexRequestOptions {
-  useResponsesLite?: boolean
+function isDev(): boolean {
+  return process.env.NODE_ENV !== 'production'
 }
 
 export class ChatGPTCodexAdapter implements ModelAdapter {
@@ -23,19 +23,9 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
   readonly capabilities = { toolCalling: true, reasoning: true, supportsImageInput: true }
 
   private codexClient: ChatGPTCodexClient
-  private useResponsesLite: boolean
 
-  constructor(codexClient: ChatGPTCodexClient, useResponsesLite = false) {
+  constructor(codexClient: ChatGPTCodexClient) {
     this.codexClient = codexClient
-    this.useResponsesLite = useResponsesLite
-  }
-
-  setUseResponsesLite(v: boolean): void {
-    this.useResponsesLite = v
-  }
-
-  getUseResponsesLite(): boolean {
-    return this.useResponsesLite
   }
 
   async *stream(
@@ -71,27 +61,16 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
   } {
     const input: ProviderInputItem[] = []
 
-    // 分离 hosted 工具（如官方 web_search）与 client 工具（function）
-    // hosted 工具放到顶层 tools，client 工具放到 additional_tools
-    const hostedTools: unknown[] = []
-    const clientTools: unknown[] = []
+    // Responses Lite 完全由模型 metadata 驱动（CanonicalModelRequest.responsesLite）。
+    // undefined / false 均不发送 header 与 reasoning.context；绝不在 Adapter 内按 slug 猜测。
+    const useResponsesLite = request.responsesLite === true
 
-    for (const t of request.tools ?? []) {
-      if (t.toolType === 'web_search') {
-        // Codex 官方 Hosted Web Search：服务端执行搜索，无需 function 声明
-        hostedTools.push({
-          type: 'web_search',
-          search_context_size: 'high',
-        })
-      } else {
-        clientTools.push({
-          type: 'function',
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        })
-      }
-    }
+    // 分离 hosted 工具（如官方 web_search）与 client 工具（function/custom）。
+    // Lite 与普通 Responses 的 tool serialization 必须分开：
+    //   - 普通 Responses：hosted 工具放顶层 tools（+ include）
+    //   - Responses Lite：不接受普通 hosted Responses tools，hosted 工具一律丢弃；
+    //     client-executed 工具通过 input 的 additional_tools 描述。
+    const { hostedTools, clientTools } = this.serializeTools(request, useResponsesLite)
 
     // client 工具放入 additional_tools
     if (clientTools.length > 0) {
@@ -126,16 +105,17 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       input,
       store: false,
       stream: true,
-      useResponsesLite: this.useResponsesLite || undefined,
+      useResponsesLite: useResponsesLite || undefined,
     }
 
-    // hosted 工具：顶层 tools + include 请求来源 URL
+    // hosted 工具：顶层 tools + include 请求来源 URL。Lite 下 hostedTools 恒为空，不会发送。
     if (hostedTools.length > 0) {
       req.tools = hostedTools
       req.include = ['web_search_call.action.sources']
     }
 
-    // tool_choice 映射：'required' 且存在 hosted web_search 时，强制 web_search
+    // tool_choice 映射：'required' 且存在 hosted web_search 时，强制 web_search。
+    // Lite 无 hosted 工具，退化为 'auto'/'none'，绝不构造 hosted tool_choice。
     if (request.toolChoice) {
       if (request.toolChoice === 'required' && hostedTools.length > 0) {
         req.toolChoice = { type: 'web_search' }
@@ -152,13 +132,87 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
         summary: 'auto',
       }
       // Responses Lite 要求 reasoning.context 为 all_turns
-      if (this.useResponsesLite) {
+      if (useResponsesLite) {
         reasoning.context = 'all_turns'
       }
       req.reasoning = reasoning
     }
 
     return req
+  }
+
+  // 已知的 hosted Responses 工具类型：这些只能出现在普通 Responses 的顶层 tools，
+  // Lite 一律不支持（服务器错误：Lite only supports function tools, custom tools,
+  // and client-executed tool search）。
+  // 注意：web_search 是当前 OpenChat 唯一「已实现」hosted wire serialization 的类型；
+  // 其余类型仅登记为 known hosted，OpenChat serializer 尚未实现其 wire shape，
+  // 绝不把它们错误序列化为 function（详见 serializeTools 的 Non-Lite 分支）。
+  private static readonly KNOWN_HOSTED_TOOL_TYPES = new Set([
+    'web_search',
+    'file_search',
+    'image_generation',
+    'computer_use',
+    'code_interpreter',
+  ])
+
+  // 工具序列化：普通 Responses 与 Lite 两套语义分开。
+  // 返回 { hostedTools（顶层 tools）, clientTools（additional_tools）}。
+  private serializeTools(
+    request: CanonicalModelRequest,
+    useResponsesLite: boolean
+  ): { hostedTools: unknown[]; clientTools: unknown[] } {
+    const hostedTools: unknown[] = []
+    const clientTools: unknown[] = []
+
+    for (const t of request.tools ?? []) {
+      if (useResponsesLite) {
+        // Lite：绝不发送普通 hosted Responses tools。
+        if (ChatGPTCodexAdapter.KNOWN_HOSTED_TOOL_TYPES.has(t.toolType ?? '')) {
+          if (isDev()) console.warn('[Codex Adapter] Lite: dropping hosted tool type=%s name=%s', t.toolType, t.name)
+          continue
+        }
+        // Lite 允许 function / custom（client-executed）。
+        if (t.toolType === 'function' || t.toolType === 'custom' || t.toolType == null) {
+          clientTools.push(this.toClientTool(t, true))
+        } else {
+          // 未知 tool type：绝不静默发送，开发模式告警并排除。
+          if (isDev()) console.warn('[Codex Adapter] Lite: unsupported tool type=%s name=%s, excluding', t.toolType, t.name)
+        }
+        continue
+      }
+
+      // 普通 Responses：
+      //   - web_search：OpenChat 已实现的 hosted wire shape。
+      //   - 其他 known hosted tool：OpenChat serializer 尚未实现其 wire shape，
+      //     绝不降级成 function（那是另一种协议语义）；开发告警并安全排除。
+      //   - 其余（function / custom / null）：保持既有 client tool 行为不变。
+      if (t.toolType === 'web_search') {
+        hostedTools.push({
+          type: 'web_search',
+          search_context_size: 'high',
+        })
+      } else if (ChatGPTCodexAdapter.KNOWN_HOSTED_TOOL_TYPES.has(t.toolType ?? '')) {
+        if (isDev()) console.warn('[Codex Adapter] Non-Lite: known hosted tool type=%s name=%s is not implemented by OpenChat serializer, excluding', t.toolType, t.name)
+      } else {
+        clientTools.push(this.toClientTool(t, false))
+      }
+    }
+
+    return { hostedTools, clientTools }
+  }
+
+  // 非 Lite 保持历史行为：client 工具一律 type='function'。
+  // Lite 额外允许 custom 类型（服务器声明支持 custom tools）。
+  private toClientTool(
+    t: { name: string; description: string; parameters: Record<string, unknown>; toolType?: string },
+    allowCustom: boolean
+  ): unknown {
+    return {
+      type: allowCustom && t.toolType === 'custom' ? 'custom' : 'function',
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }
   }
 
   private convertMessages(msg: CanonicalMessage, request: CanonicalModelRequest): ProviderInputItem[] {
@@ -199,16 +253,12 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     if (msg.role === 'assistant') {
       // web_search_call（Hosted 搜索）
       if (msg.webSearchCalls && msg.webSearchCalls.length > 0) {
-        return msg.webSearchCalls.map((wsc) => {
-          const wireItem = {
-            type: 'web_search_call' as const,
-            id: wsc.id,
-            ...(wsc.status ? { status: wsc.status } : {}),
-            action: wsc.action ? { ...wsc.action, type: wsc.action.type ?? 'search' } : { type: 'search' },
-          }
-          console.log('[Hosted Replay Probe] wire=', JSON.stringify(wireItem))
-          return wireItem
-        })
+        return msg.webSearchCalls.map((wsc) => ({
+          type: 'web_search_call' as const,
+          id: wsc.id,
+          ...(wsc.status ? { status: wsc.status } : {}),
+          action: wsc.action ? { ...wsc.action, type: wsc.action.type ?? 'search' } : { type: 'search' },
+        }))
       }
 
       // function_call（Standalone web.run / Custom tool）
@@ -292,8 +342,6 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
           const item = event.item as { type: string; id: string; status?: string; action?: { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }
           const action = item.action ? { type: item.action.type ?? 'search', ...item.action } : { type: 'search' }
           const sources = action.sources ?? []
-          console.log('[Hosted Replay Probe] raw=', JSON.stringify({ id: item.id, type: item.type, status: item.status, action }))
-          console.log('[Hosted Replay Probe] raw action keys=', Object.keys(item.action ?? {}))
           return {
             type: 'web_search_call',
             phase: 'completed',

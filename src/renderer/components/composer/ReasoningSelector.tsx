@@ -2,9 +2,9 @@ import React, { useEffect } from 'react'
 import { useModelStore } from '../../stores/modelStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useProviderStore } from '../../stores/providerStore'
-import { EFFORT_LABELS } from '../../../shared/constants'
 import { Dropdown } from '../Dropdown'
 import { resolveConversationBinding } from '../../../shared/conversation/capabilities'
+import { reasoningEffortOptions } from '../../packages/modelPresentation'
 
 // 自定义供应商 Chat Completions API 支持的推理等级
 const CUSTOM_REASONING_EFFORTS = [
@@ -78,16 +78,14 @@ export function ReasoningSelector() {
     setActiveConversation({ ...conversation, defaultReasoningEffort: effort })
   }
 
-  const label = (id: string) => EFFORT_LABELS[id] ?? id
-
+  // 短名称一律由 raw effort 生成（reasoningEffortOptions），服务器 description 仅作 tooltip。
+  // Codex 模型与自定义 Provider 走同一 formatter；未知 effort 一律 humanize 展示，绝不因不识别而过滤。
+  // value 始终是 raw effort（wire value），标签只影响展示、绝不影响选中值。
   return (
     <Dropdown
       className="reasoning-selector"
       value={currentEffort ?? ''}
-      options={optionSource.map((effort) => ({
-        value: effort.reasoningEffort,
-        label: label(effort.reasoningEffort),
-      }))}
+      options={reasoningEffortOptions(optionSource)}
       onChange={handleChange}
       disabled={bindingInvalid}
       ariaLabel="选择推理强度"
