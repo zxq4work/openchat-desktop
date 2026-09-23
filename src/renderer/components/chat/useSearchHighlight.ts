@@ -1,104 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { useUiStore, type SearchMatch } from '../../stores/uiStore'
+import { useUiStore } from '../../stores/uiStore'
+import { applyHighlights, clearHighlights, isHighlightBusy } from '../../packages/messageHighlight'
 
-let isApplying = false
-let isSelecting = false
-
-document.addEventListener('mousedown', () => { isSelecting = true })
-document.addEventListener('mouseup', () => { isSelecting = false })
-
-function clearHighlights(root: HTMLElement): void {
-  const marks = root.querySelectorAll('mark.search-highlight')
-  for (const mark of Array.from(marks)) {
-    const parent = mark.parentNode
-    if (!parent) continue
-    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark)
-    parent.removeChild(mark)
-  }
-  root.normalize()
-}
-
-function highlightText(root: HTMLElement, query: string, matches: SearchMatch[], currentMatchIdx: number, messageId: string): void {
-  const lowerQuery = query.toLowerCase()
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const el = node.parentElement
-      if (!el) return NodeFilter.FILTER_REJECT
-      if (el.tagName === 'MARK' || el.tagName === 'SCRIPT' || el.tagName === 'STYLE') {
-        return NodeFilter.FILTER_REJECT
-      }
-      return NodeFilter.FILTER_ACCEPT
-    },
-  })
-
-  const textNodes: Text[] = []
-  let node: Node | null
-  while ((node = walker.nextNode())) {
-    textNodes.push(node as Text)
-  }
-
-  let localIndex = 0
-
-  for (const textNode of textNodes) {
-    const text = textNode.nodeValue ?? ''
-    const lower = text.toLowerCase()
-    if (!lower.includes(lowerQuery)) continue
-
-    const frag = document.createDocumentFragment()
-    let last = 0
-    let idx = lower.indexOf(lowerQuery)
-    while (idx !== -1) {
-      if (idx > last) frag.appendChild(document.createTextNode(text.slice(last, idx)))
-      const mark = document.createElement('mark')
-      mark.className = 'search-highlight'
-
-      const firstForMessage = matches.find((m) => m.messageId === messageId)?.globalIndex ?? 0
-      const isCurrent = matches[currentMatchIdx]?.messageId === messageId &&
-        matches[currentMatchIdx]?.globalIndex === firstForMessage + localIndex
-
-      if (isCurrent) {
-        mark.classList.add('search-highlight-current')
-      }
-      mark.textContent = text.slice(idx, idx + query.length)
-      frag.appendChild(mark)
-      last = idx + query.length
-      localIndex++
-      idx = lower.indexOf(lowerQuery, last)
-    }
-    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)))
-    textNode.parentNode?.replaceChild(frag, textNode)
-  }
-}
-
-function applyHighlights(query: string, matches: SearchMatch[], currentMatchIdx: number, scrollToMatch: boolean): void {
-  const container = document.querySelector('.message-list')
-  if (!container) return
-
-  isApplying = true
-  try {
-    clearHighlights(container as HTMLElement)
-
-    if (!query) return
-
-    const messageEls = container.querySelectorAll<HTMLElement>('.message-content')
-    for (const el of Array.from(messageEls)) {
-      const messageEl = el.closest('[data-message-id]') as HTMLElement | null
-      const mid = messageEl?.dataset.messageId
-      if (!mid) continue
-      highlightText(el as HTMLElement, query, matches, currentMatchIdx, mid)
-    }
-
-    if (scrollToMatch) {
-      const currentMark = container.querySelector('mark.search-highlight-current')
-      if (currentMark) {
-        currentMark.scrollIntoView({ block: 'center' })
-      }
-    }
-  } finally {
-    isApplying = false
-  }
-}
-
+// 会话内文字搜索（Cmd/Ctrl+F）的高亮驱动。
+// 底层 DOM 高亮算法已抽到 packages/messageHighlight.ts 与全局搜索共用；
+// 这里只负责把 uiStore 的搜索状态接给引擎，mode 固定为 'local'（黄 + 橙 current）。
 export function useSearchHighlight(): void {
   const searchQuery = useUiStore((s) => s.searchQuery)
   const searchMatches = useUiStore((s) => s.searchMatches)
@@ -110,7 +16,15 @@ export function useSearchHighlight(): void {
   useEffect(() => {
     const scrollToMatch = currentMatchIndex !== prevMatchIndexRef.current
     prevMatchIndexRef.current = currentMatchIndex
-    applyHighlights(searchQuery, searchMatches, currentMatchIndex, scrollToMatch)
+    const container = document.querySelector('.message-list')
+    if (!container) return
+    applyHighlights(container as HTMLElement, {
+      query: searchQuery,
+      matches: searchMatches,
+      currentMatchIndex,
+      mode: 'local',
+      scrollToMatch,
+    })
   }, [searchQuery, searchMatches, currentMatchIndex])
 
   // 监听 React 流式渲染导致的 DOM 替换，自动重新应用高亮（不滚动）
@@ -122,13 +36,21 @@ export function useSearchHighlight(): void {
     let pending = false
 
     observerRef.current = new MutationObserver(() => {
-      if (isApplying || isSelecting) return
+      if (isHighlightBusy()) return
       const state = useUiStore.getState()
       if (!state.searchQuery || pending) return
       pending = true
       rafId = requestAnimationFrame(() => {
         pending = false
-        applyHighlights(state.searchQuery, state.searchMatches, state.currentMatchIndex, false)
+        const el = document.querySelector('.message-list')
+        if (!el) return
+        applyHighlights(el as HTMLElement, {
+          query: state.searchQuery,
+          matches: state.searchMatches,
+          currentMatchIndex: state.currentMatchIndex,
+          mode: 'local',
+          scrollToMatch: false,
+        })
       })
     })
     observerRef.current.observe(container, {

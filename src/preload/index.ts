@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { CodexUsageView } from '../shared/types/usage'
 import type { AttachmentImportResult, MessageAttachment } from '../shared/types/conversation'
+import type { ConversationSearchResult, ConversationMessageSearchMatch, ConversationSearchScope } from '../shared/types/search'
 
 // Inline IPC channel constants to avoid module resolution issues in sandboxed preload
 const IPC_CHANNELS = {
@@ -27,6 +28,8 @@ const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
   CONVERSATIONS_UPDATE_SEARCH_ENGINE: 'conversations:update-search-engine',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
+  CONVERSATIONS_SEARCH: 'conversations:search',
+  CONVERSATIONS_SEARCH_MATCHES: 'conversations:search-matches',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
   CONVERSATIONS_UPDATE_IMAGE_DEFAULTS: 'conversations:update-image-defaults',
   IMAGE_GENERATION_GENERATE: 'image-generation:generate',
@@ -143,6 +146,12 @@ const openchat = {
     updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_IMAGE_DEFAULTS, id, size, quality, background),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
+    // 全局会话搜索（只读）：跨所有会话检索，按 Conversation 聚合
+    search: (query: string, scope: ConversationSearchScope): Promise<ConversationSearchResult[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_SEARCH, query, scope),
+    // 单个会话内所有匹配消息（供当前会话命中导航）
+    searchMatches: (conversationId: string, query: string): Promise<ConversationMessageSearchMatch[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_SEARCH_MATCHES, conversationId, query),
   },
 
   chat: {

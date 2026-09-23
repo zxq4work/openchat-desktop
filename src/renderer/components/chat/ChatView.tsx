@@ -5,6 +5,7 @@ import { MessageList } from './MessageList'
 import { Composer } from '../composer/Composer'
 import { ImageComposer } from '../composer/ImageComposer'
 import { SearchBar } from './SearchBar'
+import { ConversationSearchBar } from './ConversationSearchBar'
 import { AttachmentLightbox } from './AttachmentLightbox'
 import { ContextMenu } from './ContextMenu'
 import { deriveConversationPreviewImages } from '../../packages/conversationPreviewImages'
@@ -59,6 +60,7 @@ export function ChatView() {
         <span className="chat-title">{activeConversation.title}</span>
       </div>
       {searchVisible && !isImageGeneration && <SearchBar />}
+      {!isImageGeneration && <ConversationSearchBar />}
       <MessageList />
       {isImageGeneration ? <ImageComposer /> : <Composer />}
       <AttachmentLightbox />

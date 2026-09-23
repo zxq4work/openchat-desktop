@@ -4,6 +4,7 @@ import type { ConversationSummary } from '../../../shared/types/conversation'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
 import { markConversationSwitch } from '../../packages/layoutReadDiag'
+import { selectConversationById } from '../../packages/selectConversation'
 
 interface Props {
   summary: ConversationSummary
@@ -56,19 +57,15 @@ export function ConversationItem({ summary, active }: Props) {
     }
     const t0 = performance.now()
     markConversationSwitch()
-    const data = await window.openchat.conversations.get(summary.id)
+    const opened = await selectConversationById(summary.id)
 
-    if (data) {
-      // 原子写入：一次 set 同时更新 id/conversation/messages/segments，消除中间态
-      useConversationStore.getState().activateConversation(
-        summary.id, data.conversation, data.messages, data.segments
-      )
+    if (opened) {
       // 延迟记录：等待 React 渲染完成
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           const t1 = performance.now()
-          console.log('[perf] conversation-switch|id=%s msgs=%d total=%dms',
-            summary.id.slice(0, 8), data.messages.length, Math.round(t1 - t0))
+          console.log('[perf] conversation-switch|id=%s total=%dms',
+            summary.id.slice(0, 8), Math.round(t1 - t0))
         })
       })
     }

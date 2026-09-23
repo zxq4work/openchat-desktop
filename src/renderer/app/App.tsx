@@ -7,6 +7,7 @@ import { useConversationStore } from '../stores/conversationStore'
 import { useChatStreamStore } from '../stores/chatStreamStore'
 import { useImageGenerationStore } from '../stores/imageGenerationStore'
 import { useUiStore } from '../stores/uiStore'
+import { useConversationSearchStore } from '../stores/conversationSearchStore'
 import { useThemeStore } from '../stores/themeStore'
 import { useCodexUsageStore } from '../stores/codexUsageStore'
 import { useProviderStore, type SafeProviderConfig } from '../stores/providerStore'
@@ -806,6 +807,20 @@ export function App() {
 
       const isSelectAll = isMod && (e.key === 'a' || e.key === 'A')
       const isFind = isMod && (e.key === 'f' || e.key === 'F')
+      // Cmd/Ctrl+Shift+F：全局会话搜索（与 Cmd/Ctrl+F 当前会话搜索区分）
+      const isGlobalSearch = isMod && e.shiftKey && (e.key === 'f' || e.key === 'F')
+
+      if (isGlobalSearch) {
+        e.preventDefault()
+        const searchStore = useConversationSearchStore.getState()
+        searchStore.enterSearchMode()
+        // 输入框在面板挂载后自动聚焦；此处兜底再聚焦一次
+        requestAnimationFrame(() => {
+          const input = document.querySelector<HTMLInputElement>('.search-panel-input')
+          input?.focus()
+        })
+        return
+      }
 
       if (!isSelectAll && !isFind) return
 

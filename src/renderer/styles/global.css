@@ -55,6 +55,11 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
   --accent-ring: rgba(74, 144, 226, 0.15);
   --accent-ring-outer: rgba(74, 144, 226, 0.06);
   --accent-border: rgba(74, 144, 226, 0.2);
+  /* 搜索定位提示（纯视觉变量）：flash = 闪烁峰值，rest = 极弱残留态。
+     --search-user-flash-bg 是「User 气泡自身」的 flash 色（比 --user-bg 略深、略饱和的同系浅蓝）。 */
+  --search-locate-flash-bg: rgba(74, 144, 226, 0.14);
+  --search-locate-rest-bg: rgba(74, 144, 226, 0.05);
+  --search-user-flash-bg: #DCEBFF;
 
   --danger: #EF4444;
   --danger-hover: #DC2626;
@@ -75,6 +80,11 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
 
   --scrollbar-thumb: #D1D5DB;
   --scrollbar-thumb-hover: #9CA3AF;
+
+  /* 共享 Tooltip：深色浮层 + 白字（浅色模式下也保持深底，以确保对比与「高级信息」质感） */
+  --tooltip-bg: #2B3445;
+  --tooltip-fg: #F1F5F9;
+  --tooltip-kbd-bg: rgba(255, 255, 255, 0.14);
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -118,6 +128,10 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
   --accent-ring: rgba(96, 165, 250, 0.2);
   --accent-ring-outer: rgba(96, 165, 250, 0.08);
   --accent-border: rgba(96, 165, 250, 0.3);
+  /* 搜索定位提示：深色模式略提高透明度，但仍保持极轻 */
+  --search-locate-flash-bg: rgba(96, 165, 250, 0.18);
+  --search-locate-rest-bg: rgba(96, 165, 250, 0.07);
+  --search-user-flash-bg: #244870;
 
   --danger: #F87171;
   --danger-hover: #EF4444;
@@ -138,6 +152,11 @@ html[data-focus-mode='keyboard'] [contenteditable]:focus-visible {
 
   --scrollbar-thumb: #33445C;
   --scrollbar-thumb-hover: #475569;
+
+  /* 深色模式 Tooltip：更深的浮层 + 略亮 kbd 底色，仍为白字 */
+  --tooltip-bg: #111827;
+  --tooltip-fg: #F8FAFC;
+  --tooltip-kbd-bg: rgba(255, 255, 255, 0.16);
 }
 
 body {
@@ -4516,4 +4535,518 @@ html[data-theme="dark"] mark.search-highlight-current {
 .image-param-option-add:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ========================================
+   Global Conversation Search (Search Mode)
+   ======================================== */
+
+/* Search Mode：左侧加宽，直接切换宽度（无动画，避免正文 reflow） */
+.sidebar.search-mode {
+  width: 400px;
+  transition: var(--theme-transition);
+}
+
+@media (max-width: 1100px) {
+  .sidebar.search-mode {
+    width: 320px;
+  }
+}
+
+/* Search Launcher：单行 Sidebar 工具入口。
+   视觉明显弱于「+ 新对话」：无常驻背景、无边框、无 icon 底色方块、无副标题。
+   水平 inset 与 .conversation-list(8px)+.conversation-item(12px) 对齐，
+   使整行背景与图标起点都落在会话列表那一列上。 */
+.conversation-search-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 16px);
+  min-height: 34px;
+  /* 底部 10px + 会话列表顶部 4px = 与下方会话列表约 14px 的视觉留白 */
+  margin: 0 8px 10px;
+  padding: 0 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.conversation-search-entry:hover {
+  background: var(--bg-hover-light);
+  color: var(--text-primary);
+}
+
+.conversation-search-entry:active {
+  background: var(--bg-hover);
+}
+
+/* 放大镜图标：无独立底色方块，直接用 muted/secondary 描边色 */
+.conversation-search-entry-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: color 0.14s ease;
+}
+
+.conversation-search-entry:hover .conversation-search-entry-icon {
+  color: var(--text-secondary);
+}
+
+/* 共享 Tooltip（新对话 / 搜索会话 共用一份实现与样式）。
+   宿主 display:contents 不产生盒子，包裹按钮不改变原 flex 布局；
+   浮层 position:fixed，由 JS 按「鼠标位置」或「触发元素」定位，并做 viewport collision。
+   不设 transition：坐标由 mousemove 直接写入，加过渡反而会拖尾/抖动。 */
+.oc-tooltip-host {
+  display: contents;
+}
+
+.oc-tooltip {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  z-index: 10100; /* 高于 dropdown 菜单（10000），低于 modal */
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 260px;
+  padding: 4px 8px;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-fg);
+  border-radius: 6px;
+  box-shadow: var(--shadow-sm);
+  font-size: 11.5px;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none; /* 不遮挡点击目标 */
+}
+
+.oc-tooltip-label {
+  color: var(--tooltip-fg);
+}
+
+/* 快捷键：轻量 kbd，比动作名弱一级（单一整体，不拆成多个键帽） */
+.oc-tooltip-kbd {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--tooltip-kbd-bg);
+  color: var(--tooltip-fg);
+  opacity: 0.85;
+}
+
+.conversation-search-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.search-panel-header {
+  padding: 12px 12px 6px;
+}
+
+.search-panel-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s, color 0.12s;
+}
+
+.search-panel-back:hover {
+  background: var(--bg-hover-light);
+  color: var(--accent);
+}
+
+.search-panel-input-wrap {
+  /* 相对定位：作为绝对定位清除按钮的锚点 */
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 固定高度：无论 input 是否为空、清除按钮是否显示，外层高度恒定。
+     清除按钮绝对定位、不参与高度计算，因此不会把容器撑高。 */
+  height: 36px;
+  box-sizing: border-box;
+  margin: 4px 12px 8px;
+  padding: 0 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.search-panel-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-ring);
+}
+
+.search-panel-input-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.search-panel-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  line-height: normal;
+  /* 始终预留清除按钮的横向空间：按钮出现/消失都不改变 input 宽度与文本位置 */
+  padding: 0 26px 0 0;
+}
+
+.search-panel-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* 清除按钮：绝对定位覆盖在输入框右端，不参与父容器高度/宽度计算。 */
+.search-panel-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+}
+
+.search-panel-clear:hover {
+  background: var(--bg-hover-light);
+  color: var(--text-primary);
+}
+
+.search-panel-scope {
+  padding: 0 12px 8px;
+}
+
+/* 搜索范围 segmented control */
+.search-scope-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.search-scope-tab {
+  flex: 1;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.search-scope-tab:hover {
+  color: var(--text-primary);
+}
+
+.search-scope-tab.active {
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.search-panel-error {
+  margin: 0 12px 6px;
+  padding: 8px 10px;
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.search-panel-status {
+  padding: 2px 14px 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search-panel-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.search-panel-empty {
+  padding: 32px 20px;
+  text-align: center;
+}
+
+.search-panel-empty-title {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.search-panel-empty-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.search-panel-scope-action {
+  margin-top: 12px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.search-panel-scope-action:hover {
+  background: var(--accent-light);
+}
+
+.search-result-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.12s;
+}
+
+/* 悬停：最轻量的一层 */
+.search-result-item:hover {
+  background: var(--bg-hover-light);
+}
+
+/* 右侧当前打开的会话：常驻浅底标记，区别于「用户选中」 */
+.search-result-item[data-active='true'] {
+  background: var(--bg-hover-light);
+}
+
+/* 键盘 ArrowUp / ArrowDown 停留行：与 hover 同级，加一圈内描边以示「焦点」 */
+.search-result-item[data-keyboard-active='true'] {
+  background: var(--bg-hover-light);
+  box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+/* 用户显式选中（点击 / 回车）：最强的常驻状态，优先级最高。
+   绝不通过 :first-child / :nth-child 默认命中任何一行。 */
+.search-result-item[data-selected='true'] {
+  background: var(--bg-tertiary);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
+}
+
+.search-result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.search-result-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-result-date {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.search-result-snippet {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.search-result-count {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* 关键词高亮（低透明度 accent 背景，不用强烈黄色） */
+.search-panel-highlight {
+  background: var(--accent-light);
+  color: inherit;
+  border-radius: 2px;
+}
+
+/* 右侧当前会话命中导航条 */
+.conversation-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--bg-header);
+  border-bottom: 1px solid var(--border-color);
+  transition: var(--theme-transition);
+}
+
+.conversation-search-bar-query {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.conversation-search-bar-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: center;
+}
+
+.conversation-search-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.conversation-search-bar-btn:hover {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+/* ========================================
+   搜索定位提示（Locate Feedback）
+   ========================================
+   语义：「刚刚定位到了这条消息」的一次性反馈，不是长期选中态、不是卡片 / 边框 / 竖条 / focus ring。
+   两阶段：
+     A. flash —— 定位瞬间背景快速亮起（约 150ms 到峰值），保持约 300ms 后平滑淡出；
+     B. rest  —— 回落终点保留一层极弱底色，仅作「我现在停在这里」的痕迹，不打扰阅读。
+   实现：唯一的背景层是 ::after 绝对定位覆盖整个 .message 可见主体（role label + 正文 /
+   code / 图片 / 附件），由底到顶包住，避免「包不住」；半径用负 inset 让边缘自然包裹，
+   不产生卡片轮廓。所有视觉都在这层上，气泡与正文样式零改动。 */
+
+.message.search-focus {
+  /* z-index:0 + position:relative → 形成独立层叠上下文，
+     使负 z-index 的 ::after 只落在本消息内容之下，而不会沉到祖先背景之后。 */
+  position: relative;
+  z-index: 0;
+}
+
+.message.search-focus::after {
+  content: '';
+  position: absolute;
+  /* 覆盖整条 message 可见主体（role label + 正文 / code / 图片 / 附件），
+     并向四周外扩极少，让边缘自然包裹；外扩量(10px)小于 .message-list 的 20px 内边距、
+     (6px)小于消息间 20px 间距，因此不会溢出到相邻消息。 */
+  inset: -6px -10px;
+  border-radius: 12px;
+  /* 极弱残留态（rest）：不打扰阅读的当前位置痕迹 */
+  background: var(--search-locate-rest-bg);
+  pointer-events: none;
+  /* 负 z-index：绘制在 .message 自身内容之下，气泡 / 正文 / code block 完整压在提示层之上。 */
+  z-index: -1;
+}
+
+/* flash 态：定位后快速亮起 → 明显停留（plateau）→ 平滑淡出到 rest。
+   总时长 840ms，单次、不循环、不位移、无 scale。
+   时长必须与 MessageList.tsx 的 SEARCH_LOCATE_FLASH_MS 保持一致。 */
+.message.search-focus--flash::after {
+  animation: search-locate-flash 840ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes search-locate-flash {
+  0% {
+    background: transparent;
+  }
+  /* ~150ms 到达峰值 */
+  18% {
+    background: var(--search-locate-flash-bg);
+  }
+  /* ~460ms 前保持接近峰值（plateau） */
+  55% {
+    background: var(--search-locate-flash-bg);
+  }
+  100% {
+    background: var(--search-locate-rest-bg);
+  }
+}
+
+/* User 气泡自身的同步闪光：气泡不透明底色会遮住外层 ::after，
+   只靠外层 alpha 无法让 User 的感知强度追上 Assistant。
+   因此让气泡背景色短暂加深到同系浅蓝再还原 —— 只动 background-color，
+   不加 border / outline / box-shadow / 第二层背景块。Rest 不改变气泡。 */
+@keyframes search-user-bubble-flash {
+  0% {
+    background-color: var(--user-bg);
+  }
+  18% {
+    background-color: var(--search-user-flash-bg);
+  }
+  55% {
+    background-color: var(--search-user-flash-bg);
+  }
+  100% {
+    background-color: var(--user-bg);
+  }
+}
+
+.message.search-focus--flash.user-message .message-content {
+  animation: search-user-bubble-flash 840ms cubic-bezier(0.22, 1, 0.36, 1);
 }

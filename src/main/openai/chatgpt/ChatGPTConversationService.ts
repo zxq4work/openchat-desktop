@@ -41,6 +41,8 @@ import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
 import { citationDebugTracker } from '../../services/ai/CitationDebugTracker'
 import { UnsupportedImageInputError } from '../../providers/errors'
+import type { ConversationSearchResult, ConversationMessageSearchMatch, ConversationSearchScope } from '../../../shared/types/search'
+import { buildSnippet, scopeMatchesContent, scopeMatchesTitle, aggregateConversationSearchResults, type ConversationSummaryRow } from '../../../shared/search/conversationSearch'
 
 const SEARCH_INSTRUCTIONS = `Web access is available through OpenChat tools.
 
@@ -333,6 +335,53 @@ export class ChatGPTConversationService {
       messages.length)
 
     return { conversation, segments, messages }
+  }
+
+  // 全局会话搜索：直接查询本地数据库全部历史消息，不依赖 Renderer 已加载数据。
+  // 只读，绝不修改会话 / 消息 / 排序 / updatedAt。
+  // 结果按 Conversation 聚合（一个会话只出现一次），并返回最佳正文命中片段。
+  searchConversations(query: string, scope: ConversationSearchScope): ConversationSearchResult[] {
+    const q = String(query ?? '').trim()
+    if (!q) return []
+
+    const wantContent = scopeMatchesContent(scope)
+    const contentHits = wantContent ? this.messages.searchMessagesByContent(q) : []
+
+    // 候选会话摘要 = 标题匹配 ∪ 正文命中会话
+    const lower = q.toLowerCase()
+    const summaryMap = new Map<string, ConversationSummaryRow>()
+    if (scopeMatchesTitle(scope)) {
+      for (const s of this.conversations.listSummaries()) {
+        if (s.title.toLowerCase().includes(lower)) {
+          summaryMap.set(s.id, { id: s.id, title: s.title, updatedAt: s.updatedAt })
+        }
+      }
+    }
+    const missing = [...new Set(contentHits.map((h) => h.conversationId))].filter((id) => !summaryMap.has(id))
+    if (missing.length > 0) {
+      for (const s of this.conversations.getSummariesByIds(missing)) {
+        summaryMap.set(s.id, { id: s.id, title: s.title, updatedAt: s.updatedAt })
+      }
+    }
+
+    return aggregateConversationSearchResults({
+      query: q,
+      scope,
+      candidateSummaries: [...summaryMap.values()],
+      contentHits,
+    })
+  }
+
+  // 当前会话内所有正文匹配消息（供左右导航栏跳转）。
+  searchMatches(conversationId: string, query: string): ConversationMessageSearchMatch[] {
+    const q = String(query ?? '').trim()
+    if (!q || !conversationId) return []
+    return this.messages.searchMatchesInConversation(conversationId, q).map((m) => ({
+      messageId: m.messageId,
+      role: m.role,
+      snippet: buildSnippet(m.content, q),
+      createdAt: m.createdAt,
+    }))
   }
 
   createConversation(defaultModelId: string | null, defaultReasoningEffort: string | null, systemPrompt = '', providerConfigId: string | null = null, webSearchEnabled = false, searchEngine: 'bing' | 'baidu' | 'google' = 'bing', type: ConversationType = 'chat'): Conversation {

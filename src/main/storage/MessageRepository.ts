@@ -2,6 +2,7 @@ import { StorageService } from './StorageService'
 import type { Message, MessageStatus, ReasoningDisplayMode, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
 import { AttachmentRepository } from './AttachmentRepository'
 import { cleanCitationText } from '../services/ai/CitationParser'
+import { escapeLike } from '../../shared/search/conversationSearch'
 
 export class MessageRepository {
   private storage: StorageService
@@ -36,6 +37,73 @@ export class MessageRepository {
     if (!result.length || !result[0].values.length) return []
 
     return this.attachTo(result[0].values.map((row) => this.rowToMessage(row)))
+  }
+
+  // 全局会话搜索（正文）：返回包含 query 的可见消息。
+  // - 只查 role IN ('user','assistant') 的 content 字段（可见正文），
+  //   绝不查 reasoning_text / reasoning_json / provider_payload_json / web_search_* / error_*。
+  // - LIKE 大小写不敏感（SQLite ASCII 默认行为），中文为字节包含、同样正确。
+  // - query 已由 escapeLike 转义，`%` `_` `\` 按普通字符匹配。
+  // - 一条 SELECT 行就是一条 message，因此按 message.id 去重（语义上游不会出现重复 id 行）。
+  //   绝不按 content 去重 —— 两条内容完全相同的消息必须各计一次。
+  searchMessagesByContent(query: string): Array<{ messageId: string; conversationId: string; role: 'user' | 'assistant'; content: string; createdAt: number }> {
+    const db = this.storage.database
+    const pattern = `%${escapeLike(query)}%`
+    const result = db.exec(`
+      SELECT id, conversation_id, role, content, created_at
+      FROM messages
+      WHERE content IS NOT NULL
+        AND role IN ('user', 'assistant')
+        AND content LIKE ? ESCAPE '\\'
+      ORDER BY created_at ASC
+    `, [pattern])
+
+    if (!result.length || !result[0].values.length) return []
+
+    const seen = new Set<string>()
+    const rows: Array<{ messageId: string; conversationId: string; role: 'user' | 'assistant'; content: string; createdAt: number }> = []
+    for (const row of result[0].values) {
+      const messageId = String(row[0])
+      const conversationId = String(row[1])
+      const role = String(row[2]) === 'user' ? 'user' : 'assistant'
+      const content = String(row[3] ?? '')
+      const createdAt = Number(row[4])
+      // 只按 message.id 去重；内容相同但 id 不同的两条消息是两条独立命中
+      if (seen.has(messageId)) continue
+      seen.add(messageId)
+      rows.push({ messageId, conversationId, role, content, createdAt })
+    }
+    return rows
+  }
+
+  // 单条会话内的正文匹配（供“当前会话命中导航”使用）。
+  searchMatchesInConversation(conversationId: string, query: string): Array<{ messageId: string; role: 'user' | 'assistant'; content: string; createdAt: number }> {
+    const db = this.storage.database
+    const pattern = `%${escapeLike(query)}%`
+    const result = db.exec(`
+      SELECT id, role, content, created_at
+      FROM messages
+      WHERE conversation_id = ?
+        AND content IS NOT NULL
+        AND role IN ('user', 'assistant')
+        AND content LIKE ? ESCAPE '\\'
+      ORDER BY created_at ASC
+    `, [conversationId, pattern])
+
+    if (!result.length || !result[0].values.length) return []
+
+    const seen = new Set<string>()
+    const rows: Array<{ messageId: string; role: 'user' | 'assistant'; content: string; createdAt: number }> = []
+    for (const row of result[0].values) {
+      const messageId = String(row[0])
+      const content = String(row[2] ?? '')
+      const role = String(row[1]) === 'user' ? 'user' : 'assistant'
+      // 只按 message.id 去重；内容相同但 id 不同的两条消息都是独立命中
+      if (seen.has(messageId)) continue
+      seen.add(messageId)
+      rows.push({ messageId, role, content, createdAt: Number(row[3]) })
+    }
+    return rows
   }
 
   getBySegmentId(segmentId: string): Message[] {

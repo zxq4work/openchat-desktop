@@ -4,7 +4,11 @@ import { useModelStore } from '../../stores/modelStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useUiStore } from '../../stores/uiStore'
 import { useThemeStore } from '../../stores/themeStore'
+import { useConversationSearchStore } from '../../stores/conversationSearchStore'
 import { ConversationList } from './ConversationList'
+import { ConversationSearchPanel } from '../search/ConversationSearchPanel'
+import { Tooltip } from '../Tooltip'
+import { SEARCH_CONVERSATIONS_SHORTCUT, NEW_CONVERSATION_SHORTCUT } from '../../packages/shortcut'
 
 export function Sidebar() {
   const setSummaries = useConversationStore((s) => s.setSummaries)
@@ -16,6 +20,7 @@ export function Sidebar() {
   const models = useModelStore((s) => s.models)
   const providers = useProviderStore((s) => s.providers)
   const themeMode = useThemeStore((s) => s.mode)
+  const searchModeActive = useConversationSearchStore((s) => s.active)
   const resolvedTheme = useThemeStore((s) => s.resolved)
   const cycleTheme = useThemeStore((s) => s.cycle)
 
@@ -110,14 +115,25 @@ export function Sidebar() {
     }
   }, [models, providers, setSummaries, setActiveConversationId, setActiveConversation, setActiveMessages, setActiveSegments])
 
+  if (searchModeActive) {
+    return (
+      <div className="sidebar search-mode">
+        <ConversationSearchPanel />
+      </div>
+    )
+  }
+
   return (
     <div className="sidebar">
       <div className="sidebar-header">
         {hasImageProvider ? (
           <div className="new-conversation-split" ref={newBtnRef}>
-            <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
-              + 新对话
-            </button>
+            {/* Tooltip 只绑主操作区；右侧 caret 是独立操作，不显示新对话快捷键 */}
+            <Tooltip label="新对话" shortcut={NEW_CONVERSATION_SHORTCUT}>
+              <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
+                + 新对话
+              </button>
+            </Tooltip>
             <button
               className="new-conversation-caret"
               onClick={() => setMenuOpen((v) => !v)}
@@ -164,11 +180,29 @@ export function Sidebar() {
             )}
           </div>
         ) : (
-          <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
-            + 新对话
-          </button>
+          <Tooltip label="新对话" shortcut={NEW_CONVERSATION_SHORTCUT}>
+            <button className="new-conversation-btn" onClick={() => handleNewConversation('chat')}>
+              + 新对话
+            </button>
+          </Tooltip>
         )}
       </div>
+
+      {/* Search Launcher：单行 Sidebar 工具入口，视觉明显弱于「+ 新对话」。
+          键盘可达（真 button），快捷键只在 Tooltip 展示，不常驻 UI。 */}
+      <Tooltip label="搜索会话" shortcut={SEARCH_CONVERSATIONS_SHORTCUT}>
+        <button
+          className="conversation-search-entry"
+          onClick={() => useConversationSearchStore.getState().enterSearchMode()}
+          aria-label="搜索会话"
+        >
+          <svg className="conversation-search-entry-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          搜索会话
+        </button>
+      </Tooltip>
 
       <ConversationList />
 

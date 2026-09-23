@@ -34,6 +34,27 @@ export class ConversationRepository {
     return summaries
   }
 
+  // 全局会话搜索用：按 id 列表批量取回标题 / updatedAt / 预览。
+  // 搜索结果按会话聚合后，只有命中会话才需要这些摘要字段（一次查询，避免 N+1）。
+  getSummariesByIds(ids: string[]): ConversationSummary[] {
+    if (ids.length === 0) return []
+    const db = this.storage.database
+    const placeholders = ids.map(() => '?').join(', ')
+    const result = db.exec(`
+      SELECT id, type, title, updated_at FROM conversations WHERE id IN (${placeholders})
+    `, ids)
+
+    if (!result.length || !result[0].values.length) return []
+
+    return result[0].values.map((row) => ({
+      id: String(row[0]),
+      type: row[1] === 'image_generation' ? 'image_generation' : 'chat',
+      title: String(row[2]),
+      updatedAt: Number(row[3]),
+      preview: '',
+    }))
+  }
+
   getById(id: string): Conversation | null {
     const db = this.storage.database
     const result = db.exec(`

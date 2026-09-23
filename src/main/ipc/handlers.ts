@@ -6,6 +6,7 @@ import { IPC_CHANNELS } from '../../shared/ipc/channels'
 import type { PublicAccountInfo } from '../../shared/types/account'
 import type { ModelInfo } from '../../shared/types/model'
 import type { Conversation, ContextSegment, Message } from '../../shared/types/conversation'
+import type { ConversationSearchResult, ConversationMessageSearchMatch, ConversationSearchScope } from '../../shared/types/search'
 import type { ProxyConfig } from '../../shared/types/settings'
 import { setProxyConfig, createRequest, applyProxyMode, forceReloadProxyConfig, closeAllConnections, resolveSystemProxy } from '../openai/chatgpt/httpsClient'
 import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
@@ -65,6 +66,10 @@ export interface Services {
     updateWebSearchConfig: (config: WebSearchConfig) => void
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
+    // 全局会话搜索（只读）。legacy appserver ConversationService 未实现，
+    // 该路径下 IPC 会显式报错（而非静默返回空结果），不影响 ChatGPT 主路径。
+    searchConversations?: (query: string, scope: ConversationSearchScope) => ConversationSearchResult[]
+    searchMatches?: (conversationId: string, query: string) => ConversationMessageSearchMatch[]
     sendMessage: (id: string, text: string, attachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
     // 返回 disposer：ChatGPT 路径与 appserver legacy ConversationService 均已返回解绑函数。
@@ -499,6 +504,31 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, (_event, id: string): ContextSegment | null => {
     return services.conversationService?.newTopic(id) ?? null
+  })
+
+  // ===== 全局会话搜索（只读） =====
+  // 能力检查失败时显式抛错（IPC invoke 会 reject），绝不静默返回空数组 ——
+  // 否则渲染进程会把「服务不可用」误判为「没有搜索结果」。
+  const requireConversationSearch = () => {
+    const service = services.conversationService
+    if (!service) throw new Error('Conversation search service is unavailable')
+    return service
+  }
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_SEARCH, (_event, query: string, scope: ConversationSearchScope): ConversationSearchResult[] => {
+    const service = requireConversationSearch()
+    if (typeof service.searchConversations !== 'function') {
+      throw new Error('Conversation search service is unavailable')
+    }
+    return service.searchConversations(query, scope)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_SEARCH_MATCHES, (_event, conversationId: string, query: string): ConversationMessageSearchMatch[] => {
+    const service = requireConversationSearch()
+    if (typeof service.searchMatches !== 'function') {
+      throw new Error('Conversation search service is unavailable')
+    }
+    return service.searchMatches(conversationId, query)
   })
 
   ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, async (_event, id: string, providerConfigId: string | null): Promise<void> => {

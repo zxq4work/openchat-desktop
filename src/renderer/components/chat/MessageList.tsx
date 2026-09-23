@@ -9,6 +9,9 @@ import { getSelectionWithinElement } from '../../packages/selectionCopy'
 import { buildSelectionMenu } from '../../packages/messageMenu'
 import { ScrollContainerContext, type ScrollFollowMode } from './ScrollContainerContext'
 import { probeLayoutRead, isConversationSwitchDiagActive } from '../../packages/layoutReadDiag'
+import { useConversationSearchStore } from '../../stores/conversationSearchStore'
+import { derivePendingLocate, decideLocate, type PendingLocate } from '../../packages/locateMessage'
+import { useGlobalSearchHighlight } from './useGlobalSearchHighlight'
 
 const PINNED_THRESHOLD = 80
 const SHOW_BUTTON_THRESHOLD = 300
@@ -20,6 +23,10 @@ const INITIAL_BOTTOM_SETTLE_MS = 1200
 // 图片生成完成（pending placeholder → 最终图片 commit）后「贴底」意图的最长存活时间（ms）。
 // 与首次进入会话的意图相互独立：只在一次生成真正结束时短暂开启，用户一旦滚动立即放弃。
 const GENERATION_COMPLETION_SETTLE_MS = 1000
+
+// 搜索定位 flash 动画时长（ms）。必须与 global.css 的 search-locate-flash /
+// search-user-bubble-flash 动画时长保持一致，否则动画会被提前摘类截断。
+const SEARCH_LOCATE_FLASH_MS = 840
 
 // 图片空状态 SVG 的 clipPath / gradient id 前缀。
 // 同一时刻只渲染一个 MessageList（即单个空状态实例），用稳定专用 id 即可，无需引入 useId。
@@ -180,6 +187,117 @@ export function MessageList() {
     lastObservedScrollHeightRef.current = -1
     scrollToBottom()
   }, [activeConversation?.id])
+
+  // ===== 全局会话搜索：消息定位 =====
+  // 定位作为「明确的用户导航操作」接入现有滚动系统，不修改 scrollToBottom 等现有逻辑。
+  // pending 请求只在真正 scrollIntoView 成功后才确认（消费）；
+  // 目标消息尚未挂载时保持 pending，由 messages / 会话变化重新求值（无定时器轮询）。
+  const locateRequestId = useConversationSearchStore((s) => s.locateRequestId)
+  // 已建立 pending 的跳转令牌：同一令牌只建立一次，避免定位后因流式渲染重复定位
+  const lastRequestRef = useRef(-1)
+  const pendingLocateRef = useRef<PendingLocate | null>(null)
+  // 当前定位到的消息 id（长期保留弱残留态 rest；不参与渲染）
+  const focusTargetRef = useRef<string | null>(null)
+  // flash 动画结束定时器（仅用于摘掉 --flash class，rest 态继续保留）
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 关键词高亮：复用「会话内文字搜索」的同一套 DOM engine（packages/messageHighlight.ts）。
+  // 挂载在 MessageList 而非新组件——本组件已订阅 locateRequestId（每次跳转 +1），
+  // 高亮需要重算的时机与它完全重合，因此不引入额外 re-render。
+  // alignOnce 为幂等句柄：把「目标 Message 内第一个命中 mark」作为最终滚动锚点。
+  // 用 ref 持有，避免把不稳定引用塞进下方 locate effect 的依赖数组。
+  const { alignOnce } = useGlobalSearchHighlight()
+  const alignOnceRef = useRef(alignOnce)
+  alignOnceRef.current = alignOnce
+
+  useLayoutEffect(() => {
+    const state = useConversationSearchStore.getState()
+    // 新的跳转令牌到达：建立（或覆盖）待定位请求
+    if (state.locateRequestId !== lastRequestRef.current) {
+      lastRequestRef.current = state.locateRequestId
+      pendingLocateRef.current = derivePendingLocate(
+        state.locateRequestId,
+        state.navConversationId,
+        state.activeMatches,
+        state.activeMatchIndex,
+      )
+    }
+
+    const pending = pendingLocateRef.current
+    // 无待办：零成本退出（不做任何数组分配 / DOM 查询）
+    if (!pending) return
+
+    const decision = decideLocate(pending, activeConversation?.id ?? null, messages.map((m) => m.id))
+    if (decision === 'drop') {
+      // 请求不可满足（会话已切换等）：消费掉，避免悬挂
+      pendingLocateRef.current = null
+      return
+    }
+    if (decision === 'wait') return
+
+    const root = contentRef.current?.querySelector(`[data-message-id="${pending.messageId}"]`) as HTMLElement | null
+    // id 在列表中但节点尚未提交到 DOM：保持 pending，等下一次变化重试
+    if (!root) return
+
+    // 定位成功 → 确认（消费）请求，后续渲染不再重复定位
+    pendingLocateRef.current = null
+
+    // 作为用户导航：离开自动跟随，进入阅读历史态
+    followModeRef.current = 'READING_HISTORY'
+    pinnedRef.current = false
+    initialBottomIntentRef.current = false
+    generationCompletionBottomIntentRef.current = false
+
+    // 清掉上一个定位标记（含其 flash 态），同一时刻只允许一条消息处于 rest
+    if (focusTargetRef.current) {
+      const prev = contentRef.current?.querySelector(`[data-message-id="${focusTargetRef.current}"]`)
+      prev?.classList.remove('search-focus', 'search-focus--flash')
+    }
+    root.classList.add('search-focus')
+    focusTargetRef.current = pending.messageId
+
+    // flash：重新触发一次性闪光动画（先摘掉再强制 reflow，保证连续同一条也能重放）。
+    // 视觉标记先就位（承载 flash）；滚动锚点稍后再定。
+    root.classList.remove('search-focus--flash')
+    void root.offsetWidth
+    root.classList.add('search-focus--flash')
+
+    // 最终滚动锚点：优先「目标 Message 内第一个命中关键词」。
+    // 它由共享 engine 在 apply 时同步创建并返回，无需 setTimeout；apply 内部直接
+    // 以该 mark 滚动，因此不会先滚到 Message 中间再二次跳到关键词（无双跳）。
+    // 返回 true 表示本次跳转已对齐；false（query 空 / 无 mark / Markdown 重绘中）
+    // 则回退到 Message 根节点定位。幂等：同一跳转令牌只对齐一次。
+    const aligned = alignOnceRef.current()
+    if (!aligned) {
+      // 兜底：关键词高亮暂不可用（query 失效 / mark 未生成）时，退回整条 Message 定位。
+      root.scrollIntoView({ block: 'center' })
+    }
+
+    // 动画时长后只摘 flash，保留 search-focus（rest 弱残留态长期存在）
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+    flashTimerRef.current = setTimeout(() => {
+      if (focusTargetRef.current === pending.messageId) {
+        root.classList.remove('search-focus--flash')
+      }
+      flashTimerRef.current = null
+    }, SEARCH_LOCATE_FLASH_MS)
+    // messages / 会话变化都参与重试；pending 为空时上面已零成本退出
+  }, [locateRequestId, activeConversation?.id, messages])
+
+  // 组件卸载：清掉未完成的 flash 定时器
+  useEffect(() => () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+  }, [])
+
+  // 退出 Search Mode：清掉残留的定位提示（rest），避免离开搜索后仍留一块「被选中」的痕迹
+  const searchModeActive = useConversationSearchStore((s) => s.active)
+  useEffect(() => {
+    if (searchModeActive) return
+    if (!focusTargetRef.current) return
+    const el = contentRef.current?.querySelector(`[data-message-id="${focusTargetRef.current}"]`)
+    el?.classList.remove('search-focus', 'search-focus--flash')
+    focusTargetRef.current = null
+  }, [searchModeActive])
 
   // 新消息发送时（streamStatus 变为 starting）重置到 FOLLOWING 并滚到底部
   useEffect(() => {
