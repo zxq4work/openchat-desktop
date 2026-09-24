@@ -89,6 +89,7 @@ const IPC_CHANNELS = {
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_UPDATE: 'providers:update',
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
+  PROVIDERS_REVEAL_API_KEY: 'providers:reveal-api-key',
   GOOGLE_SEARCH_OPEN_SESSION: 'google-search:open-session',
   APP_READY: 'app:ready',
   BOOT_FINISH_SPLASH: 'boot:finish-splash',
@@ -220,6 +221,9 @@ const openchat = {
     update: (id: string, updates: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_UPDATE, id, updates),
     fetchModels: (baseUrl: string, apiKey: string, modelsPath?: string, providerId?: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, { baseUrl, apiKey, modelsPath, providerId }),
+    // 按需读取已保存的 API Key 明文。仅用户主动触发时调用；不随 providers.list() 返回。
+    revealApiKey: (id: string): Promise<string | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_REVEAL_API_KEY, id),
   },
 
   events: {

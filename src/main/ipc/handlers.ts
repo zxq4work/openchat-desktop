@@ -32,7 +32,7 @@ export interface Services {
     create: (config: Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>) => Omit<CustomProviderConfig, 'apiKey'> & { hasApiKey: boolean }
     delete: (id: string) => void
     update: (id: string, updates: Partial<Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>>) => void
-    getApiKey?: (id: string) => string | null
+    getApiKey: (id: string) => string | null
   } | null
   authService: {
     checkAuth: () => Promise<PublicAccountInfo>
@@ -555,12 +555,18 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     // 编辑模式下 apiKey 可能为空，尝试从存储中获取
     let apiKey = inputKey
     if (!apiKey && providerId) {
-      apiKey = services.providerConfigService?.getApiKey?.(providerId) ?? ''
+      apiKey = services.providerConfigService?.getApiKey(providerId) ?? ''
     }
     const url = modelsPath
       ? (baseUrl.replace(/\/+$/, '') + (modelsPath.startsWith('/') ? modelsPath : '/' + modelsPath))
       : (baseUrl.replace(/\/+$/, '') + '/models')
     return await fetchModelsFromUrl(url, apiKey)
+  })
+
+  // 按需读取已保存的 API Key 明文：仅响应 Renderer 用户主动「查看」动作。
+  // 绝不在 providers:list 中返回；任何日志都不得包含返回值（凭证内容）。
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_REVEAL_API_KEY, (_event, id: string): string | null => {
+    return services.providerConfigService?.getApiKey(id) ?? null
   })
 
   // ===== Chat =====

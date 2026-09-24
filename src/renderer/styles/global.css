@@ -2704,6 +2704,57 @@ textarea {
   color: var(--text-muted);
 }
 
+/* 密钥输入 + 右侧「小眼睛」：不改变 input 高度/布局，仅叠加一个低干扰图标按钮 */
+.secret-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+/* 为图标预留右侧空间，避免明文与眼睛重叠 */
+.secret-input__field {
+  padding-right: 36px;
+}
+
+.secret-input__toggle {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.secret-input__toggle:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
+
+.secret-input__toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+  color: var(--text-secondary);
+}
+
+.secret-input__toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.secret-input__toggle svg {
+  display: block;
+}
+
 .provider-hint {
   font-size: 11px;
   color: var(--text-muted);

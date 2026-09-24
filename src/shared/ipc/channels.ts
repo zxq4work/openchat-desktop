@@ -113,6 +113,8 @@ export const IPC_CHANNELS = {
   PROVIDERS_DELETE: 'providers:delete',
   PROVIDERS_UPDATE: 'providers:update',
   PROVIDERS_FETCH_MODELS: 'providers:fetch-models',
+  // 按需读取已保存的 API Key 明文（用户主动点「小眼睛」时才调用，绝不随列表返回）
+  PROVIDERS_REVEAL_API_KEY: 'providers:reveal-api-key',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
 
   // App

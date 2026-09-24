@@ -1,8 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProviderStore, type SafeProviderConfig } from '../../stores/providerStore'
+import { useUiStore } from '../../stores/uiStore'
 import { useDialogStack } from '../../hooks/useDialogStack'
 import { Dropdown } from '../Dropdown'
 import { Checkbox } from '../Checkbox'
+import { SecretInput } from '../SecretInput'
+import {
+  INITIAL_EDITING_API_KEY,
+  beginLoadingApiKey,
+  finishLoadingApiKey,
+  failLoadingApiKey,
+  editApiKey,
+  shouldCommitApiKey,
+  type EditingApiKey,
+} from '../../packages/secretInput'
 import type {
   ImageGenerationParameterProfile,
   ImageGenerationParameterConfig,
@@ -376,7 +387,9 @@ interface ProviderFormDialogProps {
   initialName: string
   initialProtocol: ProviderProtocolValue
   initialBaseUrl: string
-  initialApiKey: string
+  // 编辑既有 Provider 时该 Provider 是否已保存过 API Key（仅布尔元数据，绝不含明文）。
+  // 用于区分「本来就没配 Key」与「读取真实 Key 失败」，避免对前者误报错误。
+  initialHasApiKey: boolean
   initialModels: string[]
   initialToolCalling: 'auto' | 'enabled' | 'disabled'
   initialImageInput: boolean
@@ -390,7 +403,10 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [name, setName] = useState(props.initialName)
   const [protocol, setProtocol] = useState<ProviderProtocolValue>(props.initialProtocol)
   const [baseUrl, setBaseUrl] = useState(props.initialBaseUrl)
-  const [apiKey, setApiKey] = useState(props.initialApiKey)
+  // API Key 的加载/编辑状态：value 始终是真实值，dirty 标记用户是否改动过。
+  const [apiKeyState, setApiKeyState] = useState<EditingApiKey>(
+    props.editId ? beginLoadingApiKey() : INITIAL_EDITING_API_KEY
+  )
   const [models, setModels] = useState<string[]>([...props.initialModels])
   const [newModelInput, setNewModelInput] = useState('')
   const [toolCalling, setToolCalling] = useState<'auto' | 'enabled' | 'disabled'>(props.initialToolCalling)
@@ -409,10 +425,48 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saveError, setSaveError] = useState('')
   const overlayRef = useRef<HTMLDivElement>(null)
+  const showToast = useUiStore((s) => s.showToast)
 
   const isImageProtocol = protocol === 'image_generations'
+  const apiKey = apiKeyState.value
 
   useDialogStack(props.onClose)
+
+  // 打开编辑弹窗时异步读取该 Provider 的真实 API Key（新建时为空）。
+  // 读取期间禁用输入框，不预填任何假值；失败则保持空值且 dirty=false，避免误保存空值覆盖原 Key。
+  useEffect(() => {
+    if (!props.editId) {
+      setApiKeyState(INITIAL_EDITING_API_KEY)
+      return
+    }
+    // 该 Provider 本来就没配 Key：无需读取，直接置空且不报错。
+    if (!props.initialHasApiKey) {
+      setApiKeyState(INITIAL_EDITING_API_KEY)
+      return
+    }
+    let cancelled = false
+    setApiKeyState(beginLoadingApiKey())
+    ;(async () => {
+      try {
+        const revealed = await window.openchat.providers.revealApiKey(props.editId as string)
+        if (cancelled) return
+        if (revealed) {
+          setApiKeyState(finishLoadingApiKey(revealed))
+        } else {
+          setApiKeyState(failLoadingApiKey())
+          showToast('无法读取 API Key')
+        }
+      } catch {
+        // 错误对象可能携带凭证内容，不打印任何细节。
+        if (cancelled) return
+        setApiKeyState(failLoadingApiKey())
+        showToast('无法读取 API Key')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [props.editId, props.initialHasApiKey])
 
   function addModel() {
     const trimmed = newModelInput.trim()
@@ -492,7 +546,9 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
       if (isImageProtocol) {
         updates.imageGenerationProfile = imageProfile
       }
-      if (apiKey.trim()) {
+      // 只有用户真正改过 API Key 才写库；避免「打开 → 未修改 → 保存」重复写入，
+      // 也避免把加载失败留下的空值覆盖掉原 Key。
+      if (shouldCommitApiKey(apiKeyState)) {
         updates.apiKey = apiKey.trim()
       }
       await window.openchat.providers.update(props.editId, updates)
@@ -562,12 +618,12 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
 
         <div className="provider-form-field">
           <label className="provider-label">API Key</label>
-          <input
-            className="provider-input"
-            type="password"
+          <SecretInput
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={props.editId ? '留空则不修改' : 'sk-...'}
+            onChange={(next) => setApiKeyState(editApiKey(next))}
+            placeholder="sk-..."
+            disabled={apiKeyState.loading}
+            aria-label="API Key"
           />
         </div>
 
@@ -761,7 +817,7 @@ export function ProviderSettings() {
     name: '',
     protocol: 'chat_completions' as ProviderProtocolValue,
     baseUrl: '',
-    apiKey: '',
+    hasApiKey: false,
     models: [] as string[],
     toolCalling: 'auto' as 'auto' | 'enabled' | 'disabled',
     imageInput: false,
@@ -780,7 +836,7 @@ export function ProviderSettings() {
 
   function openAddDialog() {
     setEditId(null)
-    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null })
+    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', hasApiKey: false, models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null })
     setDialogOpen(true)
   }
 
@@ -790,7 +846,8 @@ export function ProviderSettings() {
       name: p.name,
       protocol: p.protocol,
       baseUrl: p.baseUrl,
-      apiKey: '',
+      // 明文不在此处传入：dialog 打开后自己通过 reveal IPC 按需读取（并标记 loading）。
+      hasApiKey: p.hasApiKey,
       models: [...p.models],
       toolCalling: p.toolCalling,
       imageInput: p.imageInput ?? false,
@@ -825,7 +882,7 @@ export function ProviderSettings() {
           initialName={dialogInitial.name}
           initialProtocol={dialogInitial.protocol}
           initialBaseUrl={dialogInitial.baseUrl}
-          initialApiKey={dialogInitial.apiKey}
+          initialHasApiKey={dialogInitial.hasApiKey}
           initialModels={dialogInitial.models}
           initialToolCalling={dialogInitial.toolCalling}
           initialImageInput={dialogInitial.imageInput}
