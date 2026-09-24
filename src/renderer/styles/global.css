@@ -957,6 +957,12 @@ textarea {
   background: var(--danger-bg);
   border: 1px solid var(--danger-border);
   border-radius: var(--radius-sm);
+  /* 上游错误常带无空格的 JSON / request_id 长串，窄窗口下会撑破红框。
+     anywhere 允许在任意字符处断行；pre-wrap 保留原始换行。 */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 /* ========================================
