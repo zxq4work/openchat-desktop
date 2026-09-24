@@ -33,6 +33,7 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { WebFetchService } from '../web-search/WebFetchService'
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import { ProviderConfigService } from '../providers/ProviderConfigService'
+import { initReasoningDebug } from '../providers/reasoning/ReasoningDebug'
 import { AttachmentRepository } from '../storage/AttachmentRepository'
 import { AttachmentService } from '../services/attachments/AttachmentService'
 import { ImageGenerationRepository } from '../storage/ImageGenerationRepository'
@@ -912,6 +913,8 @@ function notifyRendererHydrate(): void {
 }
 
 app.whenReady().then(async () => {
+  // 启用 reasoning 响应形状诊断（OPENCHAT_DEBUG_REASONING=1），启动时打印一次 enabled=true
+  initReasoningDebug()
   createWindow()
 
   const bootstrapRenderer = () => {

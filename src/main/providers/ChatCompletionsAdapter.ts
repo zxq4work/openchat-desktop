@@ -12,6 +12,7 @@ import type {
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
 import { UnsupportedImageInputError } from './errors'
+import { ChatCompletionReasoningNormalizer } from './reasoning/ChatCompletionReasoningNormalizer'
 
 type ChatCompletionContentPart =
   | { type: 'text'; text: string }
@@ -99,95 +100,113 @@ export class ChatCompletionsAdapter implements ModelAdapter {
 
     // 收集工具调用（跨 delta 累积）
     const toolCallAccumulators = new Map<number, { id: string; name: string; arguments: string }>()
-    // 推理内容累积（deepseek 等模型通过 reasoning_content 字段流式返回思考过程）
-    let reasoningAccum = ''
-    let reasoningActive = false
+    // 本轮 structured reasoning 归一化状态机（reasoning / reasoning_content）。
+    // 每轮 stream 调用新建实例（per-request state），不放到 Adapter 属性上避免并发串扰。
+    // content 中原样出现的 inline <think> 不解析，直接作为 final 正文透传。
+    const reasoningNormalizer = new ChatCompletionReasoningNormalizer()
+    let finalizeClosedBy: 'finish_reason' | 'stream_end' | 'abort' | 'error' = 'stream_end'
 
-    for await (const event of this.streamRequest(url, body, signal)) {
-      if (event === '[DONE]') break
-
-      try {
-        const parsed = JSON.parse(event) as {
-          choices?: Array<{
-            index?: number
-            delta?: {
-              content?: string
-              reasoning_content?: string
-              tool_calls?: Array<{
-                index: number
-                id?: string
-                function?: { name?: string; arguments?: string }
-              }>
-            }
-            finish_reason?: string
-          }>
-        }
-
-        for (const choice of parsed.choices ?? []) {
-          const delta = choice.delta
-          if (!delta) continue
-
-          // 推理内容（思考过程），与回答文本分离
-          if (delta.reasoning_content) {
-            if (!reasoningActive) {
-              reasoningActive = true
-              yield { type: 'reasoning_started' }
-            }
-            reasoningAccum += delta.reasoning_content
-            yield { type: 'reasoning_delta', text: delta.reasoning_content }
-          }
-
-          // 回答文本增量：出现时若仍在思考阶段，先结束思考
-          if (delta.content) {
-            if (reasoningActive) {
-              reasoningActive = false
-              yield { type: 'reasoning_completed', summary: this.splitReasoning(reasoningAccum) }
-              reasoningAccum = ''
-            }
-            yield { type: 'delta', text: delta.content }
-          }
-
-          // 工具调用增量
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const existing = toolCallAccumulators.get(tc.index) ?? {
-                id: '',
-                name: '',
-                arguments: '',
-              }
-              if (tc.id) existing.id = tc.id
-              if (tc.function?.name) existing.name = tc.function.name
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments
-              toolCallAccumulators.set(tc.index, existing)
-            }
-          }
-
-          // finish_reason = tool_calls → 发出完整的 tool calls
-          if (choice.finish_reason === 'tool_calls') {
-            if (reasoningActive) {
-              reasoningActive = false
-              yield { type: 'reasoning_completed', summary: this.splitReasoning(reasoningAccum) }
-              reasoningAccum = ''
-            }
-            for (const [, tc] of toolCallAccumulators) {
-              if (tc.id && tc.name) {
-                yield { type: 'tool_call', callId: tc.id, name: tc.name, arguments: tc.arguments }
-              }
-            }
-            toolCallAccumulators.clear()
-          }
-        }
-      } catch {
-        // 跳过无法解析的 SSE 数据
+    // 把归一化器产出的轻量事件映射为 CanonicalModelEvent（reasoning_delta 会累积文本）
+    const toCanonical = (events: ReturnType<ChatCompletionReasoningNormalizer['process']>): CanonicalModelEvent[] => {
+      const out: CanonicalModelEvent[] = []
+      for (const ev of events) {
+        if (ev.type === 'reasoning_started') out.push({ type: 'reasoning_started' })
+        else if (ev.type === 'reasoning_delta') out.push({ type: 'reasoning_delta', text: ev.text })
+        else if (ev.type === 'reasoning_completed') out.push({ type: 'reasoning_completed' })
+        else out.push({ type: 'delta', text: ev.text })
       }
+      return out
     }
 
-    // 流结束：若仍在思考阶段，补发 reasoning_completed
-    if (reasoningActive) {
-      reasoningActive = false
-      yield { type: 'reasoning_completed', summary: this.splitReasoning(reasoningAccum) }
-      reasoningAccum = ''
+    try {
+      for await (const event of this.streamRequest(url, body, signal)) {
+        if (event === '[DONE]') break
+
+        try {
+          const parsed = JSON.parse(event) as {
+            choices?: Array<{
+              index?: number
+              delta?: {
+                content?: string
+                reasoning?: string
+                reasoning_content?: string
+                reasoning_details?: unknown
+                tool_calls?: Array<{
+                  index: number
+                  id?: string
+                  function?: { name?: string; arguments?: string }
+                }>
+              }
+              message?: {
+                content?: string | ChatCompletionContentPart[] | null
+                reasoning?: string
+                reasoning_content?: string
+                reasoning_details?: unknown
+              }
+              finish_reason?: string
+            }>
+          }
+
+          for (const choice of parsed.choices ?? []) {
+            // 一个 raw chunk 允许产生多个 canonical events，
+            // 例如 structured reasoning 与 final content 同时出现。
+            const choiceEvents: CanonicalModelEvent[] = []
+
+            if (choice.delta) {
+              choiceEvents.push(...toCanonical(reasoningNormalizer.process(choice.delta as Record<string, unknown>)))
+            } else if (choice.message) {
+              // 非流式兜底：正常 stream=true 下不会出现，但同一 normalizer 可复用
+              choiceEvents.push(...toCanonical(reasoningNormalizer.process(choice.message as Record<string, unknown>)))
+            }
+
+            for (const ev of choiceEvents) yield ev
+
+            const delta = choice.delta
+            // 工具调用增量
+            if (delta?.tool_calls) {
+              for (const tc of delta.tool_calls) {
+                const existing = toolCallAccumulators.get(tc.index) ?? {
+                  id: '',
+                  name: '',
+                  arguments: '',
+                }
+                if (tc.id) existing.id = tc.id
+                if (tc.function?.name) existing.name = tc.function.name
+                if (tc.function?.arguments) existing.arguments += tc.function.arguments
+                toolCallAccumulators.set(tc.index, existing)
+              }
+            }
+
+            // finish_reason = tool_calls → 先收尾 reasoning，再发出完整 tool calls
+            if (choice.finish_reason === 'tool_calls') {
+              for (const ev of toCanonical(reasoningNormalizer.finalize({ closedBy: 'finish_reason' }))) yield ev
+              finalizeClosedBy = 'finish_reason'
+              for (const [, tc] of toolCallAccumulators) {
+                if (tc.id && tc.name) {
+                  yield { type: 'tool_call', callId: tc.id, name: tc.name, arguments: tc.arguments }
+                }
+              }
+              toolCallAccumulators.clear()
+            } else if (choice.finish_reason) {
+              // stop / length 等：安全结束 reasoning phase（content 已由 normalizer 提前 close 时为空操作）
+              for (const ev of toCanonical(reasoningNormalizer.finalize({ closedBy: 'finish_reason' }))) yield ev
+              finalizeClosedBy = 'finish_reason'
+            }
+          }
+        } catch {
+          // 跳过无法解析的 SSE 数据
+        }
+      }
+    } catch (err) {
+      // HTTP / SSE 错误：结束 reasoning phase，避免 UI 永久“思考中”，仍照常向上抛错
+      if (signal?.aborted) finalizeClosedBy = 'abort'
+      else finalizeClosedBy = 'error'
+      for (const ev of toCanonical(reasoningNormalizer.finalize({ closedBy: finalizeClosedBy }))) yield ev
+      throw err
     }
+
+    // 流结束：补齐尚未完成的 structured reasoning phase
+    for (const ev of toCanonical(reasoningNormalizer.finalize({ closedBy: finalizeClosedBy === 'finish_reason' ? 'finish_reason' : 'stream_end' }))) yield ev
 
     // 流结束，check 未发出的 tool calls
     for (const [, tc] of toolCallAccumulators) {
@@ -210,15 +229,6 @@ export class ChatCompletionsAdapter implements ModelAdapter {
       console.error('[ChatCompletionsAdapter] failed to read image attachment')
       return null
     }
-  }
-
-  // 将累积的思考文本按行拆分为摘要数组，便于前端按段落展示
-  private splitReasoning(text: string): string[] {
-    const lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0)
-    return lines.length > 0 ? lines : (text.trim() ? [text.trim()] : [])
   }
 
   private buildRequest(request: CanonicalModelRequest): ChatCompletionRequest {
