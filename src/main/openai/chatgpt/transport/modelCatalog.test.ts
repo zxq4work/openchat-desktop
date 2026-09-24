@@ -45,7 +45,6 @@ import {
 } from './ChatGPTCodexClient'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL } from '../models/modelCatalogDiscovery'
-import { CODEX_VERSION } from '../../../../shared/constants'
 import { ResponsesStreamParser } from './ResponsesStreamParser'
 
 describe('catalog discovery', () => {
@@ -54,10 +53,8 @@ describe('catalog discovery', () => {
       .toBe('https://chatgpt.com/backend-api/codex/models?client_version=99.99.99')
   })
 
-  it('TEST 2: discovery sentinel has no dependency on CODEX_VERSION', () => {
-    expect(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL).not.toBe(CODEX_VERSION)
+  it('TEST 2: discovery sentinel is a fixed, version-independent value', () => {
     expect(CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL).toBe('99.99.99')
-    expect(CODEX_VERSION).toBe('0.148.0')
   })
 
   it('TEST 13: /responses URL carries NO client_version', () => {

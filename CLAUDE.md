@@ -7,7 +7,7 @@
 - TypeScript: 5.4.5
 - Vite: 4.5.x
 - sql.js: 1.10.3
-- Codex: 0.148.0
+- Codex 协议：直接调用 ChatGPT Codex HTTP/SSE（`/backend-api/codex/models`、`/backend-api/codex/responses`），**不依赖任何本地 Codex 二进制或 vendor schema**
 
 ## 禁止事项
 - 不要升级 Electron major
@@ -91,8 +91,9 @@ src/
 │       │   │   └── ResponsesStreamParser.ts  # SSE 事件解析
 │       │   └── models/
 │       │       └── ChatGPTModelService.ts    # 模型列表 + instructions 模板
-│       ├── AuthService.ts / ModelService.ts / ThreadService.ts / ChatService.ts
-│       └── AppServerProcess.ts / AppServerRpcClient.ts / OpenAIAppServerClient.ts
+│       │
+│       └── (2026-09-24 清理：原 appserver-legacy / AuthService / ModelService /
+│           ThreadService / ChatService / AppServerProcess 等 legacy AppServer 实现已整体删除)
 │
 ├── preload/
 │   └── index.ts               # contextBridge 暴露 openchat API 到渲染进程
@@ -256,18 +257,20 @@ src/
 | `src/renderer/components/composer/ProviderSelector.tsx` | 模型提供商标识 |
 | `src/renderer/components/settings/ProviderSettings.tsx` | Provider 配置 UI |
 
-## 移除 Codex App Server 遗留代码（暂不执行）
-当前 `chatgpt` 提供商是默认且唯一实际使用的路径。以下内容仅 `OPENCHAT_PROVIDER=appserver` 时才会被引用，属于遗留死代码，**在最终版本发布前提醒用户是否移除**（不要主动删除）：
+## Codex App Server 遗留代码（已于 2026-09-24 删除）
+当前 `chatgpt` 提供商是唯一路径。原 `OPENCHAT_PROVIDER=appserver` legacy 子系统及其依赖的 Codex 0.148.0 vendor schema 已**整体删除**，包括：
 
-- `src/main/openai/appserver-legacy/`（AppServer 实现：AppServerProcess / AppServerRpcClient / OpenAIAppServerClient / ThreadService / index.ts）
-- `src/main/openai/` 根目录下的 shim 与 AppServer 服务：
-  - `AppServerProcess.ts` / `AppServerRpcClient.ts` / `OpenAIAppServerClient.ts` / `ThreadService.ts`（`@deprecated` 一行 re-export）
-  - `AuthService.ts` / `ModelService.ts` / `ChatService.ts`（依赖 OpenAIAppServerClient）
-- `src/main/conversation/ConversationService.ts`（依赖 ThreadService + ChatService + ModelService，仅 appserver 路径使用）
-- `src/main/openai/protocol-facade.ts`（零引用死代码，类型已被 `shared/types/` 替代）
-- `vendor/openai/codex-0.148.0/`（约 2254 个文件，仅被上述代码引用）
-- `src/shared/constants/index.ts` 中的 `CODEX_VERSION` / `CODEX_TAG` / `CODEX_COMMIT`（移除后仅剩 `APP_NAME` / `APP_TITLE`）
-- `src/main/bootstrap/main.ts` 中的 `initializeAppServerProvider()` / `getAppServerMode()` / `getCodexBinaryPath()` / `getCodexHome()` / `getConfigPath()` 及相关 env 分支（`OPENCHAT_PROVIDER=appserver` / `OPENCHAT_APP_SERVER_MODE`）
+- `src/main/openai/appserver-legacy/`（AppServerProcess / AppServerRpcClient / OpenAIAppServerClient / ThreadService / index.ts）
+- `src/main/openai/` 根目录 shim：`AppServerProcess.ts` / `AppServerRpcClient.ts` / `OpenAIAppServerClient.ts` / `ThreadService.ts`
+- `src/main/openai/AuthService.ts` / `ModelService.ts` / `ChatService.ts`（legacy appserver 服务）
+- `src/main/conversation/ConversationService.ts`（仅 appserver 路径使用；`typeLocking.ts` 保留，ChatGPT 路径在用）
+- `src/main/openai/protocol-facade.ts`（零引用死代码）
+- `vendor/openai/codex-0.148.0/`（整个 snapshot）
+- `scripts/mock-app-server.mjs`
+- `src/shared/constants/index.ts` 中的 `CODEX_VERSION` / `CODEX_TAG` / `CODEX_COMMIT`
+- `src/main/bootstrap/main.ts` 中的 `initializeAppServerProvider()` / `getAppServerMode()` / `getCodexBinaryPath()` / `getCodexHome()` / `getConfigPath()` 及相关 env 分支
+
+护栏：`src/main/openai/chatgpt/vendorIndependence.test.ts` 会扫描 production source，断言 `codex-0.148.0` / `vendor/openai/codex` / `OPENCHAT_PROVIDER=appserver` / `CODEX_*` 不再出现。
 
 ## Citation Streaming 清洗系统
 

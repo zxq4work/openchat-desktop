@@ -1,18 +1,9 @@
 import { app, BrowserWindow, Menu, shell, ipcMain, dialog } from 'electron'
 import * as path from 'path'
-import * as fs from 'fs'
-import { AppServerProcess, AppServerMode } from '../openai/AppServerProcess'
-import { AppServerRpcClient } from '../openai/AppServerRpcClient'
-import { OpenAIAppServerClient } from '../openai/OpenAIAppServerClient'
-import { AuthService } from '../openai/AuthService'
-import { ModelService } from '../openai/ModelService'
-import { ThreadService } from '../openai/ThreadService'
-import { ChatService } from '../openai/ChatService'
 import { StorageService } from '../storage/StorageService'
 import { SettingsRepository } from '../storage/SettingsRepository'
-import { ConversationService } from '../conversation/ConversationService'
 import { IPC_CHANNELS } from '../../shared/ipc/channels'
-import { APP_NAME, APP_TITLE, MIN_SPLASH_TOTAL_VISIBLE_MS, SPLASH_FADE_MS, SERVICE_INIT_TIMEOUT_MS, SERVICE_INIT_STAGE_WARN_MS } from '../../shared/constants'
+import { APP_TITLE, MIN_SPLASH_TOTAL_VISIBLE_MS, SPLASH_FADE_MS, SERVICE_INIT_TIMEOUT_MS, SERVICE_INIT_STAGE_WARN_MS } from '../../shared/constants'
 import { registerIpcHandlers, bindServiceEventForwarders } from '../ipc/handlers'
 
 // ChatGPT Direct Provider
@@ -112,20 +103,16 @@ let opacityGateReleased = false            // 已 setOpacity(1)，防重复
 let opacityGateWatchdog: ReturnType<typeof setTimeout> | null = null
 
 const services = {
-  appServerProcess: null as AppServerProcess | null,
-  rpcClient: null as AppServerRpcClient | null,
-  openaiClient: null as OpenAIAppServerClient | null,
-  authService: null as AuthService | null,
-  modelService: null as ModelService | null,
-  threadService: null as ThreadService | null,
-  chatService: null as ChatService | null,
   storage: null as StorageService | null,
   settingsRepository: null as SettingsRepository | null,
-  conversationService: null as ConversationService | null,
 
   // ChatGPT Direct Provider
   chatgptProvider: null as ChatGPTSubscriptionProvider | null,
   chatgptConversationService: null as ChatGPTConversationService | null,
+  // IPC 只依赖结构接口（见 ipc/handlers.ts Services），此处以 provider 暴露的类型为准。
+  authService: null as ChatGPTSubscriptionProvider['authService'] | null,
+  modelService: null as ChatGPTSubscriptionProvider['modelService'] | null,
+  conversationService: null as ChatGPTConversationService | null,
   credentialManager: null as OAuthCredentialManager | null,
   usageService: null as ChatGPTUsageService | null,
   mockAuthServer: null as MockAuthServer | null,
@@ -139,36 +126,6 @@ const services = {
   webSearchConfig: null as WebSearchConfig | null,
   attachmentService: null as AttachmentService | null,
   imageGenerationService: null as ImageGenerationService | null,
-}
-
-function getAppServerMode(): AppServerMode {
-  const explicit = process.env.OPENCHAT_APP_SERVER_MODE
-  if (explicit === 'mock' || explicit === 'bundled') {
-    return explicit
-  }
-  return process.env.NODE_ENV === 'production' ? 'bundled' : 'mock'
-}
-
-function getCodexBinaryPath(): string {
-  const resourcesBinPath = path.join(process.resourcesPath, 'bin', process.platform === 'win32' ? 'codex.exe' : 'codex')
-  if (fs.existsSync(resourcesBinPath)) {
-    return resourcesBinPath
-  }
-
-  const devBinPath = path.join(__dirname, '../../../../resources', process.platform === 'win32' ? 'win/codex.exe' : 'mac/codex')
-  if (fs.existsSync(devBinPath)) {
-    return devBinPath
-  }
-
-  return resourcesBinPath
-}
-
-function getCodexHome(): string {
-  return path.join(app.getPath('userData'), 'codex-home')
-}
-
-function getConfigPath(): string {
-  return path.join(getCodexHome(), 'config.toml')
 }
 
 async function createClients(
@@ -231,8 +188,8 @@ async function initializeChatGPTProvider(): Promise<void> {
   await stage('provider-init', () => provider.initialize({ deferTokenRefresh: true }))
 
   services.chatgptProvider = provider
-  services.authService = provider.authService as unknown as AuthService
-  services.modelService = provider.modelService as unknown as ModelService
+  services.authService = provider.authService
+  services.modelService = provider.modelService
 
   const usageService = new ChatGPTUsageService(credentialManager)
   services.usageService = usageService
@@ -290,7 +247,7 @@ async function initializeChatGPTProvider(): Promise<void> {
     webSearchConfig
   )
   services.chatgptConversationService.setAttachmentService(attachmentService)
-  services.conversationService = services.chatgptConversationService as unknown as ConversationService
+  services.conversationService = services.chatgptConversationService
 
   // 图片生成服务：独立协议（POST /v1/images/generations），与 Chat 完全隔离
   const imageGenerationRepository = new ImageGenerationRepository(storage)
@@ -335,56 +292,6 @@ function scheduleBackgroundUsageRefresh(credentialManager: OAuthCredentialManage
   }).catch(() => { /* 后台失败忽略 */ })
 }
 
-async function initializeAppServerProvider(): Promise<void> {
-  const storage = services.storage!
-
-  // 确保 settingsRepository 已初始化（AppServer 模式下不需要 credentialStore）
-  if (!services.settingsRepository) {
-    services.settingsRepository = new SettingsRepository(storage)
-  }
-
-  const mode = getAppServerMode()
-  const binaryPath = getCodexBinaryPath()
-  const appServerProcess = new AppServerProcess(binaryPath, getCodexHome(), getConfigPath(), mode)
-  services.appServerProcess = appServerProcess
-
-  const rpcClient = new AppServerRpcClient(appServerProcess)
-  services.rpcClient = rpcClient
-
-  const openaiClient = new OpenAIAppServerClient(rpcClient)
-  services.openaiClient = openaiClient
-
-  services.authService = new AuthService(openaiClient)
-  services.modelService = new ModelService(openaiClient)
-  services.threadService = new ThreadService(openaiClient)
-  services.chatService = new ChatService(openaiClient)
-  services.conversationService = new ConversationService(
-    storage,
-    services.threadService,
-    services.chatService,
-    services.modelService
-  )
-
-  appServerProcess.start()
-
-  try {
-    await openaiClient.initialize({
-      clientInfo: {
-        name: APP_NAME,
-        title: APP_TITLE,
-        version: '0.1.0',
-      },
-      capabilities: {
-        experimentalApi: false,
-        requestAttestation: false,
-      },
-    })
-    openaiClient.initialized()
-  } catch (err) {
-    console.error('App Server initialize failed:', err)
-  }
-}
-
 async function initializeServices(): Promise<void> {
   await stage('storage', async () => {
     const dbPath = path.join(app.getPath('userData'), 'data', 'openchat.db')
@@ -393,13 +300,7 @@ async function initializeServices(): Promise<void> {
     services.storage = storage
   })
 
-  const provider = process.env.OPENCHAT_PROVIDER ?? 'chatgpt'
-
-  if (provider === 'appserver') {
-    await stage('appserver-provider', () => initializeAppServerProvider())
-  } else {
-    await stage('chatgpt-provider', () => initializeChatGPTProvider())
-  }
+  await stage('chatgpt-provider', () => initializeChatGPTProvider())
 }
 
 // ── Splash 状态机 ──
@@ -1060,7 +961,7 @@ app.on('browser-window-created', (_event, window) => {
   })
 })
 
-app.on('will-quit', () => { services.appServerProcess?.stop(); services.mockAuthServer?.stop(); services.storage?.close() })
+app.on('will-quit', () => { services.mockAuthServer?.stop(); services.storage?.close() })
 
 app.on('before-quit', () => {
   isAppQuitting = true

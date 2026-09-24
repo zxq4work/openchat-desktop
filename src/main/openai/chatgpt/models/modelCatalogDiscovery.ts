@@ -13,7 +13,7 @@
 //   - 不跟随 Codex release 更新（不需要 Codex 0.156 / 0.157 时手动改这个值）
 //   - 不代表 OpenChat 实现了所有官方 Codex features
 //   - 不用于 /responses
-//   - 不用于 vendor compatibility（与 CODEX_VERSION / vendor/openai/codex-* 完全解耦）
+//   - 不用于任何 Codex 版本兼容判定（与 Codex release / vendor schema 完全解耦）
 //
 // 能力判定一律交给 server metadata + OpenChat 自身 capability policy：
 // use_responses_lite / supported_reasoning_levels / input_modalities /

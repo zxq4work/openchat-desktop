@@ -22,7 +22,6 @@ import { googleSearchBrowser } from '../web-search/GoogleSearchBrowserService'
 import { writeBootTheme, type BootTheme } from '../bootstrap/BootPreferences'
 
 export interface Services {
-  appServerProcess: { isRunning: boolean } | null
   settingsRepository: {
     get: (key: string) => string | null
     set: (key: string, value: string) => void
@@ -66,13 +65,12 @@ export interface Services {
     updateWebSearchConfig: (config: WebSearchConfig) => void
     updateProviderConfig: (id: string, providerConfigId: string | null) => Promise<void>
     newTopic: (id: string) => ContextSegment | null
-    // 全局会话搜索（只读）。legacy appserver ConversationService 未实现，
-    // 该路径下 IPC 会显式报错（而非静默返回空结果），不影响 ChatGPT 主路径。
+    // 全局会话搜索（只读）。若当前实现未提供该方法，IPC 会显式报错（而非静默返回空结果）。
     searchConversations?: (query: string, scope: ConversationSearchScope) => ConversationSearchResult[]
     searchMatches?: (conversationId: string, query: string) => ConversationMessageSearchMatch[]
     sendMessage: (id: string, text: string, attachmentIds?: string[]) => Promise<{ userMessage: Message; assistantMessage: Message; reasoningDisplayMode: 'none' | 'summary' | 'live' } | null>
     interrupt: () => Promise<void>
-    // 返回 disposer：ChatGPT 路径与 appserver legacy ConversationService 均已返回解绑函数。
+    // 返回 disposer：解绑函数用于 Retry / service 重建前解除旧订阅。
     onStreamEvent: (handler: (event: unknown) => void) => () => void
   } | null
   imageGenerationService: {

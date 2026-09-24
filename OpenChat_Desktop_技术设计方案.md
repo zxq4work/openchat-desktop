@@ -1,5 +1,11 @@
 # OpenChat Desktop 技术设计方案
 
+> **⚠️ 历史文档（HISTORICAL）**：本文档记录的是 2026-08-19 的 **Codex App Server 协议基线设计**。
+> 该 AppServer 传输层（`appserver-legacy/`）及其依赖的 `vendor/openai/codex-0.148.0/` schema
+> 已于 **2026-09-24 整体删除**。OpenChat 当前**不依赖任何本地 Codex 二进制或 vendor schema**，
+> 而是直接调用 ChatGPT Codex HTTP/SSE（`/backend-api/codex/models`、`/backend-api/codex/responses`）。
+> 下文所有 `0.148.0` / `app-server` / `vendor/` 描述**仅作历史记录**，不代表当前实现。
+
 > **定位**：一个轻量级、Chatbox 风格的 ChatGPT Web 替代桌面客户端。  
 > **目标系统**：Windows 7 SP1 x64、macOS 10.13.6 Intel x64。  
 > **核心能力**：ChatGPT OAuth 登录、动态模型列表、动态推理强度、多会话、会话级系统提示/角色设定、流式文本对话、逻辑“新话题”上下文切断。  

@@ -523,7 +523,7 @@ src/
 │       │   ├── tools/
 │       │   └── usage/
 │       │
-│       └── appserver-legacy/
+│       └── (appserver-legacy 已于 2026-09-24 删除)
 │
 ├── preload/
 │
@@ -850,23 +850,6 @@ false
 
 ---
 
-### AppServer
-
-```text
-OPENCHAT_APP_SERVER_MODE
-```
-
-开发环境和生产环境可能分别使用：
-
-```text
-mock
-bundled
-```
-
-AppServer 当前属于 Legacy Provider 路径。
-
----
-
 ## Proxy
 
 支持：
@@ -941,25 +924,12 @@ Maintainability
 
 ---
 
-## Legacy AppServer
+## Legacy AppServer (removed 2026-09-24)
 
-项目仍保留早期 AppServer Provider：
+早期基于 stdio JSONL RPC 的 AppServer Provider（`src/main/openai/appserver-legacy/`、
+`OPENCHAT_PROVIDER=appserver`）及其依赖的 Codex 0.148.0 vendor schema 已整体删除。
 
-```text
-src/main/openai/appserver-legacy/
-```
-
-可通过：
-
-```text
-OPENCHAT_PROVIDER=appserver
-```
-
-启用。
-
-该模式通过 stdio JSONL RPC 与 Codex AppServer 通信。
-
-目前默认 Provider 已切换到直接 ChatGPT / Codex 协议实现，因此 AppServer 主要作为遗留兼容路径保留。
+当前仅保留直接 ChatGPT / Codex 协议实现（HTTP/SSE），不依赖任何本地 Codex 二进制或 vendor schema。
 
 ---
 
