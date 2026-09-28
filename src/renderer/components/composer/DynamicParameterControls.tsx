@@ -133,7 +133,16 @@ export function DynamicParameterControls({
               <button
                 type="button"
                 className="dynamic-param-reset"
-                onClick={() => onUnset(def.id)}
+                onClick={() => {
+                  onUnset(def.id)
+                  // 显式重置不是「未提交的中间输入」：同步清掉本地文本态，
+                  // 否则 number/string 输入框仍会显示旧值（unset 后不再发送）。
+                  setTextDraft((prev) => {
+                    const next = { ...prev }
+                    delete next[def.id]
+                    return next
+                  })
+                }}
                 disabled={disabled}
                 title="重置为默认（不发送）"
               >

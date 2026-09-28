@@ -249,6 +249,12 @@ function DefinitionEditor({ def, protocol, isNew, existingIds, onChange, onDone,
         <div className="provider-form-field">
           <label className="provider-label">候选项</label>
           <div className="reqparam-options">
+            {/* 轻量列头：只出现一次，帮助区分「显示名称」与「值」两列 */}
+            <div className="reqparam-option-header">
+              <span>显示名称</span>
+              <span>值</span>
+              <span />
+            </div>
             {(def.options ?? []).map((o, i) => (
               <div key={i} className="reqparam-option-row">
                 <span className="reqparam-option-label">{o.label}</span>

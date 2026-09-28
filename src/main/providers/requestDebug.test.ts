@@ -1,5 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { isRequestParamDebugEnabled, sanitizeScalarValue, summarizeRequestBody } from './requestDebug'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import {
+  isRequestParamDebugEnabled,
+  sanitizeScalarValue,
+  summarizeRequestBody,
+  formatResolvedDynamicParameters,
+  logFinalRequestDebug,
+} from './requestDebug'
 
 describe('isRequestParamDebugEnabled', () => {
   const original = process.env.OPENCHAT_DEBUG_REQUEST_PARAMS
@@ -108,5 +114,87 @@ describe('summarizeRequestBody', () => {
     const json = JSON.stringify(out)
     expect(json).not.toContain('AAAA')
     expect(json).toContain('<data-url omitted>')
+  })
+})
+
+describe('formatResolvedDynamicParameters', () => {
+  it('prints the real string value instead of collapsing it', () => {
+    const out = formatResolvedDynamicParameters([
+      { id: 'custom-option', path: 'extra_body.custom_option', value: 'credential-value' },
+    ])
+    expect(out).toEqual([{ id: 'custom-option', path: 'extra_body.custom_option', value: 'credential-value' }])
+    // 关键：不再退化为 <string length=N>
+    expect(JSON.stringify(out)).toContain('credential-value')
+  })
+
+  it('keeps the real value for a long string (no length collapse)', () => {
+    const long = 'example-secret-value-' + 'x'.repeat(200)
+    const out = formatResolvedDynamicParameters([{ id: 's', path: 's', value: long }])
+    expect(out[0].value).toBe(long)
+  })
+
+  it('keeps real number / boolean values', () => {
+    const out = formatResolvedDynamicParameters([
+      { id: 'steps', path: 'extra_body.steps', value: 40 },
+      { id: 'flag', path: 'extra_body.flag', value: true },
+    ])
+    expect(out).toEqual([
+      { id: 'steps', path: 'extra_body.steps', value: 40 },
+      { id: 'flag', path: 'extra_body.flag', value: true },
+    ])
+  })
+
+  it('serializes the dynamic parameters as readable JSON', () => {
+    const out = formatResolvedDynamicParameters([
+      { id: 'steps', path: 'extra_body.steps', value: 40 },
+      { id: 'quality', path: 'extra_body.quality', value: 'high' },
+    ])
+    expect(JSON.parse(JSON.stringify(out))).toEqual([
+      { id: 'steps', path: 'extra_body.steps', value: 40 },
+      { id: 'quality', path: 'extra_body.quality', value: 'high' },
+    ])
+  })
+
+  it('accepts an empty resolved list', () => {
+    expect(formatResolvedDynamicParameters([])).toEqual([])
+  })
+})
+
+describe('logFinalRequestDebug gating', () => {
+  const original = process.env.OPENCHAT_DEBUG_REQUEST_PARAMS
+  afterEach(() => {
+    if (original === undefined) delete process.env.OPENCHAT_DEBUG_REQUEST_PARAMS
+    else process.env.OPENCHAT_DEBUG_REQUEST_PARAMS = original
+    vi.restoreAllMocks()
+  })
+
+  it('prints nothing when the switch is off', () => {
+    delete process.env.OPENCHAT_DEBUG_REQUEST_PARAMS
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    logFinalRequestDebug('chat_completions', { model: 'x', extra_body: { steps: 40 } }, [{ id: 'steps', path: 'extra_body.steps', value: 40 }])
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('prints the applied dynamic parameters with real values when on', () => {
+    process.env.OPENCHAT_DEBUG_REQUEST_PARAMS = '1'
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    logFinalRequestDebug('chat_completions', { model: 'x', extra_body: { custom: 'custom-value' } }, [
+      { id: 'custom', path: 'extra_body.custom', value: 'custom-value' },
+    ])
+    const joined = spy.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(joined).toContain('[RequestDebug]')
+    expect(joined).toContain('custom-value')
+    // 敏感字段仍由 body sanitizer 处理
+    expect(joined).toContain('finalRequestShape')
+  })
+
+  it('still redacts secrets in the request body shape while on', () => {
+    process.env.OPENCHAT_DEBUG_REQUEST_PARAMS = '1'
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    logFinalRequestDebug('chat_completions', { api_key: 'example-secret-value', prompt: 'x'.repeat(50) })
+    const joined = spy.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(joined).toContain('<redacted>')
+    expect(joined).not.toContain('example-secret-value')
+    expect(joined).toContain('promptLength=')
   })
 })

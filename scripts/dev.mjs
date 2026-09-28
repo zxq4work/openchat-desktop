@@ -111,7 +111,12 @@ async function main(){
       shell: process.platform === 'win32',
       env:{
         ...process.env,
-        VITE_DEV_SERVER_URL:url
+        VITE_DEV_SERVER_URL:url,
+        // 开发模式默认开启动态请求参数调试日志；用户显式设置该变量时不覆盖。
+        // 纯 JS 写法，兼容 macOS / Windows，不依赖 shell 语法或 cross-env。
+        // 仅作用于 dev 启动的 Electron（即 Main Process）；build / package / test 不受影响。
+        OPENCHAT_DEBUG_REQUEST_PARAMS:
+          process.env.OPENCHAT_DEBUG_REQUEST_PARAMS ?? '1'
       }
     }
   )

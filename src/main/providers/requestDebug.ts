@@ -97,17 +97,26 @@ export function logFinalRequestDebug(
     extra && typeof extra === 'object' && !Array.isArray(extra)
       ? Object.keys(extra as Record<string, unknown>)
       : []
-  const appliedDynamicParameters = (resolved ?? []).map((r) => ({
-    id: r.id,
-    path: r.path,
-    value: sanitizeScalarValue(r.value),
-  }))
+  const appliedDynamicParameters = formatResolvedDynamicParameters(resolved ?? [])
 
   console.log('[RequestDebug] protocol=%s endpoint=%s', protocol, endpoint ?? '-')
   console.log('[RequestDebug] topLevelKeys=%s', JSON.stringify(topLevelKeys))
   console.log('[RequestDebug] extraBodyKeys=%s', JSON.stringify(extraBodyKeys))
+  // 动态自定义参数：打印真实 value，便于确认最终发送了什么。
+  // string / number / boolean / null / array / object 均按实际 JSON 形式输出。
   console.log('[RequestDebug] appliedDynamicParameters=%s', JSON.stringify(appliedDynamicParameters))
+  // request body 摘要：仍走既有 sanitizer（脱敏 authorization / prompt / messages / data URL …）。
   console.log('[RequestDebug] finalRequestShape=%s', JSON.stringify(summarizeRequestBody(body)))
+}
+
+// 动态自定义参数的「实际值」格式化：与 body sanitizer 不同，这里按用户本意完整打印真实值。
+// 关键区别：string 不再折叠为 '<string length=N>'——用户就是要确认最终发送了什么。
+// 允许 string / number / boolean / null / array / object（后者按 JSON 可读形式打印）。
+// 注意：这是「用户配置的动态参数」专用通道，绝不用于 request body 整体摘要。
+export function formatResolvedDynamicParameters(
+  resolved: ResolvedRequestParameter[]
+): Array<{ id: string; path: string; value: unknown }> {
+  return resolved.map((r) => ({ id: r.id, path: r.path, value: r.value }))
 }
 
 // 参数错误日志：只打印 id + 原因，绝不打印完整 body。
