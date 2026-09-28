@@ -32,6 +32,7 @@ const IPC_CHANNELS = {
   CONVERSATIONS_SEARCH_MATCHES: 'conversations:search-matches',
   CONVERSATIONS_UPDATE_PROVIDER: 'conversations:update-provider',
   CONVERSATIONS_UPDATE_IMAGE_DEFAULTS: 'conversations:update-image-defaults',
+  CONVERSATIONS_UPDATE_REQUEST_PARAMETER_VALUES: 'conversations:update-request-parameter-values',
   IMAGE_GENERATION_GENERATE: 'image-generation:generate',
   IMAGE_GENERATION_INTERRUPT: 'image-generation:interrupt',
   IMAGE_GENERATION_LIST: 'image-generation:list',
@@ -146,6 +147,9 @@ const openchat = {
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_PROVIDER, id, providerConfigId),
     updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) =>
       ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_IMAGE_DEFAULTS, id, size, quality, background),
+    // 通用动态请求参数值（parameterId → value；unset 的 key 不存在）
+    updateRequestParameterValues: (id: string, values: Record<string, string | number | boolean>) =>
+      ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_UPDATE_REQUEST_PARAMETER_VALUES, id, values),
     newTopic: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.CONVERSATIONS_NEW_TOPIC, id),
     // 全局会话搜索（只读）：跨所有会话检索，按 Conversation 聚合
     search: (query: string, scope: ConversationSearchScope): Promise<ConversationSearchResult[]> =>

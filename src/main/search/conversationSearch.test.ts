@@ -111,6 +111,7 @@ describe('conversationSearch — 数据库检索', () => {
       searchEngine: 'bing', providerConfigId: null,
       defaultImageSize: null, defaultImageQuality: null, defaultImageBackground: null,
       providerNameSnapshot: null, modelNameSnapshot: null,
+      requestParameterValues: {},
       createdAt: updatedAt, updatedAt,
     }
   }

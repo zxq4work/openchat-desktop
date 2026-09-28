@@ -5,12 +5,13 @@ import { MessageRepository } from '../storage/MessageRepository'
 import { ImageGenerationRepository } from '../storage/ImageGenerationRepository'
 import { StorageService } from '../storage/StorageService'
 import type { ImageGenerationOperation, Message, MessageAttachment } from '../../shared/types/conversation'
-import type { ImageGenerationAdapter, ImageGenerationInputImage, ImageGenerationRequest } from '../../shared/types/provider'
+import type { ImageGenerationAdapter, ImageGenerationInputImage, ImageGenerationRequest, ResolvedRequestParameter } from '../../shared/types/provider'
 import { TITLE_MAX_LENGTH } from '../../shared/constants'
-import { ProviderConfigService } from '../providers/ProviderConfigService'
+import { ProviderConfigService, computeReservedRequestPaths, findDynamicParameterConflict } from '../providers/ProviderConfigService'
 import { AttachmentService } from '../services/attachments/AttachmentService'
 import { ImageGenerationError, type ImageGenerationErrorCode } from '../providers/imageGenerationErrors'
 import { validateRequestedParams, reconcileImageDefaults, validateInputImageCount } from '../../shared/image-generation/parameterProfile'
+import { resolveParameterValues } from '../../shared/request-parameters/requestParameters'
 import { resolveConversationBinding, bindingBlockedMessage } from '../../shared/conversation/capabilities'
 
 export interface ImageGenerationParams {
@@ -188,6 +189,26 @@ export class ImageGenerationService {
       throw new ImageGenerationError('IMAGE_GENERATION_INVALID_PARAMETER', paramError)
     }
 
+    // 通用动态请求参数：Main 权威 resolve（当前 Provider + 当前 Model）。
+    // values 来自 Conversation（非 Renderer 传入），只读取 resolved definitions 中存在的 id。
+    // 参数非法 → 阻止发送（不静默丢弃、不静默改值）。
+    const dynamicDefinitions = this.providerConfigService.getResolvedRequestParameters(providerConfigId, modelId)
+    const { resolved: dynamicParameters, error: dynamicError } = resolveParameterValues(
+      dynamicDefinitions,
+      conversation.requestParameterValues ?? {},
+      'image_generations'
+    )
+    if (dynamicError) {
+      throw new ImageGenerationError('IMAGE_GENERATION_INVALID_PARAMETER', dynamicError)
+    }
+    // 运行期防御：动态参数重复 path / 撞协议保留字段（核心字段 + 参考图 / response_format 映射位置）
+    // → 阻止发送，绝不 last-write-wins。保存时已拦截，此处防 DB 旧值 / 手改 / 升级后残留。
+    const reservedPaths = computeReservedRequestPaths('image_generations', profile)
+    const conflict = findDynamicParameterConflict(dynamicParameters, reservedPaths)
+    if (conflict) {
+      throw new ImageGenerationError('IMAGE_GENERATION_INVALID_PARAMETER', conflict)
+    }
+
     // metadata 保存的是"实际发送的 canonical 值"。"默认/自动" = 未发送 = null，
     // 绝不把未发送的字段写成 'auto'，否则历史记录会错误表示真实请求。
     const size = cleaned.size ?? null
@@ -320,6 +341,7 @@ export class ImageGenerationService {
           outputFormat: outputFormat ?? undefined,
           n: 1,
           inputImages,
+          dynamicParameters,
         },
         abortController
       )
@@ -355,7 +377,7 @@ export class ImageGenerationService {
     assistantMessageId: string,
     generationId: string,
     adapter: ImageGenerationAdapter,
-    request: { prompt: string; model: string; size?: string; quality?: string; background?: string; outputFormat?: string; n?: number; inputImages?: ImageGenerationInputImage[] },
+    request: { prompt: string; model: string; size?: string; quality?: string; background?: string; outputFormat?: string; n?: number; inputImages?: ImageGenerationInputImage[]; dynamicParameters?: ResolvedRequestParameter[] },
     abortController: AbortController
   ): Promise<void> {
     this.messages.updateStatus(assistantMessageId, 'streaming')

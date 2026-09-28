@@ -13,6 +13,7 @@ import type {
   ResponsesSSEEvent,
 } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { UnsupportedImageInputError } from './errors'
+import { logFinalRequestDebug } from './requestDebug'
 
 function isDev(): boolean {
   return process.env.NODE_ENV !== 'production'
@@ -33,6 +34,10 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     signal?: AbortSignal
   ): AsyncIterable<CanonicalModelEvent> {
     const responsesRequest = this.buildRequest(request)
+
+    // 实际最终发送参数（dev 诊断，默认关闭）：ChatGPT Codex 为受控协议，只打印顶层字段形状，
+    // 绝不打印 body 内容（instructions / input 属私有请求）。Codex 路径不注入动态参数。
+    logFinalRequestDebug('chatgpt_codex', responsesRequest as unknown as Record<string, unknown>, undefined)
 
     let turnId = ''
 

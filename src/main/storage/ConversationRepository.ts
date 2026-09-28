@@ -1,5 +1,6 @@
 import { StorageService } from './StorageService'
 import type { Conversation, ConversationSummary } from '../../shared/types/conversation'
+import type { RequestParameterValues } from '../../shared/types/provider'
 
 export class ConversationRepository {
   private storage: StorageService
@@ -64,7 +65,7 @@ export class ConversationRepository {
              codex_search_mode, search_engine, provider_config_id,
              default_image_size, default_image_quality, default_image_background,
              provider_name_snapshot, model_name_snapshot,
-             created_at, updated_at
+             created_at, updated_at, request_parameter_values_json
       FROM conversations WHERE id = ?
     `, [id])
 
@@ -84,8 +85,8 @@ export class ConversationRepository {
         codex_search_mode, search_engine, provider_config_id,
         default_image_size, default_image_quality, default_image_background,
         provider_name_snapshot, model_name_snapshot,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        created_at, updated_at, request_parameter_values_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.id,
       conversation.type,
@@ -107,6 +108,7 @@ export class ConversationRepository {
       conversation.modelNameSnapshot ?? null,
       conversation.createdAt,
       conversation.updatedAt,
+      JSON.stringify(conversation.requestParameterValues ?? {}),
     ])
   }
 
@@ -130,6 +132,15 @@ export class ConversationRepository {
     db.run(
       `UPDATE conversations SET default_image_size = ?, default_image_quality = ?, default_image_background = ?, updated_at = ? WHERE id = ?`,
       [size ?? null, quality ?? null, background ?? null, Date.now(), id]
+    )
+  }
+
+  // 写入通用动态请求参数值（整体覆盖，parameterId → value；unset 的 key 不存在）。
+  updateRequestParameterValues(id: string, values: RequestParameterValues): void {
+    const db = this.storage.database
+    db.run(
+      `UPDATE conversations SET request_parameter_values_json = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify(values ?? {}), Date.now(), id]
     )
   }
 
@@ -256,8 +267,26 @@ export class ConversationRepository {
       defaultImageBackground: row[15] ? String(row[15]) : null,
       providerNameSnapshot: row[16] ? String(row[16]) : null,
       modelNameSnapshot: row[17] ? String(row[17]) : null,
+      requestParameterValues: this.parseRequestParameterValues(row[20]),
       createdAt: Number(row[18]),
       updatedAt: Number(row[19]),
+    }
+  }
+
+  // 解析动态参数值 JSON：非法 / 缺失 → {}（绝不抛错，旧库兼容）。
+  private parseRequestParameterValues(raw: unknown): RequestParameterValues {
+    if (!raw) return {}
+    try {
+      const parsed = JSON.parse(String(raw)) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      const out: RequestParameterValues = {}
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === 'string' || typeof v === 'boolean') out[k] = v
+        else if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+      }
+      return out
+    } catch {
+      return {}
     }
   }
 }

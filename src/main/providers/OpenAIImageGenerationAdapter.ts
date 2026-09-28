@@ -12,6 +12,8 @@ import type {
 import { detectImageMime } from '../services/attachments/imageFormat'
 import { ImageGenerationError } from './imageGenerationErrors'
 import { validateImageGenerationPayloadPath } from '../../shared/image-generation/parameterProfile'
+import { applyResolvedParameters } from '../../shared/request-parameters/requestParameters'
+import { logFinalRequestDebug } from './requestDebug'
 
 // 参考图解析结果：编码后的传输字符串 + 用于诊断日志的 MIME / 字节大小。
 // 绝不把传输字符串（含 Base64）写入日志。
@@ -132,6 +134,12 @@ export function buildImageRequestBody(
   const resp = mapping?.responseFormatParameter
   if (resp?.enabled && resp.path) {
     writeProviderPayloadField(body, resp.path, resp.value)
+  }
+
+  // 通用动态请求参数最后注入：适配器不认识具体参数名，只按 path 写。
+  // 空数组 / 未设置时行为完全不变。extra_body 合并由 applyResolvedParameters 保证。
+  if (request.dynamicParameters && request.dynamicParameters.length > 0) {
+    applyResolvedParameters(body as Record<string, unknown>, request.dynamicParameters)
   }
 
   return body
@@ -334,6 +342,10 @@ export class OpenAIImageGenerationAdapter implements ImageGenerationAdapter {
     if (process.env.OPENCHAT_IMAGE_DEBUG === 'true') {
       console.debug('[ImageGeneration] sanitized body=%s', JSON.stringify(sanitizeImageBodyForLog(body, resolved)))
     }
+
+    // 实际最终发送参数（dev 诊断，默认关闭）：HTTP 发送前打印 shape + 已注入动态参数。
+    // 参考图 Data URI 由 sanitizeScalarValue 统一替换为摘要，绝不写 Base64。
+    logFinalRequestDebug('image_generations', body as unknown as Record<string, unknown>, request.dynamicParameters, url)
 
     const resBody = await this.postJson(url, body, signal)
     const items = parseImageResponseItems(resBody)

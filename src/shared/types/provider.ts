@@ -83,6 +83,9 @@ export interface CanonicalModelRequest {
   responsesLite?: boolean
   maxOutputTokens?: number
   temperature?: number
+  // 通用动态请求参数（Main 权威层 resolve + validate 后的结果）。
+  // Adapter 只按 path 写入 body，不认识具体参数名。空数组 / undefined 时行为完全不变。
+  dynamicParameters?: ResolvedRequestParameter[]
 }
 
 export type CanonicalModelEvent =
@@ -125,6 +128,10 @@ export interface CustomProviderConfig {
   // Image Generations 参数能力 Profile（仅 protocol=image_generations 有意义）。
   // 未设置时按最小集处理（只发送 model/prompt/n）。
   imageGenerationProfile?: ImageGenerationParameterProfile
+  // 通用「动态请求参数」Profile（协议无关）：声明 Provider / Model 额外支持的
+  // request body scalar 字段（如 steps / max_tokens / foot）。未设置 = 空 profile
+  // （请求体与未引入该能力时完全一致）。协议适配器绝不认识具体参数名，只按 path 写入。
+  requestParameterProfile?: RequestParameterProfile
   extraHeaders?: Record<string, string>
   toolCalling: ToolCallingMode
   // 手动声明该自定义 Provider 的模型支持图片输入（无法从 metadata 推断时使用）。
@@ -132,6 +139,88 @@ export interface CustomProviderConfig {
   imageInput?: boolean
   createdAt: number
   updatedAt: number
+}
+
+// ── Request Parameter Profile（通用动态请求参数）──
+// 目标：未来任何 Provider / Model 出现新的 request body 字段（steps / seed / guidance_scale /
+// max_tokens / negative_prompt / …）时，OpenChat 核心不需要新增专用字段、专用 UI、专用 if/else。
+// 这些参数只是「配置数据」，由 Provider / Model 声明，UI 动态渲染，请求阶段按 path 注入 body。
+//
+// 核心原则：
+// - Core 不认识具体参数名（禁止 steps / max_tokens 之类一等字段）；
+// - id 是 OpenChat 内部 identity，path 是最终 body 字段位置，二者分离；
+// - 未设置（unset）→ 不发送该字段；绝不发送 "default" / 0 / Provider 猜测值；
+// - 不按 Provider 名称 / model 名 / baseUrl 硬编码任何参数行为。
+
+// 参数值类型（第一版只支持 scalar，不支持 object / array）。
+export type RequestParameterType = 'string' | 'number' | 'boolean' | 'select'
+
+// 参数在 UI 中的显示位置：
+// - primary：高频参数，直接显示在 Composer；
+// - advanced：低频参数，仅在「高级参数」展开后显示；
+// - hidden：完全不显示，但请求中固定发送（配合 fixedValue）。
+export type RequestParameterPlacement = 'primary' | 'advanced' | 'hidden'
+
+export interface RequestParameterOption {
+  label: string
+  value: string | number | boolean
+}
+
+// 单个动态参数的完整定义。
+export interface DynamicRequestParameterDefinition {
+  // OpenChat 内部 identity（Provider scope 内唯一，创建后不可修改）。
+  // 用作 React key / persistence key / 值存储 key，绝不使用 path 作为 identity。
+  id: string
+  label: string
+  description?: string
+  // 最终 request body 字段位置：'<顶层字段>' 或 'extra_body.<字段>'。
+  path: string
+  type: RequestParameterType
+  placement: RequestParameterPlacement
+  // 可选语义标记（如 max_output_tokens）。第一版不用于自动迁移，仅预留。
+  semantic?: string
+  required?: boolean
+  // Provider 推荐的 UI 初始值。注意：不等于「自动发送」——第一版 defaultValue 只作 UI 建议，
+  // 不会自动进入请求；只有用户显式设置或 fixedValue 才会发送。
+  defaultValue?: string | number | boolean
+  // 固定值：hidden 参数一般配 fixedValue，请求中一定发送，无需用户设置。
+  fixedValue?: string | number | boolean
+  // number 类型约束。
+  min?: number
+  max?: number
+  step?: number
+  // select 类型的候选项。
+  options?: RequestParameterOption[]
+}
+
+// Model 级覆盖：同一 Provider 下不同模型可以有完全不同的参数。
+export interface RequestParameterModelOverride {
+  // 覆盖同 id 的 Provider 级定义，或追加 model-only 参数。
+  parameters?: DynamicRequestParameterDefinition[]
+  // 禁用某些 Provider 级参数（按 id）。
+  disabledParameterIds?: string[]
+}
+
+// 参数 Profile 根结构。
+export interface RequestParameterProfile {
+  // schema 版本，便于未来扩展。
+  version?: number
+  // Provider 级参数（所有未覆盖的 model 默认继承）。
+  providerParameters: DynamicRequestParameterDefinition[]
+  // Model 级覆盖，key 为真实 model id（不 normalize，本地模型完整路径 ID 可用作 key）。
+  modelOverrides?: Record<string, RequestParameterModelOverride>
+}
+
+// 用户为某个参数设置的值。只存用户明确覆盖的参数；unset = key 不存在。
+export type RequestParameterValues = Record<string, string | number | boolean>
+
+// 已解析、已校验、准备注入 request body 的动态参数（path → value）。
+// 由 Main 的权威层从 Provider Profile + Conversation values 计算得到；
+// Adapter 只按 path 写入 body，绝不认识具体参数名，也不做任何冲突判断。
+export interface ResolvedRequestParameter {
+  id: string
+  path: string
+  value: string | number | boolean
 }
 
 // ── Image Generation Parameter Profile ──
@@ -280,6 +369,9 @@ export interface ImageGenerationRequest {
   inputImageResolver?: ImageGenerationInputResolver
   // 参考图 wire 配置（Profile 派生），决定参考图放在 body 的哪个位置、如何编码。
   wire?: ImageGenerationWireConfig
+  // 通用动态请求参数（Main 权威层 resolve + validate 后的结果）。
+  // Adapter 只按 path 写入 body，不认识具体参数名。未设置时行为完全不变。
+  dynamicParameters?: ResolvedRequestParameter[]
 }
 
 // Adapter 返回的单张图片。字节已解码，Renderer 永远拿不到 Provider 原始响应。

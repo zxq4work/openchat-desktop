@@ -13,7 +13,7 @@ import { fetchCodexUsage } from '../openai/chatgpt/codexUsageDiagnostics'
 import type { OAuthCredentialManager } from '../openai/chatgpt/auth/OAuthCredentialManager'
 import { ChatGPTUsageService } from '../openai/chatgpt/usage/ChatGPTUsageService'
 import type { CodexUsageView } from '../../shared/types/usage'
-import type { CustomProviderConfig } from '../../shared/types/provider'
+import type { CustomProviderConfig, RequestParameterValues } from '../../shared/types/provider'
 import type { WebSearchEngineType, WebSearchConfig } from '../../shared/types/settings'
 import { DEFAULT_WEB_SEARCH_CONFIG } from '../../shared/types/settings'
 import { getSearchEngine } from '../web-search/SearchEngineFactory'
@@ -58,6 +58,7 @@ export interface Services {
     updateModel: (id: string, modelId: string | null) => Promise<void>
     updateEffort: (id: string, effort: string) => Promise<void>
     updateImageDefaults: (id: string, size: string | null, quality: string | null, background: string | null) => Promise<void>
+    updateRequestParameterValues: (id: string, values: RequestParameterValues) => Promise<void>
     updateUseModelInstructions: (id: string, useModelInstructions: boolean) => Promise<void>
     updateWebSearchEnabled: (id: string, webSearchEnabled: boolean) => Promise<void>
     updateCodexSearchMode: (id: string, mode: 'hosted' | 'standalone') => Promise<void>
@@ -609,6 +610,14 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     background: string | null
   ): Promise<void> => {
     await services.conversationService?.updateImageDefaults(id, size, quality, background)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.CONVERSATIONS_UPDATE_REQUEST_PARAMETER_VALUES, async (
+    _event,
+    id: string,
+    values: Record<string, string | number | boolean>
+  ): Promise<void> => {
+    await services.conversationService?.updateRequestParameterValues(id, values ?? {})
   })
 
   // ===== Codex Usage =====

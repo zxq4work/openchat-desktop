@@ -175,6 +175,14 @@ export class StorageService {
       changed = true
     }
 
+    // 迁移：conversations 表 request_parameter_values_json 列（通用动态请求参数值）。
+    // 纯 additive：旧会话一律回填 '{}'（无用户覆盖 → 不发送任何动态参数）。
+    if (!convColumnNames.includes('request_parameter_values_json')) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN request_parameter_values_json TEXT")
+      this.db.run("UPDATE conversations SET request_parameter_values_json = '{}' WHERE request_parameter_values_json IS NULL")
+      changed = true
+    }
+
     // 迁移：provider_configs 表
     const tables = this.db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='provider_configs'")
     if (!tables.length || !tables[0].values.length) {
@@ -297,6 +305,12 @@ export class StorageService {
       // 不假定 OpenAI 兼容，避免把历史第三方 Provider 误判为完整兼容。
       if (!pcNames.includes('image_generation_profile_json')) {
         this.db.run("ALTER TABLE provider_configs ADD COLUMN image_generation_profile_json TEXT")
+        changed = true
+      }
+      // 迁移：request_parameter_profile_json 列（通用动态请求参数 Profile）。
+      // 纯 additive：旧 Provider 无值 → 视为空 profile，request body 完全不变。
+      if (!pcNames.includes('request_parameter_profile_json')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN request_parameter_profile_json TEXT")
         changed = true
       }
     }
@@ -457,6 +471,7 @@ export class StorageService {
         default_image_size TEXT,
         default_image_quality TEXT,
         default_image_background TEXT,
+        request_parameter_values_json TEXT NOT NULL DEFAULT '{}',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -536,6 +551,7 @@ export class StorageService {
         responses_path TEXT,
         image_generations_path TEXT,
         image_generation_profile_json TEXT,
+        request_parameter_profile_json TEXT,
         extra_headers TEXT,
         tool_calling TEXT NOT NULL DEFAULT 'auto',
         image_input INTEGER NOT NULL DEFAULT 0,

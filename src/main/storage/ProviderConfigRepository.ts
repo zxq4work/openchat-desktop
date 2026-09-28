@@ -1,6 +1,7 @@
 import { StorageService } from './StorageService'
-import type { CustomProviderConfig, ToolCallingMode, ImageGenerationParameterProfile } from '../../shared/types/provider'
+import type { CustomProviderConfig, ToolCallingMode, ImageGenerationParameterProfile, RequestParameterProfile } from '../../shared/types/provider'
 import { normalizeImageGenerationProfile } from '../../shared/image-generation/parameterProfile'
+import { normalizeRequestParameterProfile } from '../../shared/request-parameters/requestParameters'
 import { randomUUID } from 'crypto'
 
 export class ProviderConfigRepository {
@@ -16,7 +17,8 @@ export class ProviderConfigRepository {
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
              extra_headers, tool_calling, image_input, image_generations_path,
-             image_generation_profile_json, created_at, updated_at
+             image_generation_profile_json, created_at, updated_at,
+             request_parameter_profile_json
       FROM provider_configs
       ORDER BY created_at ASC
     `)
@@ -42,7 +44,8 @@ export class ProviderConfigRepository {
       SELECT id, name, protocol, base_url, api_key, models,
              models_path, chat_completions_path, responses_path,
              extra_headers, tool_calling, image_input, image_generations_path,
-             image_generation_profile_json, created_at, updated_at
+             image_generation_profile_json, created_at, updated_at,
+             request_parameter_profile_json
       FROM provider_configs WHERE id = ?
     `, [id])
 
@@ -68,8 +71,9 @@ export class ProviderConfigRepository {
         id, name, protocol, base_url, api_key, models,
         models_path, chat_completions_path, responses_path,
         extra_headers, tool_calling, image_input, image_generations_path,
-        image_generation_profile_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        image_generation_profile_json, created_at, updated_at,
+        request_parameter_profile_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       fullConfig.name,
@@ -87,6 +91,7 @@ export class ProviderConfigRepository {
       fullConfig.imageGenerationProfile ? JSON.stringify(fullConfig.imageGenerationProfile) : null,
       now,
       now,
+      fullConfig.requestParameterProfile ? JSON.stringify(fullConfig.requestParameterProfile) : null,
     ])
 
     return fullConfig
@@ -144,6 +149,10 @@ export class ProviderConfigRepository {
       sets.push('image_generation_profile_json = ?')
       values.push(updates.imageGenerationProfile ? JSON.stringify(updates.imageGenerationProfile) : null)
     }
+    if (updates.requestParameterProfile !== undefined) {
+      sets.push('request_parameter_profile_json = ?')
+      values.push(updates.requestParameterProfile ? JSON.stringify(updates.requestParameterProfile) : null)
+    }
     if (updates.toolCalling !== undefined) {
       sets.push('tool_calling = ?')
       values.push(updates.toolCalling)
@@ -196,6 +205,17 @@ export class ProviderConfigRepository {
       }
     }
 
+    // 通用动态请求参数 Profile：非法 / 缺失 → undefined（空 profile，请求体不变）。
+    let requestParameterProfile: RequestParameterProfile | undefined
+    const rpProfileStr = row[16] ? String(row[16]) : null
+    if (rpProfileStr) {
+      try {
+        requestParameterProfile = normalizeRequestParameterProfile(JSON.parse(rpProfileStr))
+      } catch {
+        requestParameterProfile = undefined
+      }
+    }
+
     return {
       id: String(row[0]),
       name: String(row[1]),
@@ -211,6 +231,7 @@ export class ProviderConfigRepository {
       imageInput: row[11] ? Number(row[11]) === 1 : false,
       imageGenerationsPath: row[12] ? String(row[12]) : undefined,
       imageGenerationProfile,
+      requestParameterProfile,
       createdAt: Number(row[14]),
       updatedAt: Number(row[15]),
     }
