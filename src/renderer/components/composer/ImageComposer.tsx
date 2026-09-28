@@ -14,6 +14,9 @@ import { resolveConversationBinding, invalidBindingLabel, bindingBlockedMessage,
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import type { MessageAttachment } from '../../../shared/types/conversation'
 import { toPreviewImage } from '../../packages/conversationPreviewImages'
+import { DynamicParameterSection } from './DynamicParameterControls'
+import { resolveComposerParameters } from '../../packages/requestParameterControls'
+import { setParameterValue, unsetParameterValue } from '../../packages/requestParameterDraft'
 
 // 图片生成 Composer：Model / Size / Quality / Background / OutputFormat（+ 可选参考图）。
 // 全部由 Provider 的 ImageGenerationProfile 驱动：
@@ -124,6 +127,29 @@ export function ImageComposer() {
   const qualityConfig = profile?.quality
   const backgroundConfig = profile?.background
   const outputFormatConfig = profile?.outputFormat
+
+  // ── 通用动态请求参数（协议无关，与图片专属参数并存）──
+  // 由当前绑定 Provider 的 requestParameterProfile + 当前模型 override 驱动；
+  // 与 size/quality 等图片参数互不影响，可同时出现。
+  const dynamicDefinitions = React.useMemo(
+    () => resolveComposerParameters(registryProvider?.requestParameterProfile, currentModelId),
+    [registryProvider?.requestParameterProfile, currentModelId]
+  )
+  const dynamicValues = activeConversation?.requestParameterValues ?? {}
+  const dynamicDisabled = !paramsEditable
+
+  const handleDynamicChange = (id: string, value: string | number | boolean) => {
+    if (!activeConversation) return
+    const next = setParameterValue(dynamicValues, id, value)
+    window.openchat.conversations.updateRequestParameterValues(activeConversation.id, next)
+    setActiveConversation({ ...activeConversation, requestParameterValues: next })
+  }
+  const handleDynamicUnset = (id: string) => {
+    if (!activeConversation) return
+    const next = unsetParameterValue(dynamicValues, id)
+    window.openchat.conversations.updateRequestParameterValues(activeConversation.id, next)
+    setActiveConversation({ ...activeConversation, requestParameterValues: next })
+  }
 
   // 参考图能力（由 Profile 决定，绝不按供应商名称猜）。
   const supportsImageToImage = profileSupportsImageToImage(profile)
@@ -620,6 +646,15 @@ export function ImageComposer() {
             rows={3}
           />
         </div>
+
+        {/* 动态请求参数：完全由 Provider Profile 驱动，无可见参数时整体不渲染 */}
+        <DynamicParameterSection
+          definitions={dynamicDefinitions}
+          values={dynamicValues}
+          onChange={handleDynamicChange}
+          onUnset={handleDynamicUnset}
+          disabled={dynamicDisabled}
+        />
 
         <div className="composer-controls">
           {/* 参考图入口仅在 Profile 允许图生图时显示（OpenAI 官方 /images/generations 不显示） */}

@@ -12,6 +12,8 @@ import type {
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
 import { UnsupportedImageInputError } from './errors'
+import { applyResolvedParameters } from '../../shared/request-parameters/requestParameters'
+import { logFinalRequestDebug } from './requestDebug'
 
 type ChatCompletionContentPart =
   | { type: 'text'; text: string }
@@ -96,6 +98,9 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     const url = `${this.baseUrl}${this.chatCompletionsPath}`
 
     console.log('[Model Request] protocol=chat_completions model=', request.model)
+
+    // 实际最终发送参数（dev 诊断，默认关闭）：在 HTTP 发送前打印 shape + 已注入动态参数。
+    logFinalRequestDebug('chat_completions', body as unknown as Record<string, unknown>, request.dynamicParameters, url)
 
     // 收集工具调用（跨 delta 累积）
     const toolCallAccumulators = new Map<number, { id: string; name: string; arguments: string }>()
@@ -255,6 +260,12 @@ export class ChatCompletionsAdapter implements ModelAdapter {
 
     if (request.temperature != null) {
       body.temperature = request.temperature
+    }
+
+    // 通用动态请求参数最后注入：适配器不认识具体参数名，只按 path 写。
+    // 未设置时行为完全不变；核心字段冲突由 Main 权威层提前拦截。
+    if (request.dynamicParameters && request.dynamicParameters.length > 0) {
+      applyResolvedParameters(body as unknown as Record<string, unknown>, request.dynamicParameters)
     }
 
     return body

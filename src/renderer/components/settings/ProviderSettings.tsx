@@ -9,8 +9,11 @@ import type {
   ImageGenerationProfilePresetId,
   ImageGenerationInputCardinality,
   ImageGenerationResponseFormatValueType,
+  RequestParameterProfile,
 } from '../../../shared/types/provider'
 import { normalizeImageGenerationProfile, openAIImageProfile, customMinimalProfile, customImageToImageProfile, validateImageGenerationPayloadPath } from '../../../shared/image-generation/parameterProfile'
+import { validateRequestParameterProfile, computeReservedRequestPaths } from '../../../shared/request-parameters/requestParameters'
+import { RequestParameterProfileEditor } from './RequestParameterProfileEditor'
 
 const PROTOCOL_OPTIONS = [
   { value: 'chat_completions', label: 'Chat Completions' },
@@ -382,6 +385,7 @@ interface ProviderFormDialogProps {
   initialImageInput: boolean
   initialImageGenerationsPath: string
   initialImageGenerationProfile: ImageGenerationParameterProfile | null
+  initialRequestParameterProfile: RequestParameterProfile | null
   onSave: () => void
   onClose: () => void
 }
@@ -403,6 +407,12 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [imagePreset, setImagePreset] = useState<ImageGenerationProfilePresetId>(
     inferProfilePreset(props.initialImageGenerationProfile)
   )
+  // 通用请求参数 Profile（协议无关）：空 profile 归一化为 undefined，避免落库空壳。
+  const [requestParameterProfile, setRequestParameterProfile] = useState<RequestParameterProfile | undefined>(
+    props.initialRequestParameterProfile ?? undefined
+  )
+  // 「请求参数」默认折叠；仅高级用户需要。
+  const [requestParamOpen, setRequestParamOpen] = useState(false)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   // 「高级协议兼容设置」默认折叠；普通用户无需理解协议细节。
@@ -478,6 +488,18 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
     }
     setSaveError('')
 
+    // 通用请求参数 Profile 保存前再校验一次（Renderer 侧即时反馈；Main 侧仍会权威校验）。
+    // reservedPaths 与 Main 完全一致：核心字段 + 图片 requestMapping 位置（参考图 / response_format）。
+    if (requestParameterProfile) {
+      const reserved = computeReservedRequestPaths(protocol, isImageProtocol ? imageProfile : undefined)
+      const rpError = validateRequestParameterProfile(requestParameterProfile, protocol, reserved)
+      if (rpError) {
+        setSaveError(`请求参数：${rpError}`)
+        setRequestParamOpen(true)
+        return
+      }
+    }
+
     if (props.editId) {
       const updates: Record<string, unknown> = {
         name: name.trim(),
@@ -487,6 +509,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         toolCalling,
         imageInput,
         imageGenerationsPath: imageGenerationsPath.trim() || undefined,
+        requestParameterProfile: requestParameterProfile ?? null,
       }
       // 仅图片协议保存 profile，避免污染 chat Provider 记录
       if (isImageProtocol) {
@@ -508,6 +531,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         imageInput,
         imageGenerationsPath: imageGenerationsPath.trim() || undefined,
         ...(isImageProtocol ? { imageGenerationProfile: imageProfile } : {}),
+        ...(requestParameterProfile ? { requestParameterProfile } : {}),
       })
     }
     props.onSave()
@@ -639,8 +663,6 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
                 </div>
               )}
             </div>
-
-            {saveError && <p className="provider-save-error">{saveError}</p>}
           </>
         )}
 
@@ -733,6 +755,48 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
           </div>
         )}
 
+        {/* 通用请求参数（协议无关）：声明该服务的模型支持哪些额外请求字段。
+            默认折叠；不配置则请求体完全不变。 */}
+        <div className="provider-form-field">
+          <button
+            type="button"
+            className="provider-advanced-toggle"
+            onClick={() => setRequestParamOpen((v) => !v)}
+            aria-expanded={requestParamOpen}
+          >
+            <svg
+              className={`provider-advanced-chevron${requestParamOpen ? ' provider-advanced-chevron--open' : ''}`}
+              width="12" height="12" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+            >
+              <path d="M9 6l6 6-6 6" />
+            </svg>
+            <span>请求参数</span>
+            {requestParameterProfile && (
+              <span className="provider-advanced-count">
+                {requestParameterProfile.providerParameters.length}
+              </span>
+            )}
+          </button>
+          {requestParamOpen && (
+            <div className="provider-advanced-body">
+              <p className="provider-hint">
+                按该服务实际支持的请求字段声明参数（如 Steps、Seed、extra_body 内的字段）。
+                未声明的参数不会出现在会话中，也不会随请求发送。
+              </p>
+              <RequestParameterProfileEditor
+                profile={requestParameterProfile}
+                protocol={protocol}
+                models={models}
+                onChange={setRequestParameterProfile}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* 保存错误（图片协议映射 / 通用请求参数校验失败）统一在底部提示 */}
+        {saveError && <p className="provider-save-error">{saveError}</p>}
+
         </div>
 
         <div className="provider-dialog-footer">
@@ -767,6 +831,7 @@ export function ProviderSettings() {
     imageInput: false,
     imageGenerationsPath: '',
     imageGenerationProfile: null as ImageGenerationParameterProfile | null,
+    requestParameterProfile: null as RequestParameterProfile | null,
   })
 
   useEffect(() => {
@@ -780,7 +845,7 @@ export function ProviderSettings() {
 
   function openAddDialog() {
     setEditId(null)
-    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null })
+    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', apiKey: '', models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null, requestParameterProfile: null })
     setDialogOpen(true)
   }
 
@@ -796,6 +861,7 @@ export function ProviderSettings() {
       imageInput: p.imageInput ?? false,
       imageGenerationsPath: p.imageGenerationsPath ?? '',
       imageGenerationProfile: p.imageGenerationProfile ?? null,
+      requestParameterProfile: p.requestParameterProfile ?? null,
     })
     setDialogOpen(true)
   }
@@ -831,6 +897,7 @@ export function ProviderSettings() {
           initialImageInput={dialogInitial.imageInput}
           initialImageGenerationsPath={dialogInitial.imageGenerationsPath}
           initialImageGenerationProfile={dialogInitial.imageGenerationProfile}
+          initialRequestParameterProfile={dialogInitial.requestParameterProfile}
           onSave={handleSave}
           onClose={() => setDialogOpen(false)}
         />

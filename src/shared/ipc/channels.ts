@@ -27,6 +27,7 @@ export const IPC_CHANNELS = {
   CONVERSATIONS_UPDATE_WEB_SEARCH: 'conversations:update-web-search',
   CONVERSATIONS_UPDATE_CODEX_SEARCH_MODE: 'conversations:update-codex-search-mode',
   CONVERSATIONS_UPDATE_SEARCH_ENGINE: 'conversations:update-search-engine',
+  CONVERSATIONS_UPDATE_REQUEST_PARAMETER_VALUES: 'conversations:update-request-parameter-values',
   CONVERSATIONS_NEW_TOPIC: 'conversations:new-topic',
   // 全局会话搜索（只读）：跨所有会话检索标题 / 正文
   CONVERSATIONS_SEARCH: 'conversations:search',

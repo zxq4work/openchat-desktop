@@ -12,6 +12,8 @@ import type {
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
 import { UnsupportedImageInputError } from './errors'
+import { applyResolvedParameters } from '../../shared/request-parameters/requestParameters'
+import { logFinalRequestDebug } from './requestDebug'
 
 interface ResponsesInputItem {
   type: string
@@ -95,6 +97,9 @@ export class ResponsesAdapter implements ModelAdapter {
     console.log('[Responses Request] tools=', JSON.stringify(body.tools ?? []))
     console.log('[Responses Request] reasoning=', body.reasoning ? JSON.stringify(body.reasoning) : 'none')
     console.log('[Responses Request] inputTypes=', body.input.map((item) => item.type))
+
+    // 实际最终发送参数（dev 诊断，默认关闭）：HTTP 发送前打印 shape + 已注入动态参数。
+    logFinalRequestDebug('responses', body as unknown as Record<string, unknown>, request.dynamicParameters, url)
 
     // SSE 事件类型统计（仅用于诊断）
     const seenEventTypes = new Set<string>()
@@ -411,6 +416,12 @@ export class ResponsesAdapter implements ModelAdapter {
 
     if (request.temperature != null) {
       body.temperature = request.temperature
+    }
+
+    // 通用动态请求参数最后注入：适配器不认识具体参数名，只按 path 写。
+    // 未设置时行为完全不变；核心字段冲突由 Main 权威层提前拦截。
+    if (request.dynamicParameters && request.dynamicParameters.length > 0) {
+      applyResolvedParameters(body as unknown as Record<string, unknown>, request.dynamicParameters)
     }
 
     return body

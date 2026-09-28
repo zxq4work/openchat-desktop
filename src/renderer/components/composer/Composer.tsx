@@ -22,6 +22,9 @@ import { modelSupportsImage, historyHasImage } from '../../packages/imageCapabil
 import { toPreviewImage } from '../../packages/conversationPreviewImages'
 import { resolveConversationBinding, bindingBlockedMessage } from '../../../shared/conversation/capabilities'
 import { ComposerNotice, type ComposerNoticeData } from './ComposerNotice'
+import { DynamicParameterSection } from './DynamicParameterControls'
+import { resolveComposerParameters } from '../../packages/requestParameterControls'
+import { setParameterValue, unsetParameterValue } from '../../packages/requestParameterDraft'
 
 function formatResetTime(resetAt: number): string {
   const d = new Date(resetAt * 1000)
@@ -43,6 +46,7 @@ export function Composer() {
   const activeMessages = useConversationStore((s) => s.activeMessages)
   const setStatus = useChatStreamStore((s) => s.setStatus)
   const setActiveAssistantMessage = useChatStreamStore((s) => s.setActiveAssistantMessage)
+  const setActiveConversation = useConversationStore((s) => s.setActiveConversation)
   const setError = useChatStreamStore((s) => s.setError)
   const error = useChatStreamStore((s) => s.error)
   const status = useChatStreamStore((s) => s.status)
@@ -81,6 +85,34 @@ export function Composer() {
   // binding 失效：provider_missing / provider_incompatible / model_missing 才是 blocking。
   // unconfigured 表示「未绑定 → 走 ChatGPT Codex 默认路径」，可正常发送，不阻止、不提示。
   const bindingBlocked = !!binding && binding.status !== 'valid' && binding.status !== 'unconfigured'
+
+  const isStreamingForCurrent = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
+
+  // ── 通用动态请求参数（完全由 Provider Profile + Model override 驱动）──
+  // 仅当会话绑定自定义 Provider 时存在；Codex 内建路径 providerConfigId 为空 → 不出现任何动态参数。
+  const boundProvider = currentConversation?.providerConfigId
+    ? providers.find((p) => p.id === currentConversation.providerConfigId) ?? null
+    : null
+  const dynamicDefinitions = React.useMemo(
+    () => resolveComposerParameters(boundProvider?.requestParameterProfile, currentConversation?.defaultModelId ?? null),
+    [boundProvider?.requestParameterProfile, currentConversation?.defaultModelId]
+  )
+  const dynamicValues = currentConversation?.requestParameterValues ?? {}
+  // 参数不可编辑：binding 失效时不鼓励编辑（值保留，恢复有效后自动可编辑）。
+  // 另：正在流式生成时禁用，避免参数在 turn 中途变化。
+  const dynamicDisabled = bindingBlocked || isStreamingForCurrent
+
+  const persistDynamicValues = (next: Record<string, string | number | boolean>) => {
+    if (!currentConversation) return
+    window.openchat.conversations.updateRequestParameterValues(currentConversation.id, next)
+    setActiveConversation({ ...currentConversation, requestParameterValues: next })
+  }
+  const handleDynamicChange = (id: string, value: string | number | boolean) => {
+    persistDynamicValues(setParameterValue(dynamicValues, id, value))
+  }
+  const handleDynamicUnset = (id: string) => {
+    persistDynamicValues(unsetParameterValue(dynamicValues, id))
+  }
 
   // 单一 notice slot：同一时刻只渲染一条，按优先级取最高：
   // 1) runtime error（网络 / API / IPC 等，可恢复的配置问题不应盖过它）
@@ -160,8 +192,6 @@ export function Composer() {
   useEffect(() => () => {
     if (importErrorTimerRef.current) clearTimeout(importErrorTimerRef.current)
   }, [])
-
-  const isStreamingForCurrent = (status === 'streaming' || status === 'starting') && streamingConversationId === activeConversationId
 
   const remainingSlots = MAX_IMAGES_PER_MESSAGE - draftAttachments.length
 
@@ -439,6 +469,14 @@ export function Composer() {
           onPasteImages={handleImport}
           hasDraftAttachments={draftAttachments.length > 0}
           sendBlocked={bindingBlocked || imageCapabilityBlocked}
+        />
+        {/* 动态请求参数：完全由 Provider Profile 驱动，无可见参数时整体不渲染 */}
+        <DynamicParameterSection
+          definitions={dynamicDefinitions}
+          values={dynamicValues}
+          onChange={handleDynamicChange}
+          onUnset={handleDynamicUnset}
+          disabled={dynamicDisabled}
         />
         <div className="composer-controls">
           <AttachButton onClick={handlePickImages} disabled={isStreamingForCurrent || importing || !currentConversation} />

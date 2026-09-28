@@ -7,6 +7,7 @@ import { StorageService } from '../../storage/StorageService'
 import { resolveProviderSwitch } from '../../conversation/typeLocking'
 import { resolveConversationBinding, bindingBlockedMessage } from '../../../shared/conversation/capabilities'
 import { reconcileImageDefaults } from '../../../shared/image-generation/parameterProfile'
+import { resolveParameterValues } from '../../../shared/request-parameters/requestParameters'
 import type {
   Conversation,
   ContextSegment,
@@ -15,7 +16,7 @@ import type {
   ConversationType,
 } from '../../../shared/types/conversation'
 import type { ModelInfo } from '../../../shared/types/model'
-import type { CanonicalMessage, CanonicalModelRequest, CanonicalInputPart, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol, AttachmentResolver } from '../../../shared/types/provider'
+import type { CanonicalMessage, CanonicalModelRequest, CanonicalInputPart, CanonicalToolCall, CanonicalWebSearchCall, ProviderPayloadItem, ProviderPayloadV2, ProviderProtocol, AttachmentResolver, RequestParameterValues, ResolvedRequestParameter } from '../../../shared/types/provider'
 import { AttachmentService } from '../../services/attachments/AttachmentService'
 import { MAX_IMAGES_PER_MESSAGE, TITLE_MAX_LENGTH } from '../../../shared/constants'
 import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
@@ -27,7 +28,8 @@ import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
 import { WebSearchService } from '../../web-search/WebSearchService'
 import { getSearchEngine } from '../../web-search/SearchEngineFactory'
-import { ProviderConfigService } from '../../providers/ProviderConfigService'
+import { ProviderConfigService, computeReservedRequestPaths, findDynamicParameterConflict } from '../../providers/ProviderConfigService'
+import { logRequestParameterError } from '../../providers/requestDebug'
 import { ChatGPTCodexAdapter } from '../../providers/ChatGPTCodexAdapter'
 import type { ModelAdapter } from '../../../shared/types/provider'
 import type { OAuthCredentialManager } from './auth/OAuthCredentialManager'
@@ -311,6 +313,7 @@ export class ChatGPTConversationService {
       defaultImageBackground: null,
       providerNameSnapshot: null,
       modelNameSnapshot: null,
+      requestParameterValues: {},
       createdAt: 0,
       updatedAt: s.updatedAt,
       }))
@@ -411,6 +414,7 @@ export class ChatGPTConversationService {
       defaultImageBackground: null,
       providerNameSnapshot: null,
       modelNameSnapshot: null,
+      requestParameterValues: {},
       createdAt: now,
       updatedAt: now,
     }
@@ -545,6 +549,15 @@ export class ChatGPTConversationService {
     await this.storage.save()
   }
 
+  // 通用动态请求参数值更新（chat / image_generation 会话均可）。
+  // values 只包含用户显式覆盖的参数；unset 的 key 不存在。
+  async updateRequestParameterValues(id: string, values: RequestParameterValues): Promise<void> {
+    const conversation = this.conversations.getById(id)
+    if (!conversation) throw new Error('会话不存在')
+    this.conversations.updateRequestParameterValues(id, values ?? {})
+    await this.storage.save()
+  }
+
   newTopic(id: string): ContextSegment | null {
     const conversation = this.conversations.getById(id)
     if (!conversation) return null
@@ -596,6 +609,12 @@ export class ChatGPTConversationService {
     })
     if (binding.status === 'provider_incompatible' || binding.status === 'provider_missing' || binding.status === 'model_missing') {
       throw new Error(bindingBlockedMessage(binding.status, conversation.type))
+    }
+
+    // 动态请求参数门禁：请求构建前再次校验（不信任 UI，也防 DB 旧脏值）。
+    // 参数非法 → 阻止发送并给出可操作提示，绝不静默改值 / 静默丢弃。
+    if (conversation.providerConfigId) {
+      this.assertDynamicParametersValid(conversation.providerConfigId, conversation.defaultModelId, conversation.requestParameterValues ?? {})
     }
 
     const segment = this.segments.getById(conversation.currentSegmentId)
@@ -2196,12 +2215,15 @@ User message: ${userText}${contextHint}`
       instructions = instructions + '\n\n' + 'NOTE: Web search was toggled off in earlier turns (which is why the model previously said it could not search), but the user has now toggled it back ON. Do NOT apologize, do NOT explain past inconsistency, and do NOT dwell on previous turns. You now have web search available again — use it when needed.'
     }
 
+    const dynamicParameters = this.resolveDynamicParametersForSegment(segmentId)
+
     return {
       model: modelId,
       systemPrompt: instructions,
       messages,
       attachmentResolver: this.attachmentResolver(),
       ...(effort ? { reasoningEffort: effort } : {}),
+      ...(dynamicParameters ? { dynamicParameters } : {}),
       // Responses Lite 由 Transport Policy 决定（chatgpt_codex 路径）；自定义 Provider 无此 metadata → undefined。
       // effectiveResponsesLite 由调用方在 search strategy resolve 后计算并显式传入（如 codex-hosted 降级为 Non-Lite）；
       // 未显式传入时回落到模型 metadata（none / codex-standalone 均与 Policy 结果一致）。
@@ -2211,12 +2233,74 @@ User message: ${userText}${contextHint}`
     }
   }
 
+  // 请求构建前的动态参数门禁（Main 权威层）。参数非法时抛出面向用户的错误，
+  // 由 sendMessage 提前拦截。与 resolveDynamicParametersForSegment 共用同一套校验。
+  private assertDynamicParametersValid(
+    providerConfigId: string,
+    modelId: string | null,
+    values: RequestParameterValues
+  ): void {
+    const definitions = this.providerConfigService.getResolvedRequestParameters(providerConfigId, modelId)
+    if (definitions.length === 0) return
+    const protocol = this.providerConfigService.listSafe().find((p) => p.id === providerConfigId)?.protocol
+    const { resolved, error } = resolveParameterValues(definitions, values, protocol)
+    if (error) {
+      logRequestParameterError(error)
+      throw new Error(`参数设置无效：${error} 请检查「高级参数」设置。`)
+    }
+    // 运行期防御：动态参数重复 path / 撞协议保留字段 → 拦截，绝不 last-write-wins。
+    const conflict = findDynamicParameterConflict(resolved, computeReservedRequestPaths(protocol ?? 'chat_completions'))
+    if (conflict) {
+      logRequestParameterError(conflict)
+      throw new Error(`参数设置无效：${conflict} 请检查「高级参数」设置。`)
+    }
+  }
+
+  // 解析当前会话的动态请求参数（Main 权威层）：从 Conversation 读取用户值，
+  // 从当前 Provider Profile + Model 重新 resolve definitions，校验后返回。
+  // 只对自定义 Provider（chat_completions / responses）生效；ChatGPT Codex 内建路径不注入
+  // （Codex 是受控协议，其内建 Provider profile 恒为空，不给用户任意注入参数的能力）。
+  // 返回 null 表示当前请求不携带动态参数（行为完全不变）。
+  private resolveDynamicParametersForSegment(segmentId: string): ResolvedRequestParameter[] | null {
+    const segment = this.segments.getById(segmentId)
+    if (!segment) return null
+    const conversation = this.conversations.getById(segment.conversationId)
+    if (!conversation?.providerConfigId) return null
+
+    const definitions = this.providerConfigService.getResolvedRequestParameters(
+      conversation.providerConfigId,
+      conversation.defaultModelId
+    )
+    if (definitions.length === 0) return null
+
+    const protocol = this.providerConfigService.listSafe().find(
+      (p) => p.id === conversation.providerConfigId
+    )?.protocol
+    const { resolved, error } = resolveParameterValues(
+      definitions,
+      conversation.requestParameterValues ?? {},
+      protocol
+    )
+    if (error) {
+      // 参数在前置校验（sendMessage）已拦截；此处为 defense-in-depth，静默不注入脏参数。
+      console.error('[DynamicParameters] skipped: %s', error)
+      return null
+    }
+    // 运行期防御：重复 path / 撞保留字段同样不注入（防止 DB 旧值 / 手改后残留）。
+    const conflict = findDynamicParameterConflict(resolved, computeReservedRequestPaths(protocol ?? 'chat_completions'))
+    if (conflict) {
+      console.error('[DynamicParameters] skipped: %s', conflict)
+      return null
+    }
+    return resolved.length > 0 ? resolved : null
+  }
+
   // 由主进程提供的受控附件解析器：attachmentId → 受管文件路径信息。
   // Adapter 通过它按需读取图片字节，renderer 永不接触文件系统路径。
   private attachmentResolver(): AttachmentResolver | undefined {
     if (!this.attachmentService) return undefined
     return {
-      resolveForProvider: (id: string) => this.attachmentService!.resolveForProvider(id),
+      resolveForProvider: (id) => this.attachmentService!.resolveForProvider(id),
     }
   }
 
@@ -2255,12 +2339,15 @@ User message: ${userText}${contextHint}`
       }
     }
 
+    const dynamicParameters = this.resolveDynamicParametersForSegment(segmentId)
+
     return {
       model: modelId,
       systemPrompt: instructions,
       messages,
       attachmentResolver: this.attachmentResolver(),
       ...(effort ? { reasoningEffort: effort } : {}),
+      ...(dynamicParameters ? { dynamicParameters } : {}),
     }
   }
 

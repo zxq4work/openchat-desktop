@@ -1,3 +1,5 @@
+import type { RequestParameterValues } from './provider'
+
 // 会话类型：chat 走文字对话协议，image_generation 只走 POST /v1/images/generations。
 // 两者协议不同，一旦会话产生首条消息即锁定，不得互相切换。
 export type ConversationType = 'chat' | 'image_generation'
@@ -25,6 +27,10 @@ export interface Conversation {
   defaultImageSize: string | null
   defaultImageQuality: string | null
   defaultImageBackground: string | null
+  // 通用动态请求参数值（parameterId → value）。只存用户显式覆盖的参数；
+  // 未设置的参数 key 不存在（unset = 不发送）。切 Provider / Model 时旧值保留，
+  // 但请求只读取当前 resolved definitions 中存在的 id（旧参数自动 inactive）。
+  requestParameterValues: RequestParameterValues
   createdAt: number
   updatedAt: number
 }

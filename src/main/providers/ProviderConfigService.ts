@@ -1,13 +1,31 @@
 import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
-import type { CustomProviderConfig, ModelAdapter, ImageGenerationAdapter, ImageGenerationParameterProfile, ImageGenerationRequestMapping } from '../../shared/types/provider'
+import type { CustomProviderConfig, ModelAdapter, ImageGenerationAdapter, ImageGenerationParameterProfile, ImageGenerationRequestMapping, RequestParameterProfile, DynamicRequestParameterDefinition } from '../../shared/types/provider'
 import { ChatCompletionsAdapter } from './ChatCompletionsAdapter'
 import { ResponsesAdapter } from './ResponsesAdapter'
 import { OpenAIImageGenerationAdapter } from './OpenAIImageGenerationAdapter'
 import type { ChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { ChatGPTCodexAdapter } from './ChatGPTCodexAdapter'
 import { customMinimalProfile } from '../../shared/image-generation/parameterProfile'
+import {
+  validateRequestParameterProfile,
+  resolveRequestParameters,
+  computeReservedRequestPaths,
+  findDynamicParameterConflict,
+} from '../../shared/request-parameters/requestParameters'
+
+// 保留 path / 冲突检测的单一实现位于 shared/request-parameters，供 Main 与 Renderer 共用。
+// 此处 re-export 保持既有调用点（ImageGenerationService / ChatGPTConversationService）不变。
+export { computeReservedRequestPaths, findDynamicParameterConflict }
 
 export type SafeProviderConfig = Omit<CustomProviderConfig, 'apiKey'> & { hasApiKey: boolean }
+
+// 动态参数 Profile 校验失败：Provider 保存应被拒绝（Main 是 trust boundary）。
+export class RequestParameterProfileError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RequestParameterProfileError'
+  }
+}
 
 export class ProviderConfigService {
   private repository: ProviderConfigRepository
@@ -67,6 +85,12 @@ export class ProviderConfigService {
   }
 
   create(config: Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>): SafeProviderConfig {
+    // 权威校验：Provider 保存时再次校验动态参数 Profile，不能只靠 Renderer。
+    if (config.requestParameterProfile) {
+      const reserved = computeReservedRequestPaths(config.protocol, config.imageGenerationProfile)
+      const err = validateRequestParameterProfile(config.requestParameterProfile, config.protocol, reserved)
+      if (err) throw new RequestParameterProfileError(err)
+    }
     const created = this.repository.create(config)
     return this.toSafe(created)
   }
@@ -76,7 +100,41 @@ export class ProviderConfigService {
   }
 
   update(id: string, updates: Partial<Omit<CustomProviderConfig, 'id' | 'createdAt' | 'updatedAt'>>): void {
+    // 只要 requestParameterProfile 或 imageGenerationProfile（决定保留 path）发生变化，
+    // 就用「本次更新优先 + DB 旧值兜底」的有效配置重新校验，避免改映射后产生冲突。
+    const profileChanging =
+      updates.requestParameterProfile !== undefined || updates.imageGenerationProfile !== undefined
+    if (profileChanging) {
+      const existing = this.repository.getById(id)
+      const protocol = updates.protocol ?? existing?.protocol
+      const effectiveProfile = updates.requestParameterProfile !== undefined
+        ? updates.requestParameterProfile
+        : existing?.requestParameterProfile
+      if (protocol && effectiveProfile) {
+        const imageProfile = updates.imageGenerationProfile !== undefined
+          ? updates.imageGenerationProfile
+          : existing?.imageGenerationProfile
+        const reserved = computeReservedRequestPaths(protocol, imageProfile)
+        const err = validateRequestParameterProfile(effectiveProfile, protocol, reserved)
+        if (err) throw new RequestParameterProfileError(err)
+      }
+    }
     this.repository.update(id, updates)
+  }
+
+  // 解析某 Provider + Model 的最终动态参数定义（Provider 级 + Model override）。
+  // 未配置 → 返回 []，请求体完全不变。ChatGPT Codex 内建路径不经过此方法。
+  getResolvedRequestParameters(providerConfigId: string | null, modelId: string | null): DynamicRequestParameterDefinition[] {
+    if (!providerConfigId) return []
+    const config = this.repository.getById(providerConfigId)
+    if (!config) return []
+    return resolveRequestParameters(config.requestParameterProfile, modelId)
+  }
+
+  // 该 Provider 的动态参数 Profile（供 UI 读取 schema；Send 时 Main 会再次权威 resolve）。
+  getRequestParameterProfile(providerConfigId: string | null): RequestParameterProfile | undefined {
+    if (!providerConfigId) return undefined
+    return this.repository.getById(providerConfigId)?.requestParameterProfile
   }
 
   // 根据 providerConfigId 或默认，解析 ModelAdapter

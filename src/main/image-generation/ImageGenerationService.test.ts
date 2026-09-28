@@ -15,7 +15,7 @@ import { AttachmentService } from '../services/attachments/AttachmentService'
 import { ImageGenerationRepository } from '../storage/ImageGenerationRepository'
 import { ImageGenerationService } from './ImageGenerationService'
 import { customImageToImageProfile, customMinimalProfile } from '../../shared/image-generation/parameterProfile'
-import type { ImageGenerationParameterProfile, ImageGenerationAdapter } from '../../shared/types/provider'
+import type { ImageGenerationParameterProfile, ImageGenerationAdapter, DynamicRequestParameterDefinition } from '../../shared/types/provider'
 import type { Conversation, ContextSegment, MessageAttachment } from '../../shared/types/conversation'
 
 // 记录请求的桩 Adapter：不发起网络请求，仅捕获 canonical 请求。
@@ -29,10 +29,16 @@ function stubAdapter(captured: unknown[]): ImageGenerationAdapter {
   }
 }
 
-function makeProviderService(profile: ImageGenerationParameterProfile, captured: unknown[]) {
+function makeProviderService(
+  profile: ImageGenerationParameterProfile,
+  captured: unknown[],
+  dynamicDefinitions: DynamicRequestParameterDefinition[] = []
+) {
   return {
     getImageAdapter: () => stubAdapter(captured),
     getImageGenerationProfile: () => profile,
+    // 通用动态请求参数：无 Profile 时返回 []，请求体完全不变。
+    getResolvedRequestParameters: () => dynamicDefinitions,
     // binding 兼容性门禁会查询当前 Provider registry
     listSafe: () => [{ id: 'prov-1', name: 'Test Image', protocol: 'image_generations', models: ['custom-image-model'] }],
   } as never
@@ -45,7 +51,11 @@ async function waitForCapture(captured: unknown[], count = 1): Promise<void> {
   }
 }
 
-async function setup(profile: ImageGenerationParameterProfile) {
+async function setup(
+  profile: ImageGenerationParameterProfile,
+  dynamicDefinitions: DynamicRequestParameterDefinition[] = [],
+  values: Record<string, string | number | boolean> = {}
+) {
   const dir = fs.mkdtempSync(join(os.tmpdir(), 'openchat-img-gen-'))
   const storage = new StorageService(join(dir, 'openchat.db'))
   await storage.init()
@@ -73,6 +83,7 @@ async function setup(profile: ImageGenerationParameterProfile) {
     defaultImageBackground: null,
     providerNameSnapshot: null,
     modelNameSnapshot: null,
+    requestParameterValues: values,
     createdAt: now,
     updatedAt: now,
   }
@@ -93,7 +104,7 @@ async function setup(profile: ImageGenerationParameterProfile) {
   const attachmentService = new AttachmentService(join(dir, 'attachments'), attachmentRepo)
 
   const captured: unknown[] = []
-  const service = new ImageGenerationService(storage, makeProviderService(profile, captured))
+  const service = new ImageGenerationService(storage, makeProviderService(profile, captured, dynamicDefinitions))
   service.setAttachmentService(attachmentService)
 
   return { dir, storage, attachmentRepo, attachmentService, service, captured, generations: new ImageGenerationRepository(storage) }
@@ -215,5 +226,49 @@ describe('ImageGenerationService — authoritative validation', () => {
     const ctx = await setup(customImageToImageProfile())
     insertInputDraft(ctx.attachmentRepo, 'att-1')
     await expect(ctx.service.generate('conv-1', 'x', {}, ['att-1'])).rejects.toMatchObject({ code: 'IMAGE_GENERATION_IMAGE_INPUT_UNSUPPORTED' })
+  })
+})
+
+describe('ImageGenerationService — generic dynamic parameters', () => {
+  const stepsDef: DynamicRequestParameterDefinition = {
+    id: 'steps', label: 'Steps', path: 'extra_body.steps', type: 'number', placement: 'advanced',
+  }
+
+  it('injects a set dynamic param into the canonical request', async () => {
+    const ctx = await setup(customMinimalProfile(), [stepsDef], { steps: 40 })
+    await ctx.service.generate('conv-1', 'a cat', {})
+    await waitForCapture(ctx.captured)
+    const req = ctx.captured[0] as { dynamicParameters?: Array<{ id: string; path: string; value: unknown }> }
+    expect(req.dynamicParameters).toEqual([{ id: 'steps', path: 'extra_body.steps', value: 40 }])
+  })
+
+  it('omits an unset dynamic param (empty resolved list, no injection)', async () => {
+    const ctx = await setup(customMinimalProfile(), [stepsDef], {})
+    await ctx.service.generate('conv-1', 'a cat', {})
+    await waitForCapture(ctx.captured)
+    const req = ctx.captured[0] as { dynamicParameters?: unknown[] }
+    expect(req.dynamicParameters).toEqual([])
+  })
+
+  it('rejects a dynamic param that collides with the reference-image request path', async () => {
+    const imageDef: DynamicRequestParameterDefinition = {
+      id: 'img', label: 'Img', path: 'extra_body.image', type: 'string', placement: 'advanced',
+    }
+    const ctx = await setup(mappedImageToImageProfile(), [imageDef], { img: 'x' })
+    await expect(ctx.service.generate('conv-1', 'a cat', {})).rejects.toMatchObject({ code: 'IMAGE_GENERATION_INVALID_PARAMETER' })
+  })
+
+  it('rejects a stale value invalid against the current definition', async () => {
+    const bounded: DynamicRequestParameterDefinition = { ...stepsDef, min: 1, max: 10 }
+    const ctx = await setup(customMinimalProfile(), [bounded], { steps: 99 })
+    await expect(ctx.service.generate('conv-1', 'a cat', {})).rejects.toMatchObject({ code: 'IMAGE_GENERATION_INVALID_PARAMETER' })
+  })
+
+  it('no dynamic profile → request carries no injected dynamic params (zero regression)', async () => {
+    const ctx = await setup(customMinimalProfile())
+    await ctx.service.generate('conv-1', 'a cat', {})
+    await waitForCapture(ctx.captured)
+    const req = ctx.captured[0] as { dynamicParameters?: unknown[] }
+    expect(req.dynamicParameters ?? []).toEqual([])
   })
 })
