@@ -178,6 +178,7 @@ export function ProxySettings() {
                 options={PROTOCOL_OPTIONS}
                 onChange={(v) => update({ protocol: v as ProxyConfig['protocol'] })}
                 ariaLabel="选择代理协议"
+                matchTriggerWidth
               />
             </div>
             <div className="proxy-field proxy-field-host">

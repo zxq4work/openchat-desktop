@@ -23,6 +23,10 @@ interface DropdownProps {
   title?: string
   // 整体禁用触发器（如 binding 失效时不允许编辑依赖当前 Model 的参数）。
   disabled?: boolean
+  // 可选：popup 严格等于 trigger 实测宽度（minWidth/maxWidth 双向夹死，内容不得撑宽）。
+  // 默认 false = 保持现状（minWidth = trigger，允许按 option 内容更宽）。
+  // 仅用于 Settings 全宽表单控件，避免超长 option 把 popup 撑出 modal 视觉边界。
+  matchTriggerWidth?: boolean
 }
 
 interface MenuPosition {
@@ -31,16 +35,17 @@ interface MenuPosition {
   left: number
   // 菜单最小宽度 = trigger 实测宽度（不低于 trigger）。
   minWidth: number
-  // 菜单最大宽度 = min(菜单峰值上限, viewport 安全区)。
+  // 菜单最大宽度 = viewport 安全区（仅防止越出窗口，不做产品级宽度限制）。
   maxWidth: number
   maxHeight: number
+  // 仅 matchTriggerWidth=true 时存在：popup 的固定宽度（= trigger 实测宽度）。
+  // 缺省（undefined）时不设内联 width，由 CSS width:max-content 决定。
+  width?: number
 }
 
 const MENU_GAP = 6
 const EDGE_PADDING = 8
 const MAX_MENU_HEIGHT = 320
-// 菜单绝对峰值宽度：即使 viewport 很宽，也不让菜单无限变宽。
-const MAX_MENU_WIDTH = 440
 
 // 真实 overflow 判断（纯函数，便于单测）：以元素实际渲染宽度为准，
 // 绝不用字符串长度 / 字符数近似 —— 字体、窗口宽度、中英文、selector 宽度都会影响。
@@ -84,11 +89,15 @@ export function applyHoverTitle(
 // 与 trigger 的关系是「至少同宽」而非「严格同宽」：
 //   minWidth = trigger 实测宽度 —— 菜单不会比 trigger 窄；
 //   菜单宽度本身由内容（flex 布局下的 max-content）自然决定，可超过 minWidth；
-//   maxWidth = min(菜单峰值上限, viewport 安全区) —— 到顶后 option 内容 ellipsis，
-//   绝不让异常长 option 撑出屏幕。
+//   maxWidth = viewport 安全区（window.innerWidth - 2*EDGE_PADDING）—— 仅保证菜单不越出
+//   窗口；共享 Dropdown 不认识任何业务场景（Composer / Settings），因此不设产品级宽度上限。
+//   到顶后 option 内容 ellipsis，绝不让异常长 option 撑出屏幕。
 // 水平定位：默认左边缘与 trigger 左边缘对齐；只有当「菜单实际宽度」会越出 viewport
 // 右安全区时，才向左移动到刚好不越界的量。这里用实测 menuWidth（缺省回退 minWidth），
-// 绝不用 maxWidth 上限去预留 —— 否则窄菜单（120~200px）靠右时会被按 440px 提前大幅左移。
+// 绝不用 maxWidth 上限去预留 —— 否则窄菜单靠右时会被按上限提前大幅左移。
+// matchTriggerWidth=true（opt-in，默认 false）：宽度锁死为 trigger 宽度（min=max=width），
+// 内容只能在其内 ellipsis；仅用于 Settings 全宽表单控件，防止超长 option 撑出 modal 边界。
+// 默认 false 时行为完全不变。
 export function computeMenuGeometry(input: {
   triggerWidth: number
   triggerLeft: number
@@ -96,19 +105,26 @@ export function computeMenuGeometry(input: {
   triggerBottom: number
   viewportWidth: number
   viewportHeight: number
-  // 实测的 popup 渲染宽度（max-content 结果，已受 maxWidth 限制）。首帧尚未测量时
-  // 缺省，退化为 minWidth，先对齐 trigger，随后由实测宽度做精确左移修正。
+  // 实测的 popup 渲染宽度（max-content 结果）。首帧尚未测量时缺省，退化为 minWidth，
+  // 先对齐 trigger，随后由实测宽度做精确左移修正。
   menuWidth?: number
+  // true → popup 严格等于 trigger 宽度（minWidth = maxWidth = width = triggerWidth），
+  // 内容不得撑宽；仅用于 Settings 全宽表单控件，防止超长 option 撑出 modal 边界。
+  matchTriggerWidth?: boolean
 }): MenuPosition {
-  const { triggerWidth, triggerLeft, triggerTop, triggerBottom, viewportWidth, viewportHeight, menuWidth } = input
-  // viewport 安全区：左右各留 EDGE_PADDING，再叠加菜单峰值上限。
-  const viewportMax = viewportWidth - EDGE_PADDING * 2
-  const maxWidth = Math.max(0, Math.min(MAX_MENU_WIDTH, viewportMax))
+  const { triggerWidth, triggerLeft, triggerTop, triggerBottom, viewportWidth, viewportHeight, menuWidth, matchTriggerWidth } = input
+  // viewport 安全区：左右各留 EDGE_PADDING，仅防止菜单越出窗口。
+  const maxWidth = Math.max(0, viewportWidth - EDGE_PADDING * 2)
   // 下限不超过上限（极端窄视口下，宁可丢下限也不越界）。
   const minWidth = Math.max(0, Math.min(triggerWidth, maxWidth))
 
-  // 参与水平 clamp 的宽度：优先用实测渲染宽度（天然 ≤ maxWidth），缺省用 minWidth。
-  const clampWidth = menuWidth && menuWidth > 0 ? Math.min(menuWidth, maxWidth) : minWidth
+  // matchTriggerWidth：宽度锁死为 trigger 宽度（min = max = width），内容只能在其内 ellipsis。
+  // 否则：参与水平 clamp 的宽度优先用实测渲染宽度（天然 ≤ maxWidth），缺省用 minWidth。
+  const clampWidth = matchTriggerWidth
+    ? minWidth
+    : menuWidth && menuWidth > 0
+      ? Math.min(menuWidth, maxWidth)
+      : minWidth
 
   const spaceBelow = viewportHeight - triggerBottom
   const spaceAbove = triggerTop
@@ -124,6 +140,13 @@ export function computeMenuGeometry(input: {
       60,
       Math.min(MAX_MENU_HEIGHT, (placeAbove ? spaceAbove : spaceBelow) - MENU_GAP - EDGE_PADDING)
     ),
+  }
+
+  if (matchTriggerWidth) {
+    // 固定宽度：min/max 同值，内容无法撑宽；超长 option 在 trigger 宽度内 ellipsis。
+    geom.width = minWidth
+    geom.minWidth = minWidth
+    geom.maxWidth = minWidth
   }
 
   if (placeAbove) {
@@ -144,6 +167,7 @@ export function Dropdown({
   ariaLabel,
   title,
   disabled,
+  matchTriggerWidth,
 }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<MenuPosition>({
@@ -179,10 +203,11 @@ export function Dropdown({
         triggerBottom: rect.bottom,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
+        matchTriggerWidth,
       })
     )
     setOpen(true)
-  }, [])
+  }, [matchTriggerWidth])
 
   // 菜单挂载 / 内容变化后，用实测渲染宽度重新计算左边界：
   // 只有实际宽度会越出 viewport 右安全区时才左移，左移量只为消除真实 overflow。
@@ -200,11 +225,14 @@ export function Dropdown({
       triggerBottom: rect.bottom,
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
-      menuWidth: menu.getBoundingClientRect().width,
+      // matchTriggerWidth 下宽度已锁死为 trigger 宽度，实测 menuWidth 不参与定位；
+      // 其余情况用实测渲染宽度做「刚好不越界」的精确左移修正。
+      menuWidth: matchTriggerWidth ? undefined : menu.getBoundingClientRect().width,
+      matchTriggerWidth,
     })
     // 仅当左边界真的需要变化时才 setState，避免无谓的重渲染循环。
     setPosition((prev) => (Math.abs(prev.left - next.left) > 0.5 ? next : prev))
-  }, [open, options])
+  }, [open, options, matchTriggerWidth])
 
   useEffect(() => {
     if (!open) return
@@ -301,8 +329,10 @@ export function Dropdown({
               top: position.top,
               bottom: position.bottom,
               left: position.left,
-              // 不设 width：菜单宽度由内容（flex 列中每项 max-content）自然决定，
-              // 只夹住下限（不低于 trigger）与上限（峰值 / viewport 安全区）。
+              // matchTriggerWidth 下 width 存在（= trigger 宽度），popup 严格同宽；
+              // 缺省则不设 width，菜单宽度由内容（flex 列中每项 max-content）自然决定，
+              // 只夹住下限（不低于 trigger）与上限（viewport 安全区）。
+              width: position.width,
               minWidth: position.minWidth,
               maxWidth: position.maxWidth,
               maxHeight: position.maxHeight,

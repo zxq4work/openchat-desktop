@@ -199,6 +199,7 @@ function DefinitionEditor({ def, protocol, isNew, existingIds, onChange, onDone,
           options={TYPE_OPTIONS}
           onChange={(v) => onChange(retypeDefinition(def, v as RequestParameterType))}
           ariaLabel="选择参数类型"
+          matchTriggerWidth
         />
       </div>
 
@@ -210,6 +211,7 @@ function DefinitionEditor({ def, protocol, isNew, existingIds, onChange, onDone,
           options={PLACEMENT_OPTIONS}
           onChange={(v) => set({ placement: v as RequestParameterPlacement })}
           ariaLabel="选择显示位置"
+          matchTriggerWidth
         />
       </div>
 
@@ -510,6 +512,7 @@ export function RequestParameterProfileEditor({ profile, protocol, models, onCha
               options={models.map((m) => ({ value: m, label: m }))}
               onChange={(v) => { setSelectedModel(v); setManualModel(''); cancelEdit() }}
               ariaLabel="选择要覆盖的模型"
+              matchTriggerWidth
             />
           ) : (
             <input

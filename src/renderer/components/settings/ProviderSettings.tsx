@@ -323,6 +323,7 @@ function RequestMappingEditor({ profile, onChange }: ImageProfileEditorProps) {
             options={INPUT_CARDINALITY_OPTIONS}
             onChange={(v) => setInput({ path: input?.path ?? '', cardinality: v as ImageGenerationInputCardinality, encoding: 'data_url' })}
             ariaLabel="选择参考图写入形式"
+            matchTriggerWidth
           />
           <p className="provider-hint">本地参考图以 Data URI（Base64）写入该字段，绝不会上传到公网。</p>
         </div>
@@ -357,6 +358,7 @@ function RequestMappingEditor({ profile, onChange }: ImageProfileEditorProps) {
                 options={RESPONSE_VALUE_TYPE_OPTIONS}
                 onChange={(v) => setResp({ ...resp, valueType: v as ImageGenerationResponseFormatValueType, value: v === 'boolean' ? true : 'b64_json' })}
                 ariaLabel="选择参数值类型"
+                matchTriggerWidth
               />
             </div>
             <div className="provider-form-field">
@@ -626,6 +628,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
             options={PROTOCOL_OPTIONS}
             onChange={(value) => setProtocol(value as ProviderProtocolValue)}
             ariaLabel="选择协议"
+            matchTriggerWidth
           />
         </div>
 
@@ -678,6 +681,7 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
                   setImageProfile(IMAGE_PROFILE_PRESETS[preset]())
                 }}
                 ariaLabel="选择图片 API 兼容配置"
+                matchTriggerWidth
               />
               <p className="provider-hint">
                 不同图片服务的参数并不一致（部分不支持 output_format 或 size=auto）。请按实际支持的参数勾选；

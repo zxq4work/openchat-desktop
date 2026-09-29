@@ -1595,15 +1595,16 @@ textarea {
 
 /* ── Sizing 策略 ──
    Trigger 为 content-sized：宽度由当前 selected 自然决定，不感知其它 option。
-   popup 独立决定展示宽度（min-width = trigger，允许按 option 内容更宽，上限受
-   viewport 安全区 / 峰值宽度约束，见 Dropdown.tsx computeMenuGeometry）。
-   所有自动 sizing 实验（sizeToOptions / hidden probe / grid probe / DOM 测量）已删除。 */
+   popup 独立决定展示宽度（min-width = trigger，允许按 option 内容更宽，上限仅受
+   viewport 安全区约束 —— 共享 Dropdown 不设产品级宽度上限，见 Dropdown.tsx
+   computeMenuGeometry）。所有自动 sizing 实验（sizeToOptions / hidden probe /
+   grid probe / DOM 测量）已删除。 */
 
 .dropdown-menu {
   position: fixed;
   /* 宽度由 option 内容自然决定（max-content），再由内联 min-width(≥trigger) /
-     max-width(峰值 / viewport 安全区) 夹取：正常长 option 完整显示，异常超长则
-     到上限后 ellipsis。绝不设固定 width。 */
+     max-width(viewport 安全区) 夹取：正常长 option 完整显示，异常超长则到上限后
+     ellipsis。绝不设固定 width。 */
   width: max-content;
   max-height: 320px;
   overflow-y: auto;
