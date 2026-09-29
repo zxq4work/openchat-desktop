@@ -38,11 +38,8 @@ import { AttachmentRepository } from '../storage/AttachmentRepository'
 import { AttachmentService } from '../services/attachments/AttachmentService'
 import { ImageGenerationRepository } from '../storage/ImageGenerationRepository'
 import { ImageGenerationService } from '../image-generation/ImageGenerationService'
-import { registerAttachmentScheme, registerAttachmentProtocol } from './AttachmentProtocol'
+import { registerAttachmentProtocol } from './AttachmentProtocol'
 import { getBootBackgroundColor } from './BootPreferences'
-
-// 必须在 app ready 之前注册 custom scheme（Electron 对调用时机有要求）
-registerAttachmentScheme()
 
 // ── 启动日志 ──
 const bootStartNs = process.hrtime.bigint()
@@ -127,6 +124,44 @@ const services = {
   webSearchConfig: null as WebSearchConfig | null,
   attachmentService: null as AttachmentService | null,
   imageGenerationService: null as ImageGenerationService | null,
+}
+
+// ── AttachmentService readiness bridge ──
+// attachment protocol handler 在 createWindow() 之前就要安装，但 AttachmentService
+// 要等 service 初始化（createWindow 之后）才存在。用一个单次 deferred 解耦：
+// handler 侧 await getAttachmentService()，service 构建完成/初始化失败后 settle 一次。
+// 不 polling、不 setInterval、不重复 new AttachmentService。
+//
+// 优先级：先看已就绪的 services.attachmentService（正常成功，或「首次失败后 Retry 成功」），
+// 再看终态失败标记（返回 null，避免 request 永久 pending），最后 await 尚未 settle 的 deferred。
+let attachmentServiceResolver: ((service: AttachmentService | null) => void) | null = null
+let attachmentServiceFailed = false
+const attachmentServiceReady: Promise<AttachmentService | null> = new Promise((resolve) => {
+  attachmentServiceResolver = resolve
+})
+
+// service 构建成功：记录并 settle（Retry 成功后再次调用也安全 —— resolver 已为 null）。
+function markAttachmentServiceReady(service: AttachmentService): void {
+  console.log('[AttachmentProtocol] attachmentServiceReady=true')
+  if (!attachmentServiceResolver) return
+  const resolve = attachmentServiceResolver
+  attachmentServiceResolver = null
+  resolve(service)
+}
+
+// service 初始化终态失败：settle 为 null，让 pending 的协议请求以安全错误收尾。
+function markAttachmentServiceFailed(): void {
+  attachmentServiceFailed = true
+  if (!attachmentServiceResolver) return
+  const resolve = attachmentServiceResolver
+  attachmentServiceResolver = null
+  resolve(null)
+}
+
+async function getAttachmentService(): Promise<AttachmentService | null> {
+  if (services.attachmentService) return services.attachmentService
+  if (attachmentServiceFailed) return null
+  return attachmentServiceReady
 }
 
 async function createClients(
@@ -234,7 +269,9 @@ async function initializeChatGPTProvider(): Promise<void> {
   const attachmentRepository = new AttachmentRepository(storage)
   const attachmentService = new AttachmentService(attachmentsDir, attachmentRepository)
   services.attachmentService = attachmentService
-  registerAttachmentProtocol(attachmentService)
+  // handler 已在 app ready 后、createWindow 前安装（见 app.whenReady 内）；
+  // 此处只通知 readiness bridge：协议请求可以从现在起解析到该 service。
+  markAttachmentServiceReady(attachmentService)
 
   services.chatgptConversationService = new ChatGPTConversationService(
     storage,
@@ -822,6 +859,10 @@ async function ensureServicesReady(): Promise<{ ok: boolean; error?: unknown }> 
     })
     .catch((err) => {
       bootLog(`services init attempt failed: ${err instanceof Error ? err.message : String(err)}`)
+      // 终态失败：settle attachment readiness 为 null，避免 pending 的附件协议请求永久挂起。
+      // 放在底层 attempt 的 catch（而非仅 boot 超时分支）以保证「超时后底层最终失败」也覆盖；
+      // 若之后 Retry 成功，markAttachmentServiceReady 仍会正常拿到 service。
+      markAttachmentServiceFailed()
       return { ok: false, error: err }
     })
     .finally(() => {
@@ -915,6 +956,12 @@ function notifyRendererHydrate(): void {
 app.whenReady().then(async () => {
   // 启用 reasoning 响应形状诊断（OPENCHAT_DEBUG_REASONING=1），启动时打印一次 enabled=true
   initReasoningDebug()
+
+  // Phase 2：必须在 createWindow() 之前安装 attachment protocol handler。
+  // 否则 BrowserWindow 开始加载资源时 handler 尚不存在 → ERR_UNKNOWN_URL_SCHEME。
+  // handler 内部 await getAttachmentService()，与 Service 就绪时间解耦。
+  registerAttachmentProtocol(() => getAttachmentService())
+
   createWindow()
 
   const bootstrapRenderer = () => {
@@ -930,8 +977,11 @@ app.whenReady().then(async () => {
     // servicesReady 已在 markServicesReady 中置位；这里确保 Splash 推进（幂等）。
     tryScheduleSplashFinish()
   } else if (outcome === 'failed') {
+    // 终态失败：ensureServicesReady 的 catch 已同时 settle attachment readiness 为 null。
     handleInitFailure(error, false)
   } else {
+    // 超时：底层 attempt 仍在后台跑（可能之后成功），故 **不** 在此 settle attachment readiness；
+    // 若底层最终成功 → markAttachmentServiceReady 正常就绪；若最终失败 → 其 catch 会 settle 为 null。
     handleInitFailure(new Error(`services 初始化超时（> ${SERVICE_INIT_TIMEOUT_MS}ms）`), true)
   }
 
