@@ -1230,10 +1230,49 @@ textarea {
   align-items: center;
   gap: 8px;
   margin-top: 10px;
+  /* 单行不换行：空间不足时压缩可收缩的 selector，而不是换行或撑出父容器。
+     min-width:0 允许本行整体收缩到父容器宽度以内。 */
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .composer-spacer {
   flex: 1;
+  min-width: 0;
+}
+
+/* Composer 下拉恢复 content-sized：宽度由当前 selected 自然决定（ccr 就紧凑、Low 就紧凑、
+   Bing/百度 就紧凑），不人为撑宽。这里只设 max-width 上限，作为「异常超长文本」的安全网：
+   正常短文本不受影响，超长文本到上限后 ellipsis，绝不把 send button 挤出窗口。
+   不用 width / flex-basis（那会把短内容无谓撑宽），仍保留 flex-shrink:1（空间不足时可变窄）。 */
+.composer-controls .model-selector {
+  flex-shrink: 1;
+  max-width: 220px;
+}
+
+.composer-controls .provider-selector {
+  flex-shrink: 1;
+  max-width: 180px;
+}
+
+.composer-controls .reasoning-selector {
+  flex-shrink: 1;
+  max-width: 160px;
+}
+
+/* Search Engine 标签固定为 Bing / 百度 / Google，无需任何宽度约束（完全 content-sized）。 */
+
+/* 发送按钮优先级最高：任何情况下都不得被压缩或被挤出窗口。
+   （.send-btn 已含 flex-shrink:0，这里显式重申完整的 flex 简写。） */
+.composer-controls .send-btn {
+  flex: 0 0 auto;
+}
+
+/* 其余非文本型动作控件（附件 / 联网开关等）同样不参与压缩，
+   空间压力一律由可收缩的下拉消化。 */
+.composer-controls .attach-btn,
+.composer-controls .web-search-toggle {
+  flex: 0 0 auto;
 }
 
 /* ========================================
@@ -1481,6 +1520,12 @@ textarea {
 .dropdown {
   position: relative;
   display: inline-flex;
+  /* 作为 flex item 时可收缩：默认 min-width:auto 会以 trigger 的 nowrap 内容为
+     min-content，导致长 label 无法被压缩、撑破父容器（Composer controls row）。
+     这里放开收缩并禁止超过父容器；宽度保持 content-sized，异常超长由 consumer
+     的 max-width 上限兜底。 */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .dropdown-trigger {
@@ -1501,6 +1546,10 @@ textarea {
   min-height: 32px;
   box-sizing: border-box;
   transition: border-color 0.15s, box-shadow 0.15s, background-color 0.25s, color 0.25s;
+  /* content-sized：trigger 宽度由当前 selected 文本自然决定（配合 value 的 ellipsis，
+     超长文本只截断、不横向撑开），caret 固定不压缩。 */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .dropdown-trigger:hover {
@@ -1516,6 +1565,13 @@ textarea {
 
 .dropdown-value {
   min-width: 0;
+  /* 选中项超长时单行截断：这是 Dropdown 的通用安全约束，
+     与具体模型名 / provider 名 / reasoning 文本无关。完整文本仍可通过
+     trigger 的 title（description 或显式 title）查看。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
 }
 
 .dropdown-value.placeholder {
@@ -1529,14 +1585,26 @@ textarea {
   border-right: 4px solid transparent;
   border-top: 5px solid var(--text-secondary);
   transition: transform 0.15s;
+  /* 箭头始终可见，压缩时只压缩文本 */
+  flex-shrink: 0;
 }
 
 .dropdown.open .dropdown-caret {
   transform: rotate(180deg);
 }
 
+/* ── Sizing 策略 ──
+   Trigger 为 content-sized：宽度由当前 selected 自然决定，不感知其它 option。
+   popup 独立决定展示宽度（min-width = trigger，允许按 option 内容更宽，上限受
+   viewport 安全区 / 峰值宽度约束，见 Dropdown.tsx computeMenuGeometry）。
+   所有自动 sizing 实验（sizeToOptions / hidden probe / grid probe / DOM 测量）已删除。 */
+
 .dropdown-menu {
   position: fixed;
+  /* 宽度由 option 内容自然决定（max-content），再由内联 min-width(≥trigger) /
+     max-width(峰值 / viewport 安全区) 夹取：正常长 option 完整显示，异常超长则
+     到上限后 ellipsis。绝不设固定 width。 */
+  width: max-content;
   max-height: 320px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -1564,6 +1632,8 @@ textarea {
   font-weight: 500;
   font-family: inherit;
   cursor: pointer;
+  /* 菜单不低于 trigger 宽度（内联 min-width），但由内容自然撑宽；超长 option 到
+     内联 max-width 上限后才 ellipsis。 */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
