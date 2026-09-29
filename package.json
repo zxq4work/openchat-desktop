@@ -6,7 +6,7 @@
     "email": "zxq4work@users.noreply.github.com"
   },
   "description": "A lightweight Chatbox-style ChatGPT desktop client",
-  "main": "dist/src/main/bootstrap/main.js",
+  "main": "dist/src/main/entry.js",
   "private": true,
   "scripts": {
     "dev": "node scripts/dev.mjs",
