@@ -6,6 +6,13 @@
 
 > 一个面向多模型、多 Provider 和本地 AI 场景的桌面客户端，而不是简单的 ChatGPT Web 套壳。
 
+<!-- 截图 1：OpenChat 主界面 -->
+<!-- 建议展示：左侧会话列表 + 对话区域 + 模型选择 + Reasoning Level + 联网搜索 + 输入框 -->
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/e2cfd74f-60eb-4520-b01d-9f4dbd1444c4" width="900" alt="OpenChat 主界面" />
+</p>
+
 ---
 
 ## 功能特性
@@ -39,6 +46,13 @@
 - Provider / Model 动态请求参数
 
 只要服务提供兼容的 OpenAI API，即可接入 OpenChat。
+
+<!-- 截图 2：Provider 配置界面 -->
+<!-- 建议展示：Provider 名称、API 类型、Base URL、API Key、模型列表、自定义参数 -->
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/4be942fe-c0e2-4a4e-84ca-5b14bf4c2d37" width="820" alt="OpenChat Provider 配置" />
+</p>
 
 ---
 
@@ -86,6 +100,13 @@ OpenChat 不绑定具体的本地模型运行框架。
 
 搜索结果支持来源展示与引用。
 
+<!-- 截图 3：联网搜索实际效果 -->
+<!-- 建议展示：联网搜索已开启 + AI 回答 + 搜索来源 + Citation/引用 -->
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/e4a5dce0-d0bb-4777-9707-8d53668a8765" width="820" alt="OpenChat 联网搜索" />
+</p>
+
 ---
 
 ### 图片理解
@@ -119,6 +140,13 @@ OpenChat 提供独立的图片生成会话。
 - 复制
 - 保存到本地
 
+<!-- 截图 4：图片生成会话 -->
+<!-- 建议展示：Prompt + 图片生成结果 + 预览/复制/保存操作 -->
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/cfad7e1e-94a8-4e57-8b51-ac5255bd7597" width="820" alt="OpenChat 图片生成" />
+</p>
+
 ---
 
 ### 推理模型
@@ -149,6 +177,13 @@ OpenChat 提供独立的图片生成会话。
 - 跨会话全文搜索
 - 搜索结果快速定位
 - 命中内容高亮
+
+<!-- 截图 5：跨会话全文搜索 -->
+<!-- 建议展示：搜索结果列表 + 当前命中项 + 右侧消息定位 + 关键词高亮 -->
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/885f4297-40b8-44bc-9d36-fd59984af7ca" width="820" alt="OpenChat 会话全文搜索" />
+</p>
 
 #### 上下文分段
 
@@ -249,30 +284,30 @@ OpenChat 支持：
 
 ## 开发
 
-项目使用 `pnpm` 管理依赖。
+建议使用 `npm` 管理依赖。
 
 ### 安装依赖
 
 ```bash
-pnpm install
+npm install
 ```
 
 ### 启动开发环境
 
 ```bash
-pnpm dev
+npm dev
 ```
 
 ### 运行测试
 
 ```bash
-pnpm test
+npm test
 ```
 
 ### 构建
 
 ```bash
-pnpm build
+npm build
 ```
 
 更多构建命令请查看 `package.json` 中的 scripts。
@@ -313,4 +348,3 @@ OpenChat 希望提供一个：
 - 图片生成
 - 会话搜索
 - 本地数据管理
-
