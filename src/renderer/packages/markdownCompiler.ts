@@ -20,6 +20,7 @@ import { defaultUrlTransform } from 'react-markdown'
 import { urlAttributes } from 'html-url-attributes'
 import { visit } from 'unist-util-visit'
 import { processLaTeX } from './latex'
+import { remarkStripBoldSentinel } from './markdownSentinel'
 import { KATEX_OPTIONS } from './katexOptions'
 
 const processor = unified()
@@ -27,6 +28,7 @@ const processor = unified()
   .use(remarkGfm)
   .use(remarkMath)
   .use(remarkBreaks)
+  .use(remarkStripBoldSentinel)
   .use(remarkRehype, { allowDangerousHtml: true })
   .use(rehypeKatex, KATEX_OPTIONS as any)
 

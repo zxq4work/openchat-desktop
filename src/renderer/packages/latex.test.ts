@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { processLaTeX, fixCJKBold } from './latex'
+import { processLaTeX, BOLD_SENTINEL } from './latex'
 
 describe('processLaTeX', () => {
   // Case 1: 块级公式 \[...\]
@@ -130,11 +130,90 @@ describe('processLaTeX', () => {
     expect(result).toBe('成本是 $10 到 $20，公式：\n$$\nx+y\n$$\n')
   })
 
-  // Case 14: CJK 全角标点紧邻 ** 时插入零宽空格，修复加粗失效
-  it('inserts zero-width space between CJK punctuation and **', () => {
+  // Case 14: 闭合 ** 紧邻全角标点、后接正文 → 在 ** 前插入 sentinel 修复
+  it('inserts sentinel before closing ** preceded by CJK punctuation', () => {
     const input = '**Judith Grimes（茱蒂丝·格莱姆斯）**是美剧'
     const result = processLaTeX(input)
-    expect(result).toBe('**Judith Grimes（茱蒂丝·格莱姆斯）\u200B**是美剧')
+    expect(result).toBe(`**Judith Grimes（茱蒂丝·格莱姆斯）${BOLD_SENTINEL}**是美剧`)
+  })
+
+  // ===== 加粗 flanking 修复：起始 ** 前是普通字符、后紧跟标点（在 ** 后插 sentinel）=====
+  it('fixes opening ** preceded by CJK text and followed by punctuation', () => {
+    expect(processLaTeX('这是**「普通文本」**')).toBe(`这是**${BOLD_SENTINEL}「普通文本」**`)
+    expect(processLaTeX('这是**"普通文本"**')).toBe(`这是**${BOLD_SENTINEL}"普通文本"**`)
+    expect(processLaTeX('这是**（普通文本）**')).toBe(`这是**${BOLD_SENTINEL}（普通文本）**`)
+    expect(processLaTeX('这是**“普通文本”**')).toBe(`这是**${BOLD_SENTINEL}“普通文本”**`)
+    expect(processLaTeX('这是**(普通文本)**')).toBe(`这是**${BOLD_SENTINEL}(普通文本)**`)
+  })
+
+  it('fixes opening ** around CJK/English bracket book titles and links', () => {
+    // 起始 ** 后插 sentinel；闭合 ** 因后面紧跟普通文字，前也插 sentinel
+    expect(processLaTeX('前文**《书名号》**后文')).toBe(`前文**${BOLD_SENTINEL}《书名号》${BOLD_SENTINEL}**后文`)
+    expect(processLaTeX('前文**【方括号】**后文')).toBe(`前文**${BOLD_SENTINEL}【方括号】${BOLD_SENTINEL}**后文`)
+    expect(processLaTeX('前文**[Markdown link](https://example.com)**后文')).toBe(
+      `前文**${BOLD_SENTINEL}[Markdown link](https://example.com)${BOLD_SENTINEL}**后文`
+    )
+  })
+
+  // ===== 闭合 ** 需要修复：前是标点、后是普通字符（在 ** 前插 sentinel）=====
+  it('fixes closing ** preceded by punctuation and followed by CJK text', () => {
+    expect(processLaTeX('**普通文本。**后续')).toBe(`**普通文本。${BOLD_SENTINEL}**后续`)
+    expect(processLaTeX('**（引号）**后续')).toBe(`**（引号）${BOLD_SENTINEL}**后续`)
+  })
+
+  it('does not alter ** already preceded by whitespace or at line start', () => {
+    expect(processLaTeX('这是 **「普通文本」**')).toBe('这是 **「普通文本」**')
+    expect(processLaTeX('**「行首文本」**')).toBe('**「行首文本」**')
+    expect(processLaTeX('**「元芳，你怎么看？」**\n')).toBe('**「元芳，你怎么看？」**\n')
+  })
+
+  it('does not alter ** followed by a normal (non-punctuation) character', () => {
+    expect(processLaTeX('这是**普通文本**')).toBe('这是**普通文本**')
+    expect(processLaTeX('这是**bold**')).toBe('这是**bold**')
+  })
+
+  it('does not touch ** inside inline code or fenced code blocks', () => {
+    expect(processLaTeX('`**not bold**`')).toBe('`**not bold**`')
+    expect(processLaTeX('`这是**「x」**`')).toBe('`这是**「x」**`')
+    expect(processLaTeX('```md\n这是**「x」**\n```')).toBe('```md\n这是**「x」**\n```')
+  })
+
+  it('leaves longer delimiter runs (*** / ****) untouched', () => {
+    expect(processLaTeX('正文***bold italic***')).toBe('正文***bold italic***')
+  })
+
+  it('does not touch escaped \\*\\* literals', () => {
+    expect(processLaTeX('正文\\*\\*「x」\\*\\*')).toBe('正文\\*\\*「x」\\*\\*')
+  })
+
+  // 实际案例：中文正文后紧跟带引号的粗体；行尾闭合 ** 后无字符 → 天然可闭合
+  it('fixes the real-world 狄仁杰 case', () => {
+    const input = '剧中狄仁杰真正说的是类似的**「依你之见呢？」「说说你的想法」**'
+    const result = processLaTeX(input)
+    expect(result).toContain(`类似的**${BOLD_SENTINEL}「依你之见呢？」「说说你的想法」**`)
+  })
+
+  // 数字相邻普通字符后的起始 **
+  it('fixes opening ** after digits', () => {
+    expect(processLaTeX('123**「x」**')).toBe(`123**${BOLD_SENTINEL}「x」**`)
+  })
+
+  // 非 BMP emoji（😀 = U+1F600）以两个 code unit 参与 tokenize；紧跟其后的
+  // 「起始 **」prev 是低代理项（分类为 ordinary），后接标点 → 起始需修复；
+  // 「闭合 **」前是标点、后接正文 → 闭合也需修复。
+  it('fixes both delimiters for astral emoji before punctuation', () => {
+    expect(processLaTeX('😀**「x」**后')).toBe(`😀**${BOLD_SENTINEL}「x」${BOLD_SENTINEL}**后`)
+  })
+
+  // astral emoji 出现在 ** 之后（next 侧）时，其高代理项分类为 ordinary，
+  // 起始 ** 天然可打开，无需修复。
+  it('does not insert sentinel when astral emoji follows opening **', () => {
+    expect(processLaTeX('中文**🔥重点**')).toBe('中文**🔥重点**')
+  })
+
+  // BMP 符号类 emoji（⭐ = U+2B50, So）紧跟 ** 时是标点 → 需修复起始 **。
+  it('fixes opening ** before BMP symbol emoji', () => {
+    expect(processLaTeX('中文**⭐重点**')).toBe(`中文**${BOLD_SENTINEL}⭐重点**`)
   })
 
   // ===== 回归测试：无 delimiter 的 LaTeX 命令（processLaTeX 应原样保留） =====

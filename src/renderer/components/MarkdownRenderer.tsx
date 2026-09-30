@@ -6,6 +6,7 @@ import remarkMath from 'remark-math'
 import remarkBreaks from 'remark-breaks'
 import rehypeKatex from 'rehype-katex'
 import { processLaTeX } from '../packages/latex'
+import { remarkStripBoldSentinel } from '../packages/markdownSentinel'
 import { compileMarkdownToHast } from '../packages/markdownCompiler'
 import { renderHastToReact } from '../packages/markdownHastRenderer'
 import { hastCacheGet, hastCacheSet } from '../packages/markdownHastCache'
@@ -116,7 +117,7 @@ const ReactMarkdownFallback = React.memo(function ReactMarkdownFallback({
   return (
     <div className="markdown-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks, remarkStripBoldSentinel]}
         rehypePlugins={[[rehypeKatex, KATEX_OPTIONS] as any]}
         components={components}
       >

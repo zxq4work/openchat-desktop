@@ -17,6 +17,7 @@ import remarkMath from 'remark-math'
 import remarkBreaks from 'remark-breaks'
 import rehypeKatex from 'rehype-katex'
 import { processLaTeX } from './latex'
+import { remarkStripBoldSentinel } from './markdownSentinel'
 import { compileMarkdownToHast } from './markdownCompiler'
 import { renderHastToReact } from './markdownHastRenderer'
 import { KATEX_OPTIONS } from './katexOptions'
@@ -73,7 +74,7 @@ const components: Components = {
 function renderWithReactMarkdown(content: string): string {
   const processed = processLaTeX(content)
   const element = React.createElement(ReactMarkdown, {
-    remarkPlugins: [remarkGfm, remarkMath, remarkBreaks],
+    remarkPlugins: [remarkGfm, remarkMath, remarkBreaks, remarkStripBoldSentinel],
     rehypePlugins: [[rehypeKatex, KATEX_OPTIONS]],
     components,
     children: processed,
@@ -227,6 +228,22 @@ const fixtures: Array<{ name: string; content: string }> = [
   {
     name: 'CJK bold fix',
     content: '**Judith Grimes（茱蒂丝·格莱姆斯）**是美剧',
+  },
+  {
+    name: 'opening bold quote run after CJK text',
+    content: '这是**「普通文本」**和**（圆括号）**',
+  },
+  {
+    name: 'closing bold punctuation run before CJK text',
+    content: '**普通文本。**后续 和 **（引号）**后续',
+  },
+  {
+    name: 'book title / bracket / link bold runs',
+    content: '前文**《书名号》**后文\n\n前文**【方括号】**后文\n\n前文**[link](https://example.com)**后文',
+  },
+  {
+    name: 'bold run kept literal in code',
+    content: '`这是**「x」**`\n\n```md\n这是**「x」**\n```',
   },
 
   // --- Raw HTML ---
