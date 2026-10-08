@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'http'
 import { ResponsesStreamParser } from './ResponsesStreamParser'
 import type { OAuthCredentialManager } from '../auth/OAuthCredentialManager'
 import { createRequest } from '../httpsClient'
+import { installStreamAbortBridge, makeAbortError, type AbortableStreamState } from './abortableStream'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
 import { CHATGPT_MODEL_CATALOG_DISCOVERY_SENTINEL } from '../models/modelCatalogDiscovery'
 
@@ -461,6 +462,7 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
     const headers = buildResponsesHeaders(token, accountId, useResponsesLite)
 
     let abortHandler: (() => void) | null = null
+    let abortBridge: AbortableStreamState | null = null
 
     try {
       const stream = await new Promise<IncomingMessage>((resolve, reject) => {
@@ -529,39 +531,55 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
       let streamError: Error | null = null
       let notify: (() => void) | null = null
 
-      stream.on('data', (chunk: Buffer) => {
-        chunks.push(chunk)
+      const wake = () => {
         if (notify) {
           const n = notify
           notify = null
           n()
         }
+      }
+
+      stream.on('data', (chunk: Buffer) => {
+        chunks.push(chunk)
+        wake()
       })
       stream.on('end', () => {
         streamEnded = true
-        if (notify) {
-          const n = notify
-          notify = null
-          n()
-        }
+        abortBridge?.markEnded()
+        wake()
       })
       stream.on('error', (err) => {
         console.error('[ChatGPTCodexClient] Stream read error:', err.message)
         streamError = err
         streamEnded = true
-        if (notify) {
-          const n = notify
-          notify = null
-          n()
-        }
+        abortBridge?.markEnded()
+        wake()
       })
+
+      // 关键修复：abort 与响应异常 close/aborted 必须能唤醒读取循环。
+      // Electron net 的 abort/close 不 emit error，Node 的 res.destroy() 只 emit aborted，
+      // 若此处不建桥，等待中的 await 将永不返回，生成任务无法退出。
+      const bridge = installStreamAbortBridge(stream, signal, wake)
+      abortBridge = bridge
 
       // 逐块解析，实时 yield
       let chunkIdx = 0
       while (true) {
-        // 等待新数据到达或流结束
-        while (chunkIdx >= chunks.length && !streamEnded) {
+        // 等待新数据到达、流结束，或被取消/异常关闭唤醒
+        while (chunkIdx >= chunks.length && !streamEnded && !bridge.isAborted() && !bridge.abortReason()) {
           await new Promise<void>((resolve) => { notify = resolve })
+        }
+
+        // 用户主动取消：以 AbortError 终止读取，绝不继续消费取消后到达的分块。
+        // 抛出而非静默返回，使调用方既有的 abort 分支把它判为「中断」而非「完成」。
+        if (bridge.isAborted()) {
+          throw makeAbortError()
+        }
+
+        // 响应异常关闭：以错误终止读取
+        const closeErr = bridge.abortReason()
+        if (closeErr) {
+          throw closeErr
         }
 
         // 流已结束且没有更多数据
@@ -599,6 +617,8 @@ export class RealChatGPTCodexClient implements ChatGPTCodexClient {
       if (abortHandler && signal) {
         signal.removeEventListener('abort', abortHandler)
       }
+      // abortBridge 在 try 内创建；若在创建前抛错（如请求建立失败），其为 null。
+      if (abortBridge) abortBridge.cleanup()
     }
   }
 }

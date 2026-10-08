@@ -11,6 +11,7 @@ import type {
   ProviderProtocol,
 } from '../../shared/types/provider'
 import { createRequest } from '../openai/chatgpt/httpsClient'
+import { installStreamAbortBridge, makeAbortError, type AbortableStreamState } from '../openai/chatgpt/transport/abortableStream'
 import { UnsupportedImageInputError } from './errors'
 import { ChatCompletionReasoningNormalizer } from './reasoning/ChatCompletionReasoningNormalizer'
 import { applyResolvedParameters } from '../../shared/request-parameters/requestParameters'
@@ -415,36 +416,58 @@ export class ChatCompletionsAdapter implements ModelAdapter {
     let streamEnded = false
     let streamError: Error | null = null
     let notify: (() => void) | null = null
+    let abortBridge: AbortableStreamState | null = null
 
-    stream.on('data', (chunk: Buffer) => {
-      chunks.push(chunk)
+    const wake = () => {
       if (notify) {
         const n = notify; notify = null; n()
       }
+    }
+
+    stream.on('data', (chunk: Buffer) => {
+      chunks.push(chunk)
+      wake()
     })
-    stream.on('end', () => { streamEnded = true; if (notify) { const n = notify; notify = null; n() } })
-    stream.on('error', (err) => { streamError = err; streamEnded = true; if (notify) { const n = notify; notify = null; n() } })
+    stream.on('end', () => { streamEnded = true; abortBridge?.markEnded(); wake() })
+    stream.on('error', (err) => { streamError = err; streamEnded = true; abortBridge?.markEnded(); wake() })
+
+    // 关键修复：abort / close / aborted 必须唤醒读取循环（Electron net 不 emit error）。
+    const bridge = installStreamAbortBridge(stream, signal, wake)
+    abortBridge = bridge
 
     let chunkIdx = 0
-    while (true) {
-      while (chunkIdx >= chunks.length && !streamEnded) {
-        await new Promise<void>((resolve) => { notify = resolve })
-      }
+    try {
+      while (true) {
+        while (chunkIdx >= chunks.length && !streamEnded && !bridge.isAborted() && !bridge.abortReason()) {
+          await new Promise<void>((resolve) => { notify = resolve })
+        }
 
-      if (chunkIdx >= chunks.length && streamEnded) {
-        if (streamError) throw streamError
-        return
-      }
+        // 用户主动取消：抛出以复用 stream() 的 abort 分支（终态 'abort'，非正常完成）。
+        if (bridge.isAborted()) {
+          throw makeAbortError()
+        }
+        const closeErr = bridge.abortReason()
+        if (closeErr) {
+          throw closeErr
+        }
 
-      const chunk = chunks[chunkIdx++]
-      const events = parser.parse(chunk.toString())
-      for (const sseEvent of events) {
-        if (sseEvent.data === '[DONE]') {
-          yield '[DONE]'
+        if (chunkIdx >= chunks.length && streamEnded) {
+          if (streamError) throw streamError
           return
         }
-        yield sseEvent.data
+
+        const chunk = chunks[chunkIdx++]
+        const events = parser.parse(chunk.toString())
+        for (const sseEvent of events) {
+          if (sseEvent.data === '[DONE]') {
+            yield '[DONE]'
+            return
+          }
+          yield sseEvent.data
+        }
       }
+    } finally {
+      bridge.cleanup()
     }
   }
 }
