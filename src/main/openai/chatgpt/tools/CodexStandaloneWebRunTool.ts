@@ -9,7 +9,11 @@ import { randomUUID } from 'crypto'
 export const CODEX_WEB_RUN_TOOL_DEFINITION: OpenChatToolDefinition = {
   name: 'run',
   namespace: 'web',
-  description: 'Search the web for real-time information. Use this when the user asks about current events, recent data, or anything requiring up-to-date knowledge.',
+  description:
+    'Search the web and open/read webpages. ' +
+    'Use search_query to discover pages when needed. ' +
+    'Use open with either a search-result reference or a fully-qualified HTTP/HTTPS URL. ' +
+    'When the user already provides a URL and asks to read, inspect, analyze, summarize, verify, or fetch that page, prefer opening the URL directly instead of searching for it first.',
   parameters: SEARCH_COMMANDS_JSON_SCHEMA as unknown as Record<string, unknown>,
 }
 
@@ -34,6 +38,29 @@ export class CodexStandaloneWebRunTool implements OpenChatTool {
 
   async execute(args: unknown, context: ToolExecutionContext): Promise<CanonicalToolResult> {
     const commands: SearchCommands = (args ?? {}) as SearchCommands
+
+    // 诊断日志：只打印 direct-open 数量与 hostname，不打印完整 URL / query
+    const directOpenUrls = Array.isArray(commands.open)
+      ? commands.open
+          .map((item) => item.ref_id)
+          .filter((ref) => /^https?:\/\//i.test(ref))
+      : []
+
+    if (directOpenUrls.length > 0) {
+      console.log(
+        '[StandaloneSearch] direct-open count=%d hosts=%s',
+        directOpenUrls.length,
+        directOpenUrls
+          .map((url) => {
+            try {
+              return new URL(url).hostname
+            } catch {
+              return 'invalid'
+            }
+          })
+          .join(',')
+      )
+    }
 
     // 从 conversation messages 构建结构化 input（ProviderResponseItem[]）
     const inputItems = this.buildRecentContext()

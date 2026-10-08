@@ -41,6 +41,11 @@ import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
 import { supportsImageFromModalities } from '../../../shared/utils/imageCapability'
 import { resolveEffectiveResponsesLite } from './transport/responsesTransportPolicy'
 import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandaloneSearchClient'
+import { mergeHostedWebSearchResults } from './search/hostedSearchResults'
+import {
+  CODEX_SEARCH_INSTRUCTIONS,
+  CODEX_STANDALONE_SEARCH_INSTRUCTIONS,
+} from './search/codexSearchInstructions'
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
 import { citationDebugTracker } from '../../services/ai/CitationDebugTracker'
@@ -64,93 +69,6 @@ Prefer concise search queries.
 Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.`
-
-// Codex 搜索模式语义判定规则（Hosted 和 Standalone 共用）
-const CODEX_SEARCH_MODE_SEMANTICS = `<!-- CODEX_SEARCH_MODE_SEMANTICS_V1 -->
-## Web Search Modes in OpenChat
-
-There are THREE distinct web search mechanisms. They are NOT interchangeable. When asked "what tool did you use" or "what search mode was used", identify the correct one from the conversation history items — NOT from the current instructions or current search mode.
-
-### 1. Hosted Web Search (provider-native)
-- History item type: \`web_search_call\` with \`action.type\` (e.g. \`search\`)
-- Executed server-side by the Codex backend. NOT a client function tool.
-- Do NOT call it \`web.run\`. Do NOT call it "Standalone" or a "function tool".
-- \`action.sources\` may contain:
-  - \`{ type: "url", url, title }\` — ordinary web page source
-  - \`{ type: "api", name: "oai-weather" }\` — built-in API data source (e.g. weather)
-- Both are still Hosted Web Search. An \`api\` source does NOT mean a separate "weather tool" was called; it means Hosted Search used an internal API data source. Describe it as: "Hosted Web Search used the built-in oai-weather data source."
-
-### 2. Standalone Web Search (web.run)
-- History item type: \`function_call\` with \`namespace: "web"\` and \`name: "run"\`, paired with a corresponding \`function_call_output\`
-- Client-side tool executed via /backend-api/codex/alpha/search. Often referred to as \`web.run\` or Standalone Web Search.
-- This is NEVER Hosted Web Search. Do NOT call it "Hosted", "hosted search", "本地搜索", or "local search".
-- If the history contains \`{ type: "function_call", name: "run", namespace: "web" }\` + \`function_call_output\`, the search was Standalone — regardless of what the current instructions say about "web_search" or "Hosted".
-
-### 3. OpenChat Custom Web Search
-- History item type: \`function_call\` with \`name: "openchat_web_search"\` (no namespace)
-- Client-side tool used by non-Codex custom providers.
-
-## Rules for answering "what tool/mode did you use"
-
-You MUST determine the search mode from the ACTUAL history item type in the conversation input. Do NOT guess from:
-- the result content (web pages, weather data, news, etc. do NOT determine the mode)
-- the current instructions (they describe the CURRENT session's tool, not the HISTORY)
-- the current SearchMode (it applies to this turn only, not to previous turns)
-
-Strict mapping:
-- \`type: web_search_call\` → answer "Hosted Web Search". Do NOT answer \`web.run\`, "Standalone", or "function tool".
-- \`type: function_call\` with \`namespace=web, name=run\` + \`function_call_output\` → answer "Standalone Web Search (web.run)". Do NOT answer "Hosted" or "hosted search".
-- \`type: function_call\` with \`name=openchat_web_search\` → answer "OpenChat Custom Web Search".
-
-## Most recent search takes priority
-
-When the user asks about "刚才", "上一次", "刚刚", "the previous search", or "what search was used", identify the MOST RECENT completed search tool call in the conversation history.
-
-- Most recent \`web_search_call\` → Hosted Web Search
-- Most recent \`function_call(namespace=web, name=run)\` + \`function_call_output\` → Standalone Web Search
-
-Do NOT classify an older search event when a newer completed search exists. For example, if the history contains both an earlier Hosted \`web_search_call\` and a later Standalone \`function_call web.run\`, and the user asks "刚才用了什么", the answer is Standalone — because that is the most recent search.
-
-Examples:
-- History item \`{ "type": "web_search_call", "action": { "type": "search" } }\` → This was Hosted Web Search
-- History item \`{ "type": "function_call", "name": "run", "namespace": "web" }\` + \`{ "type": "function_call_output" }\` → This was Standalone Web Search (web.run)`
-
-const CODEX_SEARCH_INSTRUCTIONS = `You have access to web search via the Hosted web_search tool. This describes your CURRENT capability for this turn.
-
-When you truly need external or up-to-date information, you may call web_search.
-If the existing conversation context is sufficient to answer, answer directly without searching again.
-
-Use web_search when:
-- the user explicitly asks to search, browse, look up, find or verify information;
-- the answer depends on current or potentially changed information;
-- external verification would materially improve accuracy.
-
-Use openchat_web_fetch when a search result snippet is insufficient and you need details from a source.
-
-Prefer concise search queries.
-Prefer primary and authoritative sources when possible.
-Never claim that you searched the web unless a web tool was actually executed.
-When using web results, cite relevant source URLs in the final answer.
-
-` + CODEX_SEARCH_MODE_SEMANTICS
-
-// Standalone 搜索指令：web.run 通过 additional_tools 声明，模型自主决定是否调用
-const CODEX_STANDALONE_SEARCH_INSTRUCTIONS = `You have access to web search via the web.run tool (namespace: web, name: run). This describes your CURRENT capability for this turn.
-
-When you truly need external or up-to-date information, you may call web.run.
-If the existing conversation context is sufficient to answer, answer directly without searching again.
-
-Use web.run when:
-- the user explicitly asks to search, browse, look up, find or verify information;
-- the answer depends on current or potentially changed information;
-- external verification would materially improve accuracy.
-
-Prefer concise search queries.
-Prefer primary and authoritative sources when possible.
-Never claim that you searched the web unless a web tool was actually executed.
-When using web results, cite relevant source URLs in the final answer.
-
-` + CODEX_SEARCH_MODE_SEMANTICS
 
 const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available for this request. Answer directly based on your training knowledge and the conversation context.
 - Do NOT output any search-related syntax (no <tool_call>, no <!-- START: WEB_SEARCH_CALL -->, no function calls).
@@ -1357,14 +1275,23 @@ export class ChatGPTConversationService {
                 break
               case 'searching':
                 break
-              case 'completed':
-                console.log('[Codex] web_search_call phase=completed itemId=', event.itemId ?? '(none)', 'resultsCount=', event.results?.length ?? 0)
+              case 'completed': {
+                const action = event.action ?? { type: 'search' }
+                // 安全诊断日志：只打印 action.type / url hostname / query / pattern / resultsCount，不打印完整 URL query
+                console.log(
+                  '[Codex Hosted Search] action=%s urlHost=%s query=%s pattern=%s resultsCount=%d',
+                  action.type ?? '(none)',
+                  action.url ? (hostnameFromUrl(action.url) || 'invalid') : '(none)',
+                  action.query ?? '(none)',
+                  action.pattern ?? '(none)',
+                  event.results?.length ?? 0
+                )
                 // 持久化 provider-native web_search_call item（用于跨 turn 模型记忆）
                 if (event.itemId) {
                   webSearchCallItems.push({
                     id: event.itemId,
                     status: event.status,
-                    action: event.action ?? { type: 'search' },
+                    action,
                   })
                 }
                 if (event.results) {
@@ -1394,9 +1321,17 @@ export class ChatGPTConversationService {
                     }
                   }
                 }
+                // open_page 只带 action.url、action.sources 常为空，补进参考页面列表，
+                // 使 Direct URL 访问的网页像普通 search source 一样可展开查看。
+                const normalizedResults = mergeHostedWebSearchResults(action, webSearchResults)
+                // 保持 webSearchResults 引用不变，供 turn 末尾统一持久化
+                if (normalizedResults.length !== webSearchResults.length) {
+                  webSearchResults.push(...normalizedResults.slice(webSearchResults.length))
+                }
                 this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults })
                 console.log('[Codex] web_search_call emitted webSearchResults count=', webSearchResults.length, 'first=', webSearchResults[0] ? JSON.stringify(webSearchResults[0]) : '(empty)')
                 break
+              }
               case 'failed':
                 console.log('[Codex] web_search_call phase=failed')
                 this.emitStreamEvent({ type: 'web-search-call-failed', conversationId })

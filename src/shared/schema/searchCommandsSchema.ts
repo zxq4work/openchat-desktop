@@ -41,13 +41,19 @@ export const SEARCH_COMMANDS_JSON_SCHEMA = {
     },
     open: {
       type: 'array',
-      description: 'Open a search result reference by its id.',
+      description:
+        'Open a webpage by search-result reference or fully-qualified HTTP/HTTPS URL. ' +
+        'When the user already provides a URL and wants its contents, open that URL directly instead of searching for it first.',
       items: {
         type: 'object',
         additionalProperties: false,
         required: ['ref_id'],
         properties: {
-          ref_id: { type: 'string', description: 'Reference id of the result to open.' },
+          ref_id: {
+            type: 'string',
+            description:
+              'A search-result reference such as "turn0search0", or a fully-qualified HTTP/HTTPS URL such as "https://github.com/openai/codex".',
+          },
           lineno: { type: 'number', description: 'Optional line number to scroll to.' },
         },
       },

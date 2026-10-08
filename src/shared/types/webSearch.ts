@@ -8,7 +8,15 @@ export interface SearchQuery {
 }
 
 export interface OpenOperation {
+  /**
+   * Search-result reference such as "turn0search0",
+   * or a fully-qualified HTTP/HTTPS URL.
+   */
   ref_id: string
+
+  /**
+   * Optional line number when opening an already parsed page.
+   */
   lineno?: number
 }
 

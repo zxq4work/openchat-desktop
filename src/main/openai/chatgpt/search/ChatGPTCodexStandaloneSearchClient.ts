@@ -4,6 +4,7 @@ import { createRequest } from '../httpsClient'
 import { logNon2xxResponse } from '../rateLimitDiagnostics'
 import type { SearchRequest, SearchResponse } from '../../../../shared/types/webSearch'
 import type { SearchResultItem } from '../../../../shared/types/provider'
+import { normalizeStandaloneRawResults } from './standaloneSearchResults'
 
 const BASE_URL = 'https://chatgpt.com'
 
@@ -95,10 +96,12 @@ export class ChatGPTCodexStandaloneSearchClient {
         }
       }
 
+      // rawResults 仅供 UI 展示：open 结果的 reader 元数据 snippet 置空。
+      // data.output（模型阅读页面用）保持原样，绝不修改。
       return {
         output: data.output ?? '',
         results,
-        rawResults: data.results ?? [],
+        rawResults: normalizeStandaloneRawResults(Array.isArray(data.results) ? data.results : []),
       }
     }
 
