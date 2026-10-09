@@ -19,6 +19,12 @@ import type { MessageAttachment } from '../../../shared/types/conversation'
 import { MAX_IMAGES_PER_MESSAGE } from '../../../shared/constants'
 import { importFiles, imageFilesFromDataTransfer } from '../../packages/attachmentDraftIO'
 import { modelSupportsImage, historyHasImage } from '../../packages/imageCapability'
+import {
+  canAddImages,
+  getSendBlockReason,
+  blockReasonMessage,
+  IMAGE_ADD_REJECTED_MESSAGE,
+} from '../../../shared/utils/imageInputCompatibility'
 import { toPreviewImage } from '../../packages/conversationPreviewImages'
 import { resolveConversationBinding, bindingBlockedMessage } from '../../../shared/conversation/capabilities'
 import { ComposerNotice, type ComposerNoticeData } from './ComposerNotice'
@@ -41,6 +47,8 @@ export function Composer() {
   const [importing, setImporting] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [importErrors, setImportErrors] = useState<Array<{ fileName: string; message: string }>>([])
+  // 一次性能力拒绝提示（如「当前模型不支持图片输入」），自动消失；持久 blocking 提示见 imageBlockReason。
+  const [rejectNotice, setRejectNotice] = useState<string | null>(null)
   const activeConversation = useConversationStore((s) => s.activeConversation)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
   const activeMessages = useConversationStore((s) => s.activeMessages)
@@ -69,6 +77,9 @@ export function Composer() {
   // 防抖合并导入错误提示
   const importErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const composerRef = useRef<HTMLDivElement>(null)
+  // 同步最新「是否允许新增图片」到 ref：异步 prepare/pick 的 commit 阶段需要读取
+  // 当前能力（闭包里的值可能已过期），无需为 handler 依赖重建。
+  const imageInputCapabilityRef = useRef(false)
 
   const currentConversation = activeConversation ?? null
 
@@ -195,13 +206,27 @@ export function Composer() {
 
   const remainingSlots = MAX_IMAGES_PER_MESSAGE - draftAttachments.length
 
-  // 导入图片到草稿（文件选择 / 拖拽 / 粘贴共用）
+  // 导入图片到草稿（文件选择 / 拖拽 / 粘贴共用）。
+  // 能力在「进入」与「commit」两个时点各校验一次：
+  //   - 入口 canAddImages=false → 直接拒绝，不做无意义的读取/解码
+  //   - prepare 期间能力可能翻转（异步 race），commit 前重新读取当前能力；
+  //     若已变为不支持，则把刚 prepare 出的未引用附件按现有 delete API 清理，避免遗留 orphan。
   const handleImport = async (files: File[]) => {
     if (files.length === 0) return
     if (!currentConversation) return
+    if (!imageInputCapabilityRef.current) {
+      setRejectNotice(IMAGE_ADD_REJECTED_MESSAGE)
+      return
+    }
     setImporting(true)
     try {
       const { attachments, errors } = await importFiles(files, activeConversationId, remainingSlots, 'chat_input', MAX_IMAGES_PER_MESSAGE)
+      if (!imageInputCapabilityRef.current) {
+        // race：能力在 prepare 期间被关闭，一律不 commit（与数量无关，避免顺序不一致）。
+        for (const att of attachments) window.openchat.attachments.delete(att.id)
+        if (attachments.length > 0) setRejectNotice(IMAGE_ADD_REJECTED_MESSAGE)
+        return
+      }
       if (attachments.length > 0) {
         setDraftAttachments((prev) => [...prev, ...attachments])
       }
@@ -217,7 +242,17 @@ export function Composer() {
 
   const handlePickImages = async () => {
     if (!currentConversation || importing) return
+    if (!imageInputCapabilityRef.current) {
+      setRejectNotice(IMAGE_ADD_REJECTED_MESSAGE)
+      return
+    }
     const result = await window.openchat.attachments.pick(activeConversationId)
+    if (!imageInputCapabilityRef.current) {
+      // race：picker 打开期间能力被关闭 → 不 commit，清理刚 prepare 的附件。
+      for (const att of result.attachments) window.openchat.attachments.delete(att.id)
+      if (result.attachments.length > 0) setRejectNotice(IMAGE_ADD_REJECTED_MESSAGE)
+      return
+    }
     if (result.attachments.length > 0) {
       setDraftAttachments((prev) => [...prev, ...result.attachments])
     }
@@ -277,12 +312,35 @@ export function Composer() {
     }
   }, [])
 
-  // 发送前能力校验：待发送图片 + 历史需 replay 的图片有一项存在
-  // 且所选模型不支持图片输入 → 阻止发送并保留草稿。
-  const requiresImage = draftAttachments.length > 0 || historyHasImage(activeMessages)
+  // 图片输入能力（每次 render 按当前 Provider / Model 计算，绝不缓存到 local state）：
+  // - supportsImage：当前 Provider / Model 是否支持图片输入（Main/Renderer 共用同一语义）
+  // - canAddImages：是否允许新增图片进入草稿（paste / drop / picker）
+  // - imageBlockReason：当前草稿的发送图片兼容性阻塞原因（草稿图片 / 历史图片）
   const supportsImage = modelSupportsImage(currentConversation, models, providers)
-  // 图片能力不满足：有图片上下文但所选模型不支持图片输入 → 禁用发送。
-  const imageCapabilityBlocked = requiresImage && !supportsImage
+  const allowAddImages = canAddImages(supportsImage)
+  // 历史图片只在「当前 segment」内 replay（与 Main 的 getBySegmentId 语义一致）：
+  // 新话题 / 新 segment 不再 replay 旧图片，故不应再触发 history incompatibility。
+  const currentSegmentMessages = currentConversation
+    ? activeMessages.filter((m) => m.segmentId === currentConversation.currentSegmentId)
+    : []
+  const imageBlockReason = getSendBlockReason({
+    supportsImage,
+    draftImageCount: draftAttachments.length,
+    historyNeedsImage: historyHasImage(currentSegmentMessages),
+  })
+  const imageCapabilityBlocked = imageBlockReason !== null
+
+  // 同步「是否允许新增图片」到 ref，供异步 prepare / pick 的 commit 阶段重新读取。
+  useEffect(() => {
+    imageInputCapabilityRef.current = allowAddImages
+  }, [allowAddImages])
+
+  // 一次性能力拒绝提示自动消失。
+  useEffect(() => {
+    if (!rejectNotice) return
+    const timer = setTimeout(() => setRejectNotice(null), 3000)
+    return () => clearTimeout(timer)
+  }, [rejectNotice])
 
   const handleSend = async () => {
     console.log('[Composer] handleSend entry activeConversationId=%s text=%s streamingStatus=%s currentError=%s attachments=%d', activeConversation?.id ?? 'null', text.trim() ? `"${text.trim().slice(0, 30)}"` : '(empty)', useChatStreamStore.getState().status, useChatStreamStore.getState().error, draftAttachments.length)
@@ -299,9 +357,10 @@ export function Composer() {
       return
     }
 
-    // 发送前图片能力拦截（与 Main 侧门禁一致，先于 IPC 提示用户）
+    // 发送前图片能力拦截（与 Main 侧门禁一致，先于 IPC 提示用户）。
+    // 正常路径下按钮已 disabled，这里是防御性兜底（如 race）。
     if (imageCapabilityBlocked) {
-      setError('当前话题包含图片上下文，所选模型不支持图片输入。请选择支持图片的模型，或开始新话题。')
+      setError(imageBlockReason ? blockReasonMessage(imageBlockReason) : IMAGE_ADD_REJECTED_MESSAGE)
       console.log('[Composer] handleSend BLOCKED: image required but model unsupported')
       return
     }
@@ -454,6 +513,19 @@ export function Composer() {
           onRemove={handleRemoveDraft}
           onPreview={(att) => openLightbox(att.id, toPreviewImage(att))}
         />
+        {/* 持久 blocking 提示：草稿已含图片 / 历史上下文含图片，但当前模型不支持。
+            与一次性 toast 不同，必须常驻可见（重启恢复草稿 / 打开旧会话时用户可能没看到 toast）。 */}
+        {imageBlockReason && (
+          <div className="composer-attachment-warning" role="status">
+            {blockReasonMessage(imageBlockReason)}
+          </div>
+        )}
+        {/* 一次性能力拒绝提示：用户主动尝试新增图片但当前不支持（自动消失）。 */}
+        {rejectNotice && (
+          <div className="composer-attachment-warning composer-attachment-warning--transient" role="status">
+            {rejectNotice}
+          </div>
+        )}
         {importErrors.length > 0 && (
           <div className="composer-attachment-errors">
             {importErrors.map((e, i) => (
@@ -469,6 +541,8 @@ export function Composer() {
           onPasteImages={handleImport}
           hasDraftAttachments={draftAttachments.length > 0}
           sendBlocked={bindingBlocked || imageCapabilityBlocked}
+          canAddImages={allowAddImages}
+          onImagesRejected={() => setRejectNotice(IMAGE_ADD_REJECTED_MESSAGE)}
         />
         {/* 动态请求参数：完全由 Provider Profile 驱动，无可见参数时整体不渲染 */}
         <DynamicParameterSection
@@ -479,7 +553,11 @@ export function Composer() {
           disabled={dynamicDisabled}
         />
         <div className="composer-controls">
-          <AttachButton onClick={handlePickImages} disabled={isStreamingForCurrent || importing || !currentConversation} />
+          <AttachButton
+            onClick={handlePickImages}
+            disabled={isStreamingForCurrent || importing || !currentConversation || !allowAddImages}
+            disabledTitle={!allowAddImages ? IMAGE_ADD_REJECTED_MESSAGE : '添加图片'}
+          />
           <ProviderSelector />
           <ModelSelector />
           <ReasoningSelector />
@@ -496,7 +574,7 @@ export function Composer() {
           />
         </div>
       </div>
-      {dragOver && !isStreamingForCurrent && (
+      {dragOver && !isStreamingForCurrent && allowAddImages && (
         <div className="composer-drag-overlay">松开以添加图片</div>
       )}
     </div>

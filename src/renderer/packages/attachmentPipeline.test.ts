@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { imageFilesFromDataTransfer } from './attachmentDraftIO'
+import { imageFilesFromDataTransfer, decideImagePaste } from './attachmentDraftIO'
 import { modelSupportsImage, historyHasImage } from './imageCapability'
 import type { Message } from '../../shared/types/conversation'
 
@@ -46,6 +46,39 @@ describe('imageFilesFromDataTransfer', () => {
       { kind: 'file', type: 'image/png', file: null, getAsFile: () => null },
     ])
     expect(imageFilesFromDataTransfer(dt)).toEqual([])
+  })
+})
+
+// TEST 19: 混合剪贴板（图片 + 文字）在 unsupported 时不能吞掉文字
+describe('decideImagePaste (mixed clipboard)', () => {
+  it('TEST 13: unsupported + pure image → reject, preventDefault, no import', () => {
+    expect(decideImagePaste({ hasImageFiles: true, hasText: false, canAddImages: false })).toEqual({
+      importImages: false, preventDefault: true, reject: true,
+    })
+  })
+
+  it('TEST 19: unsupported + text + image → reject image but keep text (no preventDefault)', () => {
+    expect(decideImagePaste({ hasImageFiles: true, hasText: true, canAddImages: false })).toEqual({
+      importImages: false, preventDefault: false, reject: true,
+    })
+  })
+
+  it('TEST 16: supported + pure image → import, preventDefault, no reject', () => {
+    expect(decideImagePaste({ hasImageFiles: true, hasText: false, canAddImages: true })).toEqual({
+      importImages: true, preventDefault: true, reject: false,
+    })
+  })
+
+  it('supported + text + image → import image AND keep text (no preventDefault)', () => {
+    expect(decideImagePaste({ hasImageFiles: true, hasText: true, canAddImages: true })).toEqual({
+      importImages: true, preventDefault: false, reject: false,
+    })
+  })
+
+  it('no image files → plain text paste untouched', () => {
+    expect(decideImagePaste({ hasImageFiles: false, hasText: true, canAddImages: false })).toEqual({
+      importImages: false, preventDefault: false, reject: false,
+    })
   })
 })
 

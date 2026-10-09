@@ -64,16 +64,23 @@ describe('AttachmentService.cleanupOrphans', () => {
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* ignore */ }
   })
 
-  it('1. unbound draft younger than 24h is kept', () => {
+  it('1. unbound persisted draft of a live conversation is kept (any age)', () => {
     repo.rows = [att({ id: 'draft-new', messageId: null, conversationId: 'c1', createdAt: Date.now() - 1000 })]
     service.cleanupOrphans(liveConvs)
     expect(repo.rows.map((r) => r.id)).toEqual(['draft-new'])
   })
 
-  it('2. unbound draft older than 24h is removed', () => {
+  it('2. unbound persisted draft of a live conversation older than 24h is kept (draft is user data)', () => {
     repo.rows = [att({ id: 'draft-old', messageId: null, conversationId: 'c1', createdAt: Date.now() - 2 * DAY })]
     service.cleanupOrphans(liveConvs)
-    expect(repo.rows).toEqual([])
+    expect(repo.rows.map((r) => r.id)).toEqual(['draft-old'])
+  })
+
+  it('2b. persisted draft survives even when its provider no longer supports images (capability is not lifecycle)', () => {
+    // cleanup 不看 provider 能力：能力只影响能否发送/新增，绝不影响附件生命周期。
+    repo.rows = [att({ id: 'draft-img', messageId: null, conversationId: 'c1', createdAt: Date.now() - 30 * DAY })]
+    service.cleanupOrphans(liveConvs)
+    expect(repo.rows.map((r) => r.id)).toEqual(['draft-img'])
   })
 
   it('3. attachment bound to a live message older than 24h is kept', () => {
@@ -107,7 +114,7 @@ describe('AttachmentService.cleanupOrphans', () => {
     repo.rows = [
       att({ id: 'keep-bound', messageId: 'm1', conversationId: 'c1', createdAt: Date.now() - 10 * DAY }),
       att({ id: 'keep-new-draft', messageId: null, conversationId: 'c1', createdAt: Date.now() - 1000 }),
-      att({ id: 'drop-old-draft', messageId: null, conversationId: 'c1', createdAt: Date.now() - 2 * DAY }),
+      att({ id: 'keep-old-draft', messageId: null, conversationId: 'c1', createdAt: Date.now() - 2 * DAY }),
       att({ id: 'drop-dead-conv', messageId: null, conversationId: 'deleted', createdAt: Date.now() - 2 * DAY }),
     ]
     service.cleanupOrphans(liveConvs)
@@ -115,13 +122,13 @@ describe('AttachmentService.cleanupOrphans', () => {
     service.cleanupOrphans(liveConvs)
     const afterSecond = repo.rows.map((r) => r.id).sort()
 
-    expect(afterFirst).toEqual(['keep-bound', 'keep-new-draft'])
+    expect(afterFirst).toEqual(['keep-bound', 'keep-new-draft', 'keep-old-draft'])
     expect(afterSecond).toEqual(afterFirst)
   })
 
   it('removes DB row even when managed files are missing', () => {
-    // 文件从未落盘；deleteFiles 必须容忍并仍然删行
-    repo.rows = [att({ id: 'no-file', messageId: null, conversationId: 'c1', createdAt: Date.now() - 2 * DAY })]
+    // 会话已消失 → 孤儿；文件从未落盘，deleteFiles 必须容忍并仍然删行
+    repo.rows = [att({ id: 'no-file', messageId: null, conversationId: 'deleted', createdAt: Date.now() - 2 * DAY })]
     expect(() => service.cleanupOrphans(liveConvs)).not.toThrow()
     expect(repo.rows).toEqual([])
   })

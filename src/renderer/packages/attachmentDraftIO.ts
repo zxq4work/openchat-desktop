@@ -61,3 +61,32 @@ export function imageFilesFromDataTransfer(dt: DataTransfer | null): File[] {
   }
   return out
 }
+
+// 粘贴图片的纯决策（与 React 解耦，便于覆盖混合剪贴板场景）。
+// 关键：不支持的图片不能导致文字被吞掉 —— 混合剪贴板（图片 + 文字）时
+// 必须放行默认文本粘贴（preventDefault=false），仅 importImages 提交时才阻止默认行为。
+export interface ImagePasteDecision {
+  // 是否把图片提交给导入流程
+  importImages: boolean
+  // 是否阻止默认粘贴行为（阻止会吞掉剪贴板文字）
+  preventDefault: boolean
+  // 是否提示「当前不支持图片输入」
+  reject: boolean
+}
+
+export function decideImagePaste(input: {
+  hasImageFiles: boolean
+  hasText: boolean
+  canAddImages: boolean
+}): ImagePasteDecision {
+  const { hasImageFiles, hasText, canAddImages } = input
+  if (!hasImageFiles) return { importImages: false, preventDefault: false, reject: false }
+
+  if (canAddImages) {
+    // 支持图片：混合剪贴板保留文字（不阻止默认），纯图片阻止默认避免插入空文本。
+    return { importImages: true, preventDefault: !hasText, reject: false }
+  }
+
+  // 不支持图片：图片一律拒绝。混合剪贴板保留文字，纯图片阻止默认。
+  return { importImages: false, preventDefault: !hasText, reject: true }
+}

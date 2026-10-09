@@ -3632,6 +3632,25 @@ html[data-theme="dark"] mark.search-highlight-current {
   word-break: break-word;
 }
 
+/* 图片输入能力提示：
+   - 默认（持久 blocking）：草稿/历史含图片但当前模型不支持，常驻可见（warning 色）。
+   - --transient（一次性）：用户尝试新增图片被拒，自动消失，视觉弱化。 */
+.composer-attachment-warning {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.composer-attachment-warning--transient {
+  opacity: 0.85;
+}
+
 /* 拖拽图片到 Composer：整块区域显示提示遮罩 */
 .composer-drag-overlay {
   position: absolute;

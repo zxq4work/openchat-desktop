@@ -292,14 +292,16 @@ export class AttachmentService {
     this.repo.removeAll()
   }
 
-  // 启动清理：删除未绑定/孤儿附件。
+  // 启动清理：删除孤儿附件。
   //
-  // 保留条件（唯一）：**已绑定到仍存在的 message，且属于仍存在的会话**。
-  //   → 无论多久都保留，绝不因 TTL 清理有效对话数据。
+  // 保留条件（两类 live 引用，均不受 TTL 影响）：
+  //   1. **已绑定到仍存在的 message，且属于仍存在的会话** —— 已发送的历史图片。
+  //   2. **未绑定（persisted draft）且属于仍存在的会话** —— 用户已输入但未发送的图片草稿。
+  //      draft 是用户数据：只要其所属会话仍存在，就必须保留，绝不因 TTL 清理。
+  //      （能力变化只影响能否发送/新增，绝不影响附件生命周期，故此处不看 Provider 能力。）
   //
-  // 其余（未绑定 message 的 draft，或会话/message 已消失的孤儿）在超过
-  // ORPHAN_TTL_MS 保护期后清理。保护期用于避开启动竞态（刚创建、
-  // 尚未落库/尚未绑定到会话的附件不能立即当垃圾删掉）。
+  // 其余（会话或 message 已消失的孤儿）在超过 ORPHAN_TTL_MS 保护期后清理。
+  // 保护期用于避开启动竞态（刚创建、尚未落库/尚未绑定到会话的附件不能立即当垃圾删掉）。
   //
   // 为什么用"会话是否存在"而不是"message 是否存在"判定孤儿：
   // message_attachments 无外键，且 sql.js 默认不启用 PRAGMA foreign_keys，
@@ -318,13 +320,16 @@ export class AttachmentService {
     const existingMessageIds = this.repo.existingMessageIds(boundMessageIds)
 
     for (const att of atts) {
-      const boundToLiveMessage = !!att.messageId && existingMessageIds.has(att.messageId)
       const inLiveConversation = !!att.conversationId && validConversationIds.has(att.conversationId)
+      const boundToLiveMessage = !!att.messageId && existingMessageIds.has(att.messageId)
 
       // 已绑定有效 message 且会话仍在 → 永久保留（不受 TTL 影响）
       if (boundToLiveMessage && inLiveConversation) continue
 
-      // draft / 孤儿：保护期内保留
+      // 未绑定（persisted draft）且会话仍在 → 永久保留（不受 TTL 影响）
+      if (!att.messageId && inLiveConversation) continue
+
+      // 孤儿（会话或 message 已消失）：保护期内保留
       if (now - att.createdAt < ORPHAN_TTL_MS) continue
 
       this.deleteFiles(att)

@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react'
 import { useChatStreamStore } from '../../stores/chatStreamStore'
 import { useConversationStore } from '../../stores/conversationStore'
 import { useUiStore } from '../../stores/uiStore'
+import { decideImagePaste } from '../../packages/attachmentDraftIO'
 
 interface Props {
   text: string
@@ -14,9 +15,13 @@ interface Props {
   // blocking binding / 图片能力不满足时为 true：Enter 发送同样被拦截，
   // 保证键盘快捷键与 Send 按钮的 disabled 状态一致。
   sendBlocked?: boolean
+  // 当前是否允许新增图片（paste）。false 时粘贴图片被拒绝，但普通文字粘贴保持默认行为。
+  canAddImages: boolean
+  // 粘贴图片被能力门禁拒绝时回调（用于一次性提示），不吞掉同批次的文字粘贴。
+  onImagesRejected: () => void
 }
 
-export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, hasDraftAttachments, sendBlocked }: Props) {
+export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, hasDraftAttachments, sendBlocked, canAddImages, onImagesRejected }: Props) {
   const status = useChatStreamStore((s) => s.status)
   const streamingConversationId = useChatStreamStore((s) => s.streamingConversationId)
   const activeConversationId = useConversationStore((s) => s.activeConversationId)
@@ -58,7 +63,8 @@ export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, ha
     }
   }
 
-  // Ctrl/Cmd+V 粘贴剪贴板图片 → 交 Composer 导入草稿（纯文本粘贴保持默认行为）
+  // Ctrl/Cmd+V 粘贴剪贴板图片 → 交 Composer 导入草稿（纯文本粘贴保持默认行为）。
+  // 决策抽到纯函数 decideImagePaste：不支持图片时绝不 preventDefault 吞掉同批文字。
   const handlePaste = (e: React.ClipboardEvent) => {
     if (isCurrentConversationStreaming) return
     const items = Array.from(e.clipboardData?.items ?? [])
@@ -66,10 +72,11 @@ export function MessageInput({ text, onChange, onSend, onStop, onPasteImages, ha
       .filter((it) => it.kind === 'file' && (!it.type || it.type.startsWith('image/')))
       .map((it) => it.getAsFile())
       .filter((f): f is File => !!f)
-    if (files.length > 0) {
-      e.preventDefault()
-      onPasteImages(files)
-    }
+    const hasText = items.some((it) => it.kind === 'string')
+    const decision = decideImagePaste({ hasImageFiles: files.length > 0, hasText, canAddImages })
+    if (decision.preventDefault) e.preventDefault()
+    if (decision.importImages) onPasteImages(files)
+    if (decision.reject) onImagesRejected()
   }
 
   return (
