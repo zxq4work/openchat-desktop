@@ -19,6 +19,7 @@ import { SettingsDialog } from '../components/settings/SettingsDialog'
 import { presentSearchResults } from '../packages/SearchResultPresenter'
 import { resolveNewConversationDefaults } from '../packages/modelPresentation'
 import { hostnameFromUrl } from '../../shared/utils/searchDisplay'
+import { shouldApplyNewTopicRefresh } from '../packages/newTopicRefresh'
 import type { WebSearchResultItem } from '../../shared/types/conversation'
 import { STREAM_FLUSH_MS, RENDERER_BOOT_STATE_POLL_MS } from '../../shared/constants'
 import { finishBootSplash } from './boot-splash'
@@ -781,10 +782,16 @@ export function App() {
         await window.openchat.conversations.newTopic(id)
         // 刷新 UI：重新加载会话数据，显示 ContextBoundary
         const data = await window.openchat.conversations.get(id)
-        if (data) {
+        // 两次 IPC 期间用户可能已切换会话：只在与发起时会话仍一致时才写回，
+        // 否则覆盖会造成 activeConversationId 与展示内容错位（跨会话错位）。
+        if (data && shouldApplyNewTopicRefresh(useConversationStore.getState().activeConversationId, id)) {
           useConversationStore.getState().setActiveConversation(data.conversation)
           useConversationStore.getState().setActiveMessages(data.messages)
           useConversationStore.getState().setActiveSegments(data.segments)
+          // 用户显式执行了「重置上下文」：这是一次主动导航，要求无视 READING_HISTORY
+          // 强制回到最新内容。普通自动滚动仅在新消息/流式到达时按贴底条件生效，
+          // 这里通过独立的 request id 让 MessageList 无条件贴底一次。
+          useUiStore.getState().requestScrollToBottomAfterReset()
         }
       }
     })

@@ -42,6 +42,10 @@ export function MessageList() {
 
   const openContextMenu = useUiStore((s) => s.openContextMenu)
 
+  // 用户显式「重置上下文」（Cmd/Ctrl+R 新话题）后请求强制贴底。
+  // 仅用于订阅以触发重新执行 effect；消费与否由 store 水位线判定（见下）。
+  const newTopicResetRequestId = useUiStore((s) => s.newTopicResetRequestId)
+
   // 消息列表空白区右键：仅当存在「属于本列表且非折叠」的选区时弹出搜索菜单。
   // 消息根节点（UserMessage/AssistantMessage）的右键已 stopPropagation，不会走到这里。
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -187,6 +191,23 @@ export function MessageList() {
     lastObservedScrollHeightRef.current = -1
     scrollToBottom()
   }, [activeConversation?.id])
+
+  // 用户显式重置上下文（Cmd/Ctrl+R 新话题）后强制贴底。
+  // 这是一次主动导航请求，与下方「messages/segments 驱动」的条件自动滚动语义区分开：
+  // 无视当前 READING_HISTORY / 贴底状态，直接复位为 FOLLOWING 并滚到底部。
+  // App.tsx 在本 effect 触发前已同步刷新 messages/segments，故此处 DOM 已是最新布局。
+  //
+  // 消费判定交给 store 水位线（consumeNewTopicScrollIfPending），而非组件局部 ref：
+  // effect 在每次挂载后都会执行，局部 ref 初始化无法跨挂载存活，会把历史请求重复消费；
+  // 水位线保证「每个请求恰好消费一次」，且组件未挂载期间（或重挂载后）发出的请求不遗漏。
+  useEffect(() => {
+    if (!useUiStore.getState().consumeNewTopicScrollIfPending()) return
+    followModeRef.current = 'FOLLOWING'
+    pinnedRef.current = true
+    programmaticScrollTargetRef.current = null
+    scrollToBottom()
+    setShowScrollToBottom(false)
+  }, [newTopicResetRequestId])
 
   // ===== 全局会话搜索：消息定位 =====
   // 定位作为「明确的用户导航操作」接入现有滚动系统，不修改 scrollToBottom 等现有逻辑。

@@ -38,6 +38,14 @@ interface UiState {
   searchMatches: SearchMatch[]
   currentMatchIndex: number
   focusRequestId: number
+  // 用户显式请求「重置上下文后滚动到底部」（Cmd/Ctrl+R 新话题）。
+  // 与普通「新消息到达时的条件自动滚动」不同：这是用户主动导航，
+  // 必须无视当前 READING_HISTORY / 贴底条件强制贴底一次。
+  newTopicResetRequestId: number
+  // 已被消费（完成贴底）到的请求 id 水位线。
+  // 消费判定基于它而非组件局部 ref：组件重挂载后首次 effect 仍会执行，
+  // 却不会重复消费历史请求；组件卸载期间发出的请求也因其大于水位线而不被遗漏。
+  consumedNewTopicResetRequestId: number
   toast: string | null
   // 图片预览序列的稳定身份（attachmentId）。null = 关闭。
   // 不用下标作身份：会话内图片会随生成完成/删除增减，下标不稳定。
@@ -55,6 +63,11 @@ interface UiState {
 
   toggleSidebar: () => void
   requestComposerFocus: () => void
+  requestScrollToBottomAfterReset: () => void
+  // 原子「检查并消费」：若存在尚未消费的贴底请求，标记其已消费并返回 true；
+  // 否则返回 false。把检查与推进水位线放在同一次 set 内，避免 remount / 多次
+  // effect 执行导致的重复消费（局部 ref 无法跨挂载存活）。
+  consumeNewTopicScrollIfPending: () => boolean
   showToast: (message: string) => void
   clearToast: () => void
   setSettingsDialogOpen: (open: boolean) => void
@@ -92,6 +105,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   searchMatches: [],
   currentMatchIndex: -1,
   focusRequestId: 0,
+  newTopicResetRequestId: 0,
+  consumedNewTopicResetRequestId: 0,
   toast: null,
   lightboxAttachmentId: null,
   lightboxImages: [],
@@ -102,6 +117,15 @@ export const useUiStore = create<UiState>((set, get) => ({
 
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   requestComposerFocus: () => set((state) => ({ focusRequestId: state.focusRequestId + 1 })),
+  requestScrollToBottomAfterReset: () => set((state) => ({ newTopicResetRequestId: state.newTopicResetRequestId + 1 })),
+  consumeNewTopicScrollIfPending: () => {
+    const { newTopicResetRequestId, consumedNewTopicResetRequestId } = get()
+    if (newTopicResetRequestId <= consumedNewTopicResetRequestId) return false
+    // 推进水位线到当前请求：同一请求在 remount / 重复 effect 中不再被消费，
+    // 而之后（含组件未挂载期间）发出的更大 id 仍会被消费，不遗漏。
+    set({ consumedNewTopicResetRequestId: newTopicResetRequestId })
+    return true
+  },
   showToast: (message) => set({ toast: message }),
   clearToast: () => set({ toast: null }),
   setSettingsDialogOpen: (open) => set({ settingsDialogOpen: open }),
