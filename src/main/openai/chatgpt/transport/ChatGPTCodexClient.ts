@@ -112,7 +112,8 @@ export interface ResponsesRequest {
   useResponsesLite?: boolean
   tools?: unknown[]
   include?: string[]
-  toolChoice?: string | { type: string }
+  // tool_choice 最终形态：字符串、{type:'web_search'}，或跨模式历史兼容用的 allowed_tools 白名单对象。
+  toolChoice?: unknown
 }
 
 export interface ProviderFunctionCall {

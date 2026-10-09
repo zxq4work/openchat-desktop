@@ -57,6 +57,23 @@ describe('resolveEffectiveResponsesLite — 正式 Transport Policy', () => {
     expect(requiresNonLiteTransport({ searchStrategy: 'file_search' })).toBe(false)
   })
 
+  // TEST 15c：hosted 历史兼容 —— 需要重放 hosted web_search_call 时强制 Non-Lite
+  it('requiresNonLiteTransport: hasHostedWebSearchHistory=true 时任意策略都为 true', () => {
+    expect(requiresNonLiteTransport({ searchStrategy: 'codex-standalone', hasHostedWebSearchHistory: true })).toBe(true)
+    expect(requiresNonLiteTransport({ searchStrategy: 'none', hasHostedWebSearchHistory: true })).toBe(true)
+  })
+
+  // TEST 16：Lite 模型 + codex-standalone + 含 hosted 历史 → 强制 Non-Lite
+  it('TEST 16: Lite 模型 + codex-standalone + hosted 历史 → effectiveResponsesLite=false', () => {
+    expect(resolveEffectiveResponsesLite({ modelWantsResponsesLite: true, searchStrategy: 'codex-standalone', hasHostedWebSearchHistory: true })).toBe(false)
+  })
+
+  // TEST 17：Lite 模型 + codex-standalone + 无 hosted 历史 → 保持 Lite（回归不变）
+  it('TEST 17: Lite 模型 + codex-standalone + 无 hosted 历史 → effectiveResponsesLite=true', () => {
+    expect(resolveEffectiveResponsesLite({ modelWantsResponsesLite: true, searchStrategy: 'codex-standalone', hasHostedWebSearchHistory: false })).toBe(true)
+    expect(resolveEffectiveResponsesLite({ modelWantsResponsesLite: true, searchStrategy: 'codex-standalone' })).toBe(true)
+  })
+
   it('未知 searchStrategy → 不触发 Non-Lite（回落模型 metadata）', () => {
     expect(resolveEffectiveResponsesLite({ modelWantsResponsesLite: true, searchStrategy: 'future-strategy' })).toBe(true)
   })

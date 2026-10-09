@@ -23,6 +23,7 @@ import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
+import { segmentNeedsNonLiteForHostedHistory } from './search/searchHistoryCompatibility'
 import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
@@ -49,7 +50,7 @@ import {
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
 import { citationDebugTracker } from '../../services/ai/CitationDebugTracker'
-import { UnsupportedImageInputError } from '../../providers/errors'
+import { UnsupportedImageInputError, CodexProtocolIsolationError } from '../../providers/errors'
 import type { ConversationSearchResult, ConversationMessageSearchMatch, ConversationSearchScope } from '../../../shared/types/search'
 import { buildSnippet, scopeMatchesContent, scopeMatchesTitle, aggregateConversationSearchResults, type ConversationSummaryRow } from '../../../shared/search/conversationSearch'
 
@@ -740,9 +741,12 @@ export class ChatGPTConversationService {
   // 计算本次请求唯一的 effectiveResponsesLite（驱动 header / reasoning.context /
   // parallel_tool_calls / tool serializer / include / tool_choice）。
   // 依据 model metadata 的 useResponsesLite + resolved searchStrategy，绝不做 env / slug 特判。
-  private computeEffectiveResponsesLiteForRequest(modelId: string, searchStrategy: string): boolean {
+  // 额外条件：本次请求若需重放历史 hosted web_search_call（provider-native），
+  // 则 codex-standalone 也必须整体走 Non-Lite，否则 Lite 会话携带 hosted wire item
+  // 会被上游以 "response protection is unavailable" 拒绝（Hosted → Standalone 跨模式历史兼容）。
+  private computeEffectiveResponsesLiteForRequest(modelId: string, searchStrategy: string, hasHostedWebSearchHistory: boolean): boolean {
     const modelWantsResponsesLite = this.modelService.getModelInfo(modelId)?.useResponsesLite === true
-    const effective = resolveEffectiveResponsesLite({ modelWantsResponsesLite, searchStrategy })
+    const effective = resolveEffectiveResponsesLite({ modelWantsResponsesLite, searchStrategy, hasHostedWebSearchHistory })
     // dev invariant：codex-hosted 必须得到 Non-Lite；若为 true 说明 Policy 被破坏。
     // 生产环境不 crash，仅记录明确 error，由 Adapter 安全防线阻止非法 request。
     if (searchStrategy === 'codex-hosted' && effective && process.env.NODE_ENV !== 'production') {
@@ -847,11 +851,21 @@ export class ChatGPTConversationService {
       // 计算本次唯一的 effectiveResponsesLite（codex-hosted → 强制 Non-Lite）。
       // 该值统一下传给所有 codex 生成路径，驱动 header / reasoning.context /
       // parallel_tool_calls / tool serializer / include / tool_choice。
-      const effectiveResponsesLite = this.computeEffectiveResponsesLiteForRequest(modelId, effectiveStrategy)
+      // 历史兼容条件：本次请求若需重放 hosted web_search_call（Hosted → Standalone 跨模式），
+      // 也强制 Non-Lite，避免 Lite 会话携带 hosted wire item 被上游拒绝。
+      // 检测范围必须与「实际发送的历史」一致：
+      //   - codex-hosted / codex-standalone 会重放 provider 历史（不含 skipWebSearchHistory）；
+      //   - codex-none 走 skipWebSearchHistory=true，不重放 web_search_call，故不触发；
+      //   - openchat-custom 走自定义 Provider，不经 Codex 传输层。
+      // 且仅统计 status==='completed' 的 assistant 消息，与 buildCanonicalRequest 完全一致。
+      const replaysHostedHistory = effectiveStrategy === 'codex-hosted' || effectiveStrategy === 'codex-standalone'
+      const segmentMessagesForHistory = this.messages.getBySegmentId(segmentId)
+      const hasHostedWebSearchHistory = replaysHostedHistory && segmentNeedsNonLiteForHostedHistory(segmentMessagesForHistory)
+      const effectiveResponsesLite = this.computeEffectiveResponsesLiteForRequest(modelId, effectiveStrategy, hasHostedWebSearchHistory)
       if (effectiveStrategy === 'codex-hosted' || effectiveStrategy === 'codex-standalone') {
-        console.log('[Codex Transport] model=%s modelResponsesLite=%s effectiveResponsesLite=%s reason=%s',
+        console.log('[Codex Transport] model=%s modelResponsesLite=%s effectiveResponsesLite=%s reason=%s hostedHistory=%s',
           modelId, String(this.modelService.getModelInfo(modelId)?.useResponsesLite === true),
-          String(effectiveResponsesLite), effectiveStrategy)
+          String(effectiveResponsesLite), effectiveStrategy, String(hasHostedWebSearchHistory))
       }
 
       // 自定义 Provider 时切换到当前会话的搜索引擎偏好
@@ -934,8 +948,8 @@ export class ChatGPTConversationService {
       if (isAborted) {
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
-      } else if (err instanceof ImageInputUnsupportedError || err instanceof UnsupportedImageInputError) {
-        // 图片上下文 + 模型/适配器不支持：显式失败，绝不静默降级为纯文本。
+      } else if (err instanceof ImageInputUnsupportedError || err instanceof UnsupportedImageInputError || err instanceof CodexProtocolIsolationError) {
+        // 图片上下文不支持 / Standalone 协议隔离异常：显式失败，绝不静默降级或误报完成。
         this.messages.updateError(assistantMessageId, err.code, err.message)
         this.emitStreamEvent({ type: 'error', conversationId, errorCode: err.code, errorMessage: err.message })
       } else {
@@ -1406,7 +1420,9 @@ export class ChatGPTConversationService {
     const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
     const semIdx2 = standaloneInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
     console.log('[Codex Search Semantics] mode=standalone snippet=%s', semIdx2 >= 0 ? standaloneInstructions.slice(semIdx2, semIdx2 + 200) : 'NOT_FOUND')
-    // standalone 不需 Non-Lite transport：effectiveResponsesLite 继续尊重模型 metadata（由 Policy 传入）。
+    // effectiveResponsesLite 由 runGeneration 的 Transport Policy 统一计算并传入：
+    //   无 hosted 历史 → 尊重模型 metadata（Lite 模型用 Lite）；
+    //   含 hosted 历史 → 强制 Non-Lite（跨模式历史兼容，见 requiresNonLiteTransport）。
     const request = this.buildCanonicalRequest(modelId, standaloneInstructions, segmentId, userText, effort, adapter.protocol, undefined, effectiveResponsesLite)
 
     // 构建 web.run 工具注册表
@@ -1432,6 +1448,13 @@ export class ChatGPTConversationService {
           toolCallName: toolCall.name,
           toolCallArgs: toolCall.arguments,
         })
+      },
+      // 协议隔离兜底：Standalone 轮不应产生新的 hosted web_search_call。
+      // 历史回放不会 produce SSE（历史在 input，不出事件），故此处出现的必是本轮新调用。
+      // 若发生：明确以错误结束本轮，绝不静默丢弃、也不误报为正常完成。
+      onWebSearchCall: () => {
+        console.error('[CodexStandalone] protocol isolation breach: unexpected hosted web_search_call in standalone turn')
+        throw new CodexProtocolIsolationError()
       },
       onToolResult: (callId, toolName, success, rawResults) => {
         if (toolName === 'run') {

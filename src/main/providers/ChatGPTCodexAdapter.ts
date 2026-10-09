@@ -19,6 +19,30 @@ function isDev(): boolean {
   return process.env.NODE_ENV !== 'production'
 }
 
+// 跨模式历史兼容（Standalone 重放 Hosted 历史、Non-Lite）时的工具白名单：
+// 仅允许 client-executed 的 function:run。mode:'auto' = 允许但不强制调用
+// （避免在收尾轮被强制继续调用工具）。
+//
+// ⚠️ 该白名单对 Hosted web_search 的强制隔离能力尚未在真实上游充分验证；
+// 因此 ConversationService 另有"意外 hosted 搜索"兜底检测（CodexProtocolIsolationError）。
+const CODEX_ALLOWED_TOOLS_RUN: Record<string, unknown> = {
+  type: 'allowed_tools',
+  mode: 'auto',
+  tools: [{ type: 'function', name: 'run' }],
+}
+
+// 该轮 wire input 是否声明了 client-executed 的 function:run（additional_tools）。
+// ToolLoop 正常轮注入 registryTools（含 run），收尾轮只 spread initialRequest 不注入，
+// 故收尾轮的 input 不含 run —— 据此区分「正常轮」与「收尾轮」，决定 tool_choice。
+function requestDeclaresRun(input: ProviderInputItem[]): boolean {
+  return input.some(
+    (i) =>
+      'type' in i &&
+      i.type === 'additional_tools' &&
+      (i.tools ?? []).some((t) => (t as { name?: string }).name === 'run')
+  )
+}
+
 export class ChatGPTCodexAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chatgpt_codex'
   readonly capabilities = { toolCalling: true, reasoning: true, supportsImageInput: true }
@@ -62,7 +86,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     useResponsesLite?: boolean
     tools?: unknown[]
     include?: string[]
-    toolChoice?: string | { type: string }
+    toolChoice?: unknown
   } {
     const input: ProviderInputItem[] = []
 
@@ -103,7 +127,7 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       useResponsesLite?: boolean
       tools?: unknown[]
       include?: string[]
-      toolChoice?: string | { type: string }
+      toolChoice?: unknown
     } = {
       model: request.model,
       instructions: request.systemPrompt ?? '',
@@ -113,15 +137,38 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
       useResponsesLite: useResponsesLite || undefined,
     }
 
+    // 跨模式历史兼容（生产）：请求实际重放了 Hosted 的 web_search_call，
+    // 但当前未声明 hosted web_search 工具（即 Standalone 轮）时，必须补顶层 web_search 声明，
+    // 否则上游以 "response protection is unavailable" 拒绝历史重放。
+    // 仅按「实际 wire 中的历史 + 是否已声明 web_search」判断，不按 slug / env / 模式名。
+    const replaysHostedHistory = !useResponsesLite
+      && input.some((i) => 'type' in i && i.type === 'web_search_call')
+    const declaresHostedWebSearch = hostedTools.some((t) => (t as { type?: string }).type === 'web_search')
+    const needsHostedHistoryBridge = replaysHostedHistory && !declaresHostedWebSearch
+
     // hosted 工具：顶层 tools + include 请求来源 URL。Lite 下 hostedTools 恒为空，不会发送。
     if (hostedTools.length > 0) {
       req.tools = hostedTools
       req.include = ['web_search_call.action.sources']
+    } else if (needsHostedHistoryBridge) {
+      // 历史兼容桥：仅为承载历史 web_search_call 而声明顶层 hosted web_search。
+      // 不附带 include（include 仅用于请求 sources 回传，历史已被完整重放，无需重新抓取）。
+      req.tools = [{ type: 'web_search', search_context_size: 'high' }]
     }
 
-    // tool_choice 映射：'required' 且存在 hosted web_search 时，强制 web_search。
-    // Lite 无 hosted 工具，退化为 'auto'/'none'，绝不构造 hosted tool_choice。
-    if (request.toolChoice) {
+    // tool_choice 映射：
+    //   1) 历史兼容桥场景（Standalone 重放 Hosted 历史），按调用方意图优先：
+    //      - 调用方明确 toolChoice='none' → 始终保留 'none'（绝不覆盖为 allowed_tools）；
+    //      - 本轮未声明 run（收尾/wrap-up 轮）→ 'none'，禁用所有新工具（含 Hosted web_search）；
+    //      - 本轮声明 run 且未明确禁止 → allowed_tools(run)，隔离本轮可执行工具。
+    //      ⚠️ allowed_tools 的强制力未经充分验证，故运行期另有"意外 hosted 搜索"兜底检测。
+    //   2) 其余场景保持既有映射（Lite 退化 auto/none；'required'+hosted → 强制 web_search）。
+    if (needsHostedHistoryBridge) {
+      req.toolChoice =
+        request.toolChoice === 'none' || !requestDeclaresRun(input)
+          ? 'none'
+          : CODEX_ALLOWED_TOOLS_RUN
+    } else if (request.toolChoice) {
       if (request.toolChoice === 'required' && hostedTools.length > 0) {
         req.toolChoice = { type: 'web_search' }
       } else if (request.toolChoice === 'none') {
@@ -256,7 +303,10 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
 
     // assistant 消息：buildCanonicalRequest 已拆分为独立消息，每条只有一种内容
     if (msg.role === 'assistant') {
-      // web_search_call（Hosted 搜索）
+      // web_search_call（Hosted 搜索）——provider-native wire item，原样重建。
+      // 传输层（Transport Policy）保证：只要历史含此 item，请求即为 Non-Lite
+      // （见 resolveEffectiveResponsesLite 的 requiresNonLiteTransport），因此这里
+      // 在 Lite 会话中不会出现 hosted web_search_call；无需在此按 Lite 丢弃历史。
       if (msg.webSearchCalls && msg.webSearchCalls.length > 0) {
         return msg.webSearchCalls.map((wsc) => ({
           type: 'web_search_call' as const,
