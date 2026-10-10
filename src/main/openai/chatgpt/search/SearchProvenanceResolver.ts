@@ -143,5 +143,10 @@ When answering questions about which search mechanism was used, treat this metad
 - mode "hosted" = Hosted Web Search (web_search_call). Do NOT call it Standalone or web.run.
 - mode "standalone" = Standalone Web Search (web.run). Do NOT call it Hosted.
 - mode "custom" = OpenChat Custom Web Search (openchat_web_search).
-The current session's search capability does NOT override these historical facts.`
+The current session's search capability does NOT override these historical facts.
+
+These mechanism names classify PAST searches only. They do NOT indicate which tools you may call now:
+- Which tools are callable this turn is determined solely by the current request's declared tool list.
+- A historical tool name (e.g. web.run / run / openchat_web_search) does NOT mean that tool is currently available.
+- Use only the tools actually declared for this request; do not emit calls to tools that appear only in historical records.`
 }

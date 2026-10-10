@@ -153,6 +153,20 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
     ? webSearch.results
     : message.webSearchResults ?? []
   const hasSearchResults = searchResults.length > 0
+  // 内置服务来源（sourceType:'api'，如天气）不是网页，计数时须与网页来源区分，
+  // 避免把「内置服务: oai-weather」误报为「找到 N 个网页」。
+  const webResultCount = searchResults.filter((r) => r.sourceType !== 'api').length
+  const apiResultCount = searchResults.length - webResultCount
+  // 有网页来源、且没有只有内置服务来源时，才用「N 个网页」表述；纯内置服务用中性表述。
+  const searchResultsSummary = (() => {
+    if (hasSearchResults && searchResults.every((r) => r.sourceType === 'api')) {
+      return `${apiResultCount} 个内置服务来源`
+    }
+    if (apiResultCount > 0) {
+      return `${webResultCount} 个参考页面 · ${apiResultCount} 个内置服务来源`
+    }
+    return `${searchResults.length} 个参考页面`
+  })()
 
   // Answer 文本数据源（唯一事实源，二选一，绝不叠加）：
   //   - live owner → 直接用本轮 live answer（bufferedText）；
@@ -410,7 +424,7 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
                   : (webSearch.query ? `正在搜索：${webSearch.query}` : '正在搜索网页...'))
                 : (isStreaming ? webSearch.error : message.webSearchError)
                   ? `搜索失败：${isStreaming ? webSearch.error : message.webSearchError}`
-                  : `搜索到 ${searchResults.length} 个参考页面`
+                  : `搜索到 ${searchResultsSummary}`
               }
             </span>
             {hasSearchResults && (

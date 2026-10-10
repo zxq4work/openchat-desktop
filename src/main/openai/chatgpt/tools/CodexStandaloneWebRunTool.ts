@@ -2,6 +2,7 @@ import type { OpenChatTool, ToolExecutionContext } from '../../../tools/ToolRegi
 import type { OpenChatToolDefinition, CanonicalToolResult, CanonicalMessage } from '../../../../shared/types/provider'
 import type { SearchCommands, ProviderResponseItem } from '../../../../shared/types/webSearch'
 import { SEARCH_COMMANDS_JSON_SCHEMA } from '../../../../shared/schema/searchCommandsSchema'
+import { validateSearchCommands } from '../../../../shared/schema/searchCommandsValidation'
 import { ChatGPTCodexStandaloneSearchClient } from '../search/ChatGPTCodexStandaloneSearchClient'
 import { DEFAULT_SEARCH_SETTINGS } from '../../../../shared/types/webSearch'
 import { randomUUID } from 'crypto'
@@ -38,6 +39,19 @@ export class CodexStandaloneWebRunTool implements OpenChatTool {
 
   async execute(args: unknown, context: ToolExecutionContext): Promise<CanonicalToolResult> {
     const commands: SearchCommands = (args ?? {}) as SearchCommands
+
+    // 发送前校验：拦下已知不受支持的参数（如 weather.date），避免无效请求直接 400。
+    // 报错交由模型用合法参数重试，绝不静默删除/改写用户的原始查询意图。
+    const validation = validateSearchCommands(commands)
+    if (!validation.ok) {
+      console.log('[StandaloneSearch] rejected invalid commands: %s', validation.error)
+      return {
+        callId: '',
+        name: 'run',
+        output: `Error: ${validation.error}`,
+        isError: true,
+      }
+    }
 
     // 诊断日志：只打印 direct-open 数量与 hostname，不打印完整 URL / query
     const directOpenUrls = Array.isArray(commands.open)

@@ -104,8 +104,18 @@ export const SEARCH_COMMANDS_JSON_SCHEMA = {
     },
     weather: {
       type: 'array',
-      description: 'Weather data operations.',
-      items: { type: 'object' },
+      description:
+        'Weather data operations. Each entry requires a location; optionally a start date and a duration in days.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['location'],
+        properties: {
+          location: { type: 'string', description: 'Location to get weather for, e.g. "Beijing" or "San Francisco, CA".' },
+          start: { type: 'string', description: 'Optional start date (YYYY-MM-DD). Defaults to today.' },
+          duration: { type: 'number', description: 'Optional number of days to forecast.' },
+        },
+      },
     },
     sports: {
       type: 'array',

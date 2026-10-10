@@ -24,6 +24,11 @@ import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
 import { segmentNeedsNonLiteForHostedHistory } from './search/searchHistoryCompatibility'
+import {
+  partitionToolHistoryByPortability,
+  buildReadOnlyToolHistoryContent,
+  type ReadOnlyHistoryToolCall,
+} from './history/toolHistoryPortability'
 import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
@@ -39,10 +44,15 @@ import { DEFAULT_WEB_SEARCH_CONFIG } from '../../../shared/types/settings'
 import { ChatGPTUsageService } from './usage/ChatGPTUsageService'
 import { CodexUsageExhaustedError } from '../../../shared/types/usage'
 import { hostnameFromUrl } from '../../../shared/utils/searchDisplay'
+import type { SearchCommands } from '../../../shared/types/webSearch'
 import { supportsImageFromModalities } from '../../../shared/utils/imageCapability'
 import { resolveEffectiveResponsesLite } from './transport/responsesTransportPolicy'
 import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandaloneSearchClient'
 import { mergeHostedWebSearchResults } from './search/hostedSearchResults'
+import {
+  buildStandaloneWebSearchResults,
+  parseRunCommands,
+} from './search/standaloneSourceAdapter'
 import {
   CODEX_SEARCH_INSTRUCTIONS,
   CODEX_STANDALONE_SEARCH_INSTRUCTIONS,
@@ -1415,6 +1425,10 @@ export class ChatGPTConversationService {
     let reasoningStartedAt: number | null = null
     let totalReasoningDuration = 0
     let reasoningTextAccum = ''
+    // 按 callId 记录 run 的真实 commands 与成功状态，供构建展示来源（含内置服务来源）时
+    // 以「实际提交的 weather 命令 + 真实执行成功」判定，绝不从自然语言推断。
+    const runCallCommands = new Map<string, SearchCommands | undefined>()
+    const runCallSuccess = new Map<string, boolean>()
 
     // 先构建 canonical request 以获取对话历史，传给 web.run 工具
     const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
@@ -1441,6 +1455,9 @@ export class ChatGPTConversationService {
 
     const callbacks: ToolLoopCallbacks = {
       onToolCall: (toolCall: CanonicalToolCall) => {
+        if (toolCall.name === 'run') {
+          runCallCommands.set(toolCall.id, parseRunCommands(toolCall.arguments))
+        }
         this.emitStreamEvent({
           type: 'web-search-started',
           conversationId,
@@ -1458,12 +1475,14 @@ export class ChatGPTConversationService {
       },
       onToolResult: (callId, toolName, success, rawResults) => {
         if (toolName === 'run') {
+          if (callId) runCallSuccess.set(callId, success)
           if (success) {
+            // 成功：发出展示来源 = 服务端网页 results +（真实 weather 成功时）内置服务来源。
             this.emitStreamEvent({
               type: 'web-search-completed',
               conversationId,
               toolCallId: callId,
-              webSearchResults: rawResults,
+              webSearchResults: buildStandaloneWebSearchResults(runCallCommands.get(callId), rawResults, true),
             })
           } else {
             this.emitStreamEvent({
@@ -1530,25 +1549,25 @@ export class ChatGPTConversationService {
     this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
-    // 持久化搜索结果
+    // 持久化展示来源：服务端网页 results +（真实成功 weather 时补充的）内置服务来源。
     if (result.toolCallHistory.length > 0) {
       const allResults: Array<{ title: string | null; url: string | null; snippet: string | null; sourceType?: 'web' | 'api' }> = []
       for (const entry of result.toolCallHistory) {
         if (entry.name !== 'run') continue
-        for (const item of entry.rawResults) {
-          if (item && typeof item === 'object') {
-            const obj = item as Record<string, unknown>
-            allResults.push({
-              title: (typeof obj.title === 'string' ? obj.title : null) ?? (typeof obj.name === 'string' ? obj.name : null),
-              url: (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null),
-              snippet: (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null),
-              sourceType: 'web',
-            })
-          }
-        }
+        const weatherSucceeded = runCallSuccess.get(entry.callId) === true
+        const entryResults = buildStandaloneWebSearchResults(
+          runCallCommands.get(entry.callId),
+          entry.rawResults,
+          weatherSucceeded
+        )
+        allResults.push(...entryResults)
       }
-      if (allResults.length > 0) {
-        this.messages.updateWebSearchResults(assistantMessageId, allResults)
+      // 按标题去重：多个 weather 调用不重复展示同一内置服务来源。
+      const deduped = allResults.filter(
+        (r, i) => allResults.findIndex((o) => o.title === r.title && o.url === r.url) === i
+      )
+      if (deduped.length > 0) {
+        this.messages.updateWebSearchResults(assistantMessageId, deduped)
       }
     }
 
@@ -1981,6 +2000,8 @@ User message: ${userText}${contextHint}`
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
+    // 记录无法被目标协议原生重放的历史工具调用（折叠为只读历史记录，见下）。
+    const readOnlyToolCalls: ReadOnlyHistoryToolCall[] = []
 
     for (const msg of segmentMessages) {
       if (msg.status !== 'completed') continue
@@ -2005,12 +2026,17 @@ User message: ${userText}${contextHint}`
       if (msg.role === 'assistant') {
         // 解析 providerPayloadJson，按真实执行顺序重建 history
         let webSearchCalls: CanonicalWebSearchCall[] | undefined
+        // 源 Provider / Protocol 身份（用于只读历史说明「历史工具来自哪个 Provider」）。
+        let srcProvider: string | undefined
+        let srcProtocol: string | undefined
         // 按原始顺序收集的 tool items（function_call + function_call_output 交替）
         const orderedToolItems: Array<{ type: 'function_call'; call_id: string; name: string; namespace?: string; arguments: string } | { type: 'function_call_output'; call_id: string; output: string }> = []
 
         if (msg.providerPayloadJson && !skipWebSearchHistory) {
           try {
             const payload = JSON.parse(msg.providerPayloadJson) as Record<string, unknown>
+            srcProvider = typeof payload.provider === 'string' ? payload.provider : undefined
+            srcProtocol = typeof payload.protocol === 'string' ? payload.protocol : undefined
 
             // V2 schema: { provider, protocol, items }
             if (payload.items && Array.isArray(payload.items)) {
@@ -2105,7 +2131,20 @@ User message: ${userText}${contextHint}`
         }
 
         // 2. 按原始顺序发射 function_call / function_call_output
-        for (const item of orderedToolItems) {
+        // 先按目标协议判定可移植性：只把目标 Provider 能理解的 native 工具调用重放为原生结构；
+        // 其余（如 Codex standalone 的 run@web 重放给自定义 Provider）折叠为有界只读历史记录，
+        // 且 function_call 与其 output 成对处理，绝不产生孤立的 role=tool 消息。
+        const { portable, readOnlyCalls } = partitionToolHistoryByPortability(orderedToolItems, targetProtocol)
+        // 合并源 Provider / Protocol 身份，供只读历史如实说明历史工具来源。
+        if (readOnlyCalls.length > 0) {
+          const enriched = readOnlyCalls.map((c) => ({
+            ...c,
+            sourceProvider: srcProvider,
+            sourceProtocol: srcProtocol,
+          }))
+          readOnlyToolCalls.push(...enriched)
+        }
+        for (const item of portable) {
           if (item.type === 'function_call') {
             messages.push({
               role: 'assistant',
@@ -2146,6 +2185,18 @@ User message: ${userText}${contextHint}`
       const ctx = buildAllProvenanceContext(allProvenances, skipWebSearchHistory)
       instructions = instructions + '\n\n' + ctx
       console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), skipWebSearchHistory ? 'true' : 'false')
+    }
+
+    // 不可移植的历史工具调用 → 有界只读历史记录（明确标注非当前可用工具，保留真实结果）。
+    // 信任边界：arguments / output 可能含网页等外部来源的任意文本，属数据非指令。
+    // 因此作为**低信任历史数据**插入 messages（一条纯文本 user 消息，紧随重建的历史之后、
+    // 当前用户消息之前），绝不拼进 systemPrompt / developer / Codex 顶层 instructions。
+    if (readOnlyToolCalls.length > 0) {
+      const roContent = buildReadOnlyToolHistoryContent(readOnlyToolCalls)
+      if (roContent) {
+        messages.push({ role: 'user', content: roContent })
+        console.log('[History Portability] target=%s readOnly=%d', targetProtocol ?? 'codex', readOnlyToolCalls.length)
+      }
     }
 
     // 如果 userText 不在 messages 中，追加
