@@ -517,7 +517,7 @@ export function App() {
     }))
 
     disposers.push(window.openchat.events.onChatError((event: unknown) => {
-      const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string }
+      const e = event as { errorCode?: string; errorMessage?: string; conversationId?: string; completedAt?: number }
       const streamingId = useChatStreamStore.getState().streamingConversationId
       console.log('[App RAW] chat-error conversationId=%s errorCode=%s streamingId=%s status=%s', e.conversationId ?? '?', e.errorCode ?? '?', streamingId ?? 'null', useChatStreamStore.getState().status)
       if (e.conversationId && streamingId && e.conversationId !== streamingId) { console.log('[App RAW] chat-error SKIP: conversation mismatch'); return }
@@ -559,6 +559,8 @@ export function App() {
             reasoningText: finalReasoningText || streamState.reasoningText || updated[lastAssistantIdx].reasoningText,
             errorCode: e.errorCode ?? 'StreamFailed',
             errorMessage: e.errorMessage ?? 'Unknown error',
+            // 失败同样属于终态：用 Main 的真实结束时间戳标注时间
+            updatedAt: typeof e.completedAt === 'number' ? e.completedAt : Date.now(),
           }
           useConversationStore.getState().setActiveMessages(updated)
         }
@@ -627,7 +629,7 @@ export function App() {
     }))
 
     disposers.push(window.openchat.events.onTurnCompleted((event: unknown) => {
-      const e = event as { conversationId?: string }
+      const e = event as { conversationId?: string; completedAt?: number }
       console.log('[App RAW] turn-completed conversationId=%s', e.conversationId ?? '?')
       const streamingId = useChatStreamStore.getState().streamingConversationId
       if (e.conversationId && streamingId && e.conversationId !== streamingId) return
@@ -691,6 +693,8 @@ export function App() {
               : updated[lastAssistantIdx].webSearchResults,
             webSearchError: streamState.webSearchStatus.error ?? updated[lastAssistantIdx].webSearchError,
             status: 'completed',
+            // 回答完成时间：优先用 Main 的真实完成时间戳，缺失时才回退本地时钟
+            updatedAt: typeof e.completedAt === 'number' ? e.completedAt : Date.now(),
           }
           console.log('[App turn-completed] updated contentLen=%d', updated[lastAssistantIdx].content.length)
           useConversationStore.getState().setActiveMessages(updated)

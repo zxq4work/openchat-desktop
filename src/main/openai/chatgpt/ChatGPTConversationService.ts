@@ -143,6 +143,9 @@ export interface StreamEvent {
   toolCallArgs?: string
   toolCallError?: string
   webSearchResults?: unknown[]
+  // 终态时间戳：turn-completed / error 时由 Main 写入，供 Renderer 展示
+  // 「回答完成时间」。是主进程真实完成时刻，绝非渲染时生成的时间。
+  completedAt?: number
 }
 
 type ToolCapability = 'unknown' | 'supported' | 'unsupported' | 'nonstandard'
@@ -225,6 +228,10 @@ export class ChatGPTConversationService {
   }
 
   private emitStreamEvent(event: StreamEvent): void {
+    // 终态事件补上真实完成时间戳（主进程时钟），供 UI 展示回答完成时间
+    if ((event.type === 'turn-completed' || event.type === 'error') && event.completedAt === undefined) {
+      event.completedAt = Date.now()
+    }
     // 发送 UI 前检查是否仍有 citation 泄漏
     if (event.type === 'delta' && event.text) {
       citationDebugTracker.checkEmit(event.text)

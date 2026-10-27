@@ -3,6 +3,7 @@ import type { Message } from '../../../shared/types/conversation'
 import { useUiStore } from '../../stores/uiStore'
 import { imageAttachments, thumbnailUrl } from '../../packages/attachmentUrl'
 import { openMessageContextMenu, openImageContextMenu } from '../../packages/messageMenu'
+import { MessageFooter } from './MessageFooter'
 
 interface Props {
   message: Message
@@ -51,6 +52,7 @@ export function UserMessage({ message }: Props) {
         </div>
       )}
       {message.content && <div className="message-content">{message.content}</div>}
+      <MessageFooter content={message.content} timestamp={message.createdAt} align="right" />
     </div>
   )
 }

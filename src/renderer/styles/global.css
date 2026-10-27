@@ -938,8 +938,16 @@ textarea {
 
 /* Assistant message — clean, no heavy bubble */
 .assistant-message .message-content {
-  padding: 4px 0;
+  padding: 4px 0 0;
   color: var(--text-primary);
+}
+
+/* 末尾 Markdown 块（p / ul / pre 等）默认带 10~12px 下外边距，
+   会把时间/复制行额外推远且随结尾元素变化。归零后，
+   正文底部到 footer 的间距统一由 .message-footer 的 margin-top 控制，
+   与用户消息气泡底边到时间行的间距保持一致。 */
+.assistant-message .message-content .markdown-body > :last-child {
+  margin-bottom: 0;
 }
 
 .message-status {
@@ -947,6 +955,57 @@ textarea {
   color: var(--text-muted);
   margin-top: 6px;
   font-style: italic;
+}
+
+/* 消息底部：时间 + 单条复制。时间浅灰小字号，不抢正文视觉。 */
+.message-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  min-height: 18px;
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.message-footer--right {
+  justify-content: flex-end;
+}
+
+.message-footer--left {
+  justify-content: flex-start;
+}
+
+.message-time {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+.message-copy-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: color 150ms ease, background-color 150ms ease, opacity 150ms ease;
+}
+
+.message-copy-button:hover {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  opacity: 1;
+}
+
+.message-copy-button:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
 }
 
 .message-error {
