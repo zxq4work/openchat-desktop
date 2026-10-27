@@ -31,17 +31,30 @@ const CODEX_ALLOWED_TOOLS_RUN: Record<string, unknown> = {
   tools: [{ type: 'function', name: 'run' }],
 }
 
+// 收集该轮 wire input 中声明的 client-executed 工具名（additional_tools）。
+function declaredClientToolNames(input: ProviderInputItem[]): Set<string> {
+  const names = new Set<string>()
+  for (const i of input) {
+    if ('type' in i && i.type === 'additional_tools') {
+      for (const t of i.tools ?? []) {
+        const n = (t as { name?: string }).name
+        if (typeof n === 'string') names.add(n)
+      }
+    }
+  }
+  return names
+}
+
 // 该轮 wire input 是否声明了 client-executed 的 function:run（additional_tools）。
 // ToolLoop 正常轮注入 registryTools（含 run），收尾轮只 spread initialRequest 不注入，
 // 故收尾轮的 input 不含 run —— 据此区分「正常轮」与「收尾轮」，决定 tool_choice。
 function requestDeclaresRun(input: ProviderInputItem[]): boolean {
-  return input.some(
-    (i) =>
-      'type' in i &&
-      i.type === 'additional_tools' &&
-      (i.tools ?? []).some((t) => (t as { name?: string }).name === 'run')
-  )
+  return declaredClientToolNames(input).has('run')
 }
+
+// 统一只读历史工具名。它也是 client-executed 工具，需一并纳入历史兼容桥的 allowed_tools 白名单，
+// 否则在 Standalone 重放 Hosted 历史的轮次中会被白名单排除而无法调用。
+const READ_HISTORY_TOOL = 'openchat_read_history'
 
 export class ChatGPTCodexAdapter implements ModelAdapter {
   readonly protocol: ProviderProtocol = 'chatgpt_codex'
@@ -164,10 +177,22 @@ export class ChatGPTCodexAdapter implements ModelAdapter {
     //      ⚠️ allowed_tools 的强制力未经充分验证，故运行期另有"意外 hosted 搜索"兜底检测。
     //   2) 其余场景保持既有映射（Lite 退化 auto/none；'required'+hosted → 强制 web_search）。
     if (needsHostedHistoryBridge) {
-      req.toolChoice =
-        request.toolChoice === 'none' || !requestDeclaresRun(input)
-          ? 'none'
-          : CODEX_ALLOWED_TOOLS_RUN
+      if (request.toolChoice === 'none' || !requestDeclaresRun(input)) {
+        req.toolChoice = 'none'
+      } else if (declaredClientToolNames(input).has(READ_HISTORY_TOOL)) {
+        // 多声明了统一只读历史工具：白名单需同时包含 run 与 read-history，
+        // 否则 read-history 会被白名单排除而无法调用。未声明时行为完全不变（仅 run）。
+        req.toolChoice = {
+          type: 'allowed_tools',
+          mode: 'auto',
+          tools: [
+            { type: 'function', name: 'run' },
+            { type: 'function', name: READ_HISTORY_TOOL },
+          ],
+        }
+      } else {
+        req.toolChoice = CODEX_ALLOWED_TOOLS_RUN
+      }
     } else if (request.toolChoice) {
       if (request.toolChoice === 'required' && hostedTools.length > 0) {
         req.toolChoice = { type: 'web_search' }

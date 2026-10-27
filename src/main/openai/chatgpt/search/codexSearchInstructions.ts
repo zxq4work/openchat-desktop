@@ -1,62 +1,24 @@
 // ChatGPT / Codex 搜索 instructions 纯字符串常量
 // 拆分到独立模块，便于单元测试直接断言文案（无需加载 StorageService / WASM）
-// 三套搜索语义严格分离：
-//   Hosted     → provider-native web_search
-//   Standalone → namespace=web / name=run → /backend-api/codex/alpha/search
-//   Custom     → openchat_web_search / openchat_web_fetch（见 ChatGPTConversationService.SEARCH_INSTRUCTIONS）
+//
+// 三种搜索语义严格隔离，互不引用、互不训练：
+//   Hosted     → provider-native web_search（本文件 CODEX_SEARCH_INSTRUCTIONS）
+//   Standalone → namespace=web / name=run → /backend-api/codex/alpha/search（CODEX_STANDALONE_SEARCH_INSTRUCTIONS）
+//   Custom     → openchat_web_search / openchat_web_fetch（见 ChatGPTConversationService 的 SEARCH_INSTRUCTIONS）
+//
+// 关键不变量：Hosted 上下文绝不出现 Standalone（web.run）的工具说明或归因规则，反之亦然。
+// 每个模式只描述「本模式的工具用法」与「本模式的自我识别」，绝不向模型介绍其它机制，
+// 避免模型把历史/其它模式误当成本轮实际执行的工具。
 
-// Codex 搜索模式语义判定规则（Hosted 和 Standalone 共用）
-export const CODEX_SEARCH_MODE_SEMANTICS = `<!-- CODEX_SEARCH_MODE_SEMANTICS_V1 -->
-## Web Search Modes in OpenChat
+// Hosted 模式的自我识别标记（供运输层脱敏诊断确认该段是否进入最终 instructions）。
+export const CODEX_HOSTED_SEARCH_MODE_MARKER = '<!-- CODEX_HOSTED_SEARCH_MODE_V1 -->'
+// Standalone 模式的自我识别标记。
+export const CODEX_STANDALONE_SEARCH_MODE_MARKER = '<!-- CODEX_STANDALONE_SEARCH_MODE_V1 -->'
 
-There are THREE distinct web search mechanisms. They are NOT interchangeable. When asked "what tool did you use" or "what search mode was used", identify the correct one from the conversation history items — NOT from the current instructions or current search mode.
-
-### 1. Hosted Web Search (provider-native)
-- History item type: \`web_search_call\` with \`action.type\` (e.g. \`search\`)
-- Executed server-side by the Codex backend. NOT a client function tool.
-- Do NOT call it \`web.run\`. Do NOT call it "Standalone" or a "function tool".
-- \`action.sources\` may contain:
-  - \`{ type: "url", url, title }\` — ordinary web page source
-  - \`{ type: "api", name: "oai-weather" }\` — built-in API data source (e.g. weather)
-- Both are still Hosted Web Search. An \`api\` source does NOT mean a separate "weather tool" was called; it means Hosted Search used an internal API data source. Describe it as: "Hosted Web Search used the built-in oai-weather data source."
-
-### 2. Standalone Web Search (web.run)
-- History item type: \`function_call\` with \`namespace: "web"\` and \`name: "run"\`, paired with a corresponding \`function_call_output\`
-- Client-side tool executed via /backend-api/codex/alpha/search. Often referred to as \`web.run\` or Standalone Web Search.
-- This is NEVER Hosted Web Search. Do NOT call it "Hosted", "hosted search", "本地搜索", or "local search".
-- If the history contains \`{ type: "function_call", name: "run", namespace: "web" }\` + \`function_call_output\`, the search was Standalone — regardless of what the current instructions say about "web_search" or "Hosted".
-
-### 3. OpenChat Custom Web Search
-- History item type: \`function_call\` with \`name: "openchat_web_search"\` (no namespace)
-- Client-side tool used by non-Codex custom providers.
-
-## Rules for answering "what tool/mode did you use"
-
-You MUST determine the search mode from the ACTUAL history item type in the conversation input. Do NOT guess from:
-- the result content (web pages, weather data, news, etc. do NOT determine the mode)
-- the current instructions (they describe the CURRENT session's tool, not the HISTORY)
-- the current SearchMode (it applies to this turn only, not to previous turns)
-
-Strict mapping:
-- \`type: web_search_call\` → answer "Hosted Web Search". Do NOT answer \`web.run\`, "Standalone", or "function tool".
-- \`type: function_call\` with \`namespace=web, name=run\` + \`function_call_output\` → answer "Standalone Web Search (web.run)". Do NOT answer "Hosted" or "hosted search".
-- \`type: function_call\` with \`name=openchat_web_search\` → answer "OpenChat Custom Web Search".
-
-## Most recent search takes priority
-
-When the user asks about "刚才", "上一次", "刚刚", "the previous search", or "what search was used", identify the MOST RECENT completed search tool call in the conversation history.
-
-- Most recent \`web_search_call\` → Hosted Web Search
-- Most recent \`function_call(namespace=web, name=run)\` + \`function_call_output\` → Standalone Web Search
-
-Do NOT classify an older search event when a newer completed search exists. For example, if the history contains both an earlier Hosted \`web_search_call\` and a later Standalone \`function_call web.run\`, and the user asks "刚才用了什么", the answer is Standalone — because that is the most recent search.
-
-Examples:
-- History item \`{ "type": "web_search_call", "action": { "type": "search" } }\` → This was Hosted Web Search
-- History item \`{ "type": "function_call", "name": "run", "namespace": "web" }\` + \`{ "type": "function_call_output" }\` → This was Standalone Web Search (web.run)`
-
-// Hosted 搜索指令：web_search 为 provider-native 工具，服务端执行
-// 注意：Hosted 路径只注册 web_search，不存在 openchat_web_fetch，禁止声明不存在的 Tool
+// Hosted 搜索指令：web_search 为 provider-native 工具，服务端执行。
+// 注意：Hosted 路径只注册 web_search（provider-native）与统一只读历史工具 openchat_read_history
+// （client-executed，经 additional_tools 声明）；不存在 openchat_web_fetch / run，禁止声明不存在的 Tool。
+// 只读历史工具的存在由工具自身的 description 说明，无需在此指令里重复声明。
 export const CODEX_SEARCH_INSTRUCTIONS = `You have access to web search via the Hosted web_search tool. This describes your CURRENT capability for this turn.
 
 When you truly need external or up-to-date information, you may call web_search.
@@ -98,10 +60,13 @@ Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.
 
-` + CODEX_SEARCH_MODE_SEMANTICS
+${CODEX_HOSTED_SEARCH_MODE_MARKER}
+## Search mechanism for THIS turn
 
-// Standalone 搜索指令：web.run 通过 additional_tools 声明，模型自主决定是否调用
-// open 支持 search-result ref 与 fully-qualified HTTP/HTTPS URL 两种 ref_id
+This turn, web search is performed by the backend's native \`web_search\` tool. When you describe a search you performed in this turn, call it "Hosted Web Search". A hosted lookup that returns a built-in data source (for example \`oai-weather\`) is still Hosted Web Search. If you performed no web search in this turn, do not claim that you did.`
+
+// Standalone 搜索指令：web.run 通过 additional_tools 声明，模型自主决定是否调用。
+// open 支持 search-result ref 与 fully-qualified HTTP/HTTPS URL 两种 ref_id。
 export const CODEX_STANDALONE_SEARCH_INSTRUCTIONS = `You have access to web search via the web.run tool (namespace: web, name: run). This describes your CURRENT capability for this turn.
 
 When you truly need external or up-to-date information, you may call web.run.
@@ -155,4 +120,7 @@ Prefer primary and authoritative sources when possible.
 Never claim that you searched the web unless a web tool was actually executed.
 When using web results, cite relevant source URLs in the final answer.
 
-` + CODEX_SEARCH_MODE_SEMANTICS
+${CODEX_STANDALONE_SEARCH_MODE_MARKER}
+## Search mechanism for THIS turn
+
+This turn, web search is performed by the client tool \`run\` (namespace "web"). When you describe a search you performed in this turn, call it "Standalone Web Search (web.run)". If you performed no web search in this turn, do not claim that you did.`

@@ -5,6 +5,7 @@ import {
   parseRunCommands,
   buildWeatherServiceSource,
   buildStandaloneWebSearchResults,
+  dedupeWeatherServiceSources,
 } from './standaloneSourceAdapter'
 import type { SearchCommands } from '../../../../shared/types/webSearch'
 
@@ -109,5 +110,37 @@ describe('历史恢复（序列化往返）', () => {
     expect(roundTripped).toHaveLength(2)
     expect(roundTripped[0]).toMatchObject({ url: 'https://w.example', sourceType: 'web' })
     expect(roundTripped[1]).toMatchObject({ url: null, sourceType: 'api' })
+  })
+})
+
+
+describe('dedupeWeatherServiceSources — 多次 run 的实时/持久化一致性', () => {
+  it('仅去重重复 oai-weather，保留重复 URL 的普通网页来源', () => {
+    const weather = buildWeatherServiceSource()
+    const web = { title: '同一网页', url: 'https://same.example', snippet: 'S', sourceType: 'web' as const }
+    const otherApi = { title: '内置服务: other', url: null, snippet: null, sourceType: 'api' as const }
+    expect(dedupeWeatherServiceSources([web, weather, web, weather, otherApi, otherApi])).toEqual([
+      web, weather, web, otherApi, otherApi,
+    ])
+  })
+
+  it('多次天气查询时实时增量来源和最终持久化来源一致', () => {
+    const first = buildStandaloneWebSearchResults(WEATHER_CMD, [], true)
+    const second = buildStandaloneWebSearchResults(
+      { weather: [{ location: '上海' }], search_query: [{ q: '城市天气' }] },
+      [{ title: '网页 A', url: 'https://a.example' }, { title: '网页 A', url: 'https://a.example' }],
+      true
+    )
+    let live: typeof first = []
+    const events: typeof first[] = []
+    for (const batch of [first, second]) {
+      const next = dedupeWeatherServiceSources([...live, ...batch])
+      events.push(next.slice(live.length))
+      live = next
+    }
+    const persisted = dedupeWeatherServiceSources([...first, ...second])
+    expect(events.flat()).toEqual(persisted)
+    expect(persisted.filter((r) => r.sourceType === 'api')).toHaveLength(1)
+    expect(persisted.filter((r) => r.sourceType === 'web')).toHaveLength(2)
   })
 })

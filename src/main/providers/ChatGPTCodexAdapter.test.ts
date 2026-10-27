@@ -417,6 +417,23 @@ describe('ChatGPTCodexAdapter — 跨模式历史兼容（Standalone 重放 Host
     expect(b.input.filter((i) => i.type === 'web_search_call')).toHaveLength(1)
   })
 
+  it('hosted 历史 + 声明 run 与 read-history → 白名单同时包含两者（read-history 不被排除）', () => {
+    const b = build({
+      ...standaloneRunRoundWithHostedHistory(),
+      tools: [tool('run'), tool('openchat_read_history')],
+    })
+    expect(b.toolChoice).toEqual({
+      type: 'allowed_tools',
+      mode: 'auto',
+      tools: [
+        { type: 'function', name: 'run' },
+        { type: 'function', name: 'openchat_read_history' },
+      ],
+    })
+    // 两个 client 工具都进入 additional_tools
+    expect(additionalTools(b).map((t) => t.name)).toEqual(['run', 'openchat_read_history'])
+  })
+
   it('优先：hosted 历史 + 未声明 run → none（即便 toolChoice=auto 也不放开工具）', () => {
     const b = build({
       ...reqFor('low', false),

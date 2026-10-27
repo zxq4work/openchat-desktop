@@ -265,3 +265,105 @@ describe('ToolLoopController — max_rounds=2 Wrap-up 端到端 wire（Standalon
     expect(additionalToolNames(requests[2])).toEqual([])
   })
 })
+
+// =====================================================================
+// 只读历史工具（openchat_read_history）的独立、有界继续调用预算。
+// 覆盖：历史分页不挤占普通 maxRounds；分页可继续直到读完；超出预算返回明确未完成；
+// 重复页无进展时中止；普通工具语义不变。
+// =====================================================================
+
+const READ_HISTORY = 'openchat_read_history'
+
+// 一轮脚本：仅发起一次指定工具调用（无最终文本），用于驱动连续多轮。
+const toolCallScript = (name: string, callId: string, args: object): ResponsesSSEEvent[] => [
+  created(`resp_${callId}`),
+  {
+    type: 'response.output_item.done',
+    item: { type: 'function_call', id: `fc_${callId}`, call_id: callId, name, arguments: JSON.stringify(args) },
+    output_index: 0,
+  },
+  { type: 'response.completed', response: {} },
+]
+
+function readHistoryController(script: ResponsesSSEEvent[][], maxRounds: number, maxHistoryReadCalls?: number) {
+  const registry = new ToolRegistry()
+  registry.register(READ_HISTORY, {
+    definition: { name: READ_HISTORY, description: '', parameters: { type: 'object' } },
+    execute: async (): Promise<CanonicalToolResult> => ({ callId: '', name: READ_HISTORY, output: '{"ok":true}' }),
+  })
+  const { client, requests } = recordedClient(script)
+  const adapter = new ChatGPTCodexAdapter(client)
+  const controller = new ToolLoopController(adapter, registry, undefined, {}, { maxRounds, maxHistoryReadCalls })
+  return { controller, requests }
+}
+
+describe('ToolLoopController — 只读历史工具独立预算', () => {
+  it('maxRounds=2 时历史分页可继续到 hasMore=false（不挤占普通轮）', async () => {
+    // 4 次 read（模拟分页）+ 1 次 final。普通 maxRounds=2 但历史读取不应触发 wrap-up。
+    const script = [
+      toolCallScript(READ_HISTORY, 'h1', { action: 'read', callId: 'c', offset: 0, limit: 4000 }),
+      toolCallScript(READ_HISTORY, 'h2', { action: 'read', callId: 'c', offset: 4000, limit: 4000 }),
+      toolCallScript(READ_HISTORY, 'h3', { action: 'read', callId: 'c', offset: 8000, limit: 4000 }),
+      toolCallScript(READ_HISTORY, 'h4', { action: 'read', callId: 'c', offset: 12000, limit: 4000 }),
+      finalAnswerScript('已读完'),
+    ]
+    const { controller, requests } = readHistoryController(script, 2)
+    const result = await controller.run(req, new AbortController().signal, callbacksWith({}))
+    // 5 次 wire 请求：4 次历史 read + 1 次最终回答；未在 maxRounds=2 处被迫 wrap-up
+    expect(requests).toHaveLength(5)
+    expect(result.totalToolCalls).toBe(4)
+    expect(result.finalText).toBe('已读完')
+  })
+
+  it('超出历史读取预算 → 返回明确未完成错误（不是静默成功），模型据此给出回答', async () => {
+    // maxHistoryReadCalls=2，但脚本请求 3 次 read → 第 3 次被拦截为预算耗尽。
+    const script = [
+      toolCallScript(READ_HISTORY, 'h1', { action: 'read', callId: 'c', offset: 0, limit: 4000 }),
+      toolCallScript(READ_HISTORY, 'h2', { action: 'read', callId: 'c', offset: 4000, limit: 4000 }),
+      toolCallScript(READ_HISTORY, 'h3', { action: 'read', callId: 'c', offset: 8000, limit: 4000 }),
+      finalAnswerScript('回答'),
+    ]
+    const { controller } = readHistoryController(script, 3, 2)
+    const outputs: string[] = []
+    await controller.run(req, new AbortController().signal, callbacksWith({
+      onToolResult: (_id, _name, _ok, _raw, err) => { if (err) outputs.push(err) },
+    }))
+    expect(outputs.some((o) => o.includes('HISTORY_READ_BUDGET_EXCEEDED'))).toBe(true)
+  })
+
+  it('重复读取同一页（无进展）→ 返回明确错误，避免无限循环', async () => {
+    const dup = { action: 'read', callId: 'c', offset: 0, limit: 4000 }
+    const script = [
+      toolCallScript(READ_HISTORY, 'h1', dup),
+      toolCallScript(READ_HISTORY, 'h2', dup), // 与 h1 完全相同的页 → 无进展
+      finalAnswerScript('回答'),
+    ]
+    const { controller } = readHistoryController(script, 3)
+    const outputs: string[] = []
+    await controller.run(req, new AbortController().signal, callbacksWith({
+      onToolResult: (_id, _name, _ok, _raw, err) => { if (err) outputs.push(err) },
+    }))
+    expect(outputs.some((o) => o.includes('HISTORY_READ_NO_PROGRESS'))).toBe(true)
+  })
+
+  it('普通工具仍严格受 maxRounds 限制（历史预算不影响普通搜索轮次）', async () => {
+    const registry = new ToolRegistry()
+    registry.register('run', runTool)
+    const { client, requests } = recordedClient([
+      runCallScript('c1'),
+      runCallScript('c2'),
+      finalAnswerScript('最终回答'),
+    ])
+    const adapter = new ChatGPTCodexAdapter(client)
+    // 提供很大的历史预算，但普通 run 仍应在 maxRounds=2 处 wrap-up。
+    const controller = new ToolLoopController(adapter, registry, undefined, {}, { maxRounds: 2, maxHistoryReadCalls: 50 })
+    const result = await controller.run(
+      { model: 'gpt-6-astra', systemPrompt: '', messages: [{ role: 'user', content: '问题' }] },
+      new AbortController().signal,
+      callbacksWith({})
+    )
+    expect(requests).toHaveLength(3)
+    expect(result.totalToolCalls).toBe(2)
+    expect(result.finalText).toBe('最终回答')
+  })
+})

@@ -81,3 +81,18 @@ export function buildStandaloneWebSearchResults(
   }
   return results
 }
+
+// 多次 run 查询可能产生重复的本地天气服务来源。只去重这个特定的 API 来源，
+// 绝不去重服务端网页结果或其他 API 来源，保证旧版普通搜索行为不发生变化。
+export function dedupeWeatherServiceSources(results: WebSearchResultItem[]): WebSearchResultItem[] {
+  let seenWeatherService = false
+  return results.filter((result) => {
+    const isWeatherService = result.sourceType === 'api'
+      && result.title === `内置服务: ${WEATHER_SERVICE_NAME}`
+      && result.url === null
+    if (!isWeatherService) return true
+    if (seenWeatherService) return false
+    seenWeatherService = true
+    return true
+  })
+}

@@ -134,16 +134,17 @@ ${queriesStr}`
     : ''
 
   return `<!-- OPENCHAT_SEARCH_PROVENANCE_V1 -->
-All completed searches in this conversation (in chronological order):
+All COMPLETED searches in this conversation so far, in chronological order (these are PAST turns):
 
 ${entries}${disabledNote}
 
-This metadata is deterministically derived from actual provider history.
-When answering questions about which search mechanism was used, treat this metadata as authoritative.
+This metadata is deterministically derived from actual provider history. It lists ONLY turns that have already finished — it never includes the search you perform in the current turn (that is recorded only after the turn completes).
+When answering which search mechanism was used in a PAST turn, treat this metadata as authoritative.
 - mode "hosted" = Hosted Web Search (web_search_call). Do NOT call it Standalone or web.run.
 - mode "standalone" = Standalone Web Search (web.run). Do NOT call it Hosted.
 - mode "custom" = OpenChat Custom Web Search (openchat_web_search).
-The current session's search capability does NOT override these historical facts.
+
+The most recent entry above describes an EARLIER turn, NOT the current turn. If you are asked about the search you just performed now, answer from the tool you actually ran this turn — do NOT read your current-turn mode off this historical list, even if an earlier Standalone web.run is the most recent entry.
 
 These mechanism names classify PAST searches only. They do NOT indicate which tools you may call now:
 - Which tools are callable this turn is determined solely by the current request's declared tool list.

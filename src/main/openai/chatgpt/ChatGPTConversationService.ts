@@ -23,6 +23,10 @@ import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
+import {
+  splitAttributionRequest,
+  buildHostedAttributionStatement,
+} from './search/attributionRequest'
 import { segmentNeedsNonLiteForHostedHistory } from './search/searchHistoryCompatibility'
 import {
   partitionToolHistoryByPortability,
@@ -30,8 +34,9 @@ import {
   type ReadOnlyHistoryToolCall,
 } from './history/toolHistoryPortability'
 import { ToolLoopController } from '../../tools/ToolLoopController'
-import type { ToolLoopCallbacks } from '../../tools/ToolLoopController'
+import type { ToolLoopCallbacks, WebSearchCallEvent } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
+import { ReadHistoryTool, READ_HISTORY_TOOL_NAME } from '../../tools/history/ReadHistoryTool'
 import { WebSearchService } from '../../web-search/WebSearchService'
 import { getSearchEngine } from '../../web-search/SearchEngineFactory'
 import { ProviderConfigService, computeReservedRequestPaths, findDynamicParameterConflict } from '../../providers/ProviderConfigService'
@@ -51,11 +56,14 @@ import { ChatGPTCodexStandaloneSearchClient } from './search/ChatGPTCodexStandal
 import { mergeHostedWebSearchResults } from './search/hostedSearchResults'
 import {
   buildStandaloneWebSearchResults,
+  dedupeWeatherServiceSources,
   parseRunCommands,
 } from './search/standaloneSourceAdapter'
 import {
   CODEX_SEARCH_INSTRUCTIONS,
   CODEX_STANDALONE_SEARCH_INSTRUCTIONS,
+  CODEX_HOSTED_SEARCH_MODE_MARKER,
+  CODEX_STANDALONE_SEARCH_MODE_MARKER,
 } from './search/codexSearchInstructions'
 import { CodexStandaloneWebRunTool } from './tools/CodexStandaloneWebRunTool'
 import { cleanCitationText, CitationStreamBuffer } from '../../services/ai/CitationParser'
@@ -155,6 +163,9 @@ export class ChatGPTConversationService {
   private usageService: ChatGPTUsageService
   private webSearchConfig: WebSearchConfig
   private attachmentService: AttachmentService | null = null
+  // 是否向 tool-calling 会话注册统一只读历史工具（openchat_read_history）。
+  // 默认开启；由构造参数注入，便于测试或按配置关闭，绝不内联硬编码。
+  private readHistoryToolEnabled: boolean
 
   // 全局只允许一个 active generation
   private activeGeneration: {
@@ -178,7 +189,8 @@ export class ChatGPTConversationService {
     toolRegistry: ToolRegistry,
     webSearchService: WebSearchService,
     providerConfigService: ProviderConfigService,
-    webSearchConfig?: WebSearchConfig
+    webSearchConfig?: WebSearchConfig,
+    readHistoryToolEnabled?: boolean
   ) {
     this.storage = storage
     this.conversations = new ConversationRepository(storage)
@@ -192,6 +204,7 @@ export class ChatGPTConversationService {
     this.providerConfigService = providerConfigService
     this.usageService = usageService
     this.webSearchConfig = webSearchConfig ?? { ...DEFAULT_WEB_SEARCH_CONFIG }
+    this.readHistoryToolEnabled = readHistoryToolEnabled ?? true
   }
 
   onStreamEvent(handler: (event: StreamEvent) => void): () => void {
@@ -706,7 +719,8 @@ export class ChatGPTConversationService {
         abortController,
         conversation.webSearchEnabled,
         conversation.codexSearchMode,
-        conversation.searchEngine
+        conversation.searchEngine,
+        userMessage.id
       )
     })
 
@@ -796,7 +810,8 @@ export class ChatGPTConversationService {
     abortController: AbortController,
     webSearchEnabled: boolean,
     codexSearchMode: 'hosted' | 'standalone',
-    searchEngine: 'bing' | 'baidu' | 'google'
+    searchEngine: 'bing' | 'baidu' | 'google',
+    currentUserMessageId?: string
   ): Promise<void> {
     console.log('[runGeneration] entry conversationId=%s modelId=%s providerConfigId=%s webSearch=%s', conversationId, modelId, providerConfigId ?? 'codex', webSearchEnabled)
     // 兜底图片能力拦截（sendMessage 已拦一次，这里覆盖 runGeneration 直接调用方）
@@ -822,6 +837,9 @@ export class ChatGPTConversationService {
         conversationSystemPrompt,
       ].join('\n')
 
+      // 本轮可信指令：基础 metadata + 当前模型 instructions。
+      // 搜索模式的「本轮自我识别」内嵌在按策略隔离的搜索指令尾部（见 codexSearchInstructions），
+      // 由对应生成路径在 instructions 之后拼接，无需在此单独追加声明。
       const instructions = modelInstructions
         ? `${modelInstructions}\n\n${baseMetadata}`
         : baseMetadata
@@ -857,6 +875,11 @@ export class ChatGPTConversationService {
             : 'none'
       console.log('[Search Strategy] provider=%s strategy=%s engine=%s', providerConfigId ?? 'codex', effectiveStrategy, engineLabel)
 
+      // 本轮搜索模式自我识别不再单独的 currentSearchMode 声明，而是内嵌在按策略隔离的
+      // 搜索指令中（Hosted → CODEX_SEARCH_INSTRUCTIONS 尾部；Standalone → CODEX_STANDALONE_
+      // SEARCH_INSTRUCTIONS 尾部）。每个模式只描述自身工具与自我识别，互不引入对方机制，
+      // 避免叠加同义提示或在 Hosted 指令中出现 web.run 归因规则。
+
       // 正式 Transport Policy：search strategy resolve 完成后、发请求之前，
       // 计算本次唯一的 effectiveResponsesLite（codex-hosted → 强制 Non-Lite）。
       // 该值统一下传给所有 codex 生成路径，驱动 header / reasoning.context /
@@ -885,12 +908,18 @@ export class ChatGPTConversationService {
       }
 
       switch (effectiveStrategy) {
-        case 'codex-hosted':
+        case 'codex-hosted': {
+          // 工具归因分离（仅 Hosted）：识别「句尾独立归因要求」后，模型只回答实质问题，
+          // 归因由本轮真实 web_search_call 事件在收尾处生成。未命中封闭短语表 → null，走原流程。
+          const attribution = splitAttributionRequest(userText)
           await this.runGenerationWithCodexHostedSearch(
             conversationId, adapter, modelId, instructions, effort, assistantMessageId, userText, segmentId, abortController,
-            effectiveResponsesLite
+            effectiveResponsesLite,
+            attribution ?? undefined,
+            currentUserMessageId
           )
           break
+        }
 
         case 'codex-standalone':
           await this.runGenerationWithCodexStandaloneSearch(
@@ -1020,12 +1049,19 @@ export class ChatGPTConversationService {
     let totalReasoningDuration = 0
     let reasoningTextAccum = ''
 
-    const controller = new ToolLoopController(adapter, this.toolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
+    // 统一只读历史工具：按当前会话消息构造，作用域限定在本会话。
+    // 与联网工具（openchat_web_search / openchat_web_fetch）注册在同一循环内，
+    // 使任意具备 tool-calling 能力的 Provider 都能通过统一接口按需读取真实历史结果。
+    const roundRegistry = this.buildRoundToolRegistry(conversationId)
+
+    const controller = new ToolLoopController(adapter, roundRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
       maxRounds: this.webSearchConfig.maxToolRounds,
     })
 
     const callbacks: ToolLoopCallbacks = {
       onToolCall: (toolCall: CanonicalToolCall) => {
+        // 只读历史工具读取的是本地历史，不是联网搜索：不发出「搜索中」UI 事件。
+        if (toolCall.name === READ_HISTORY_TOOL_NAME) return
         this.emitStreamEvent({
           type: 'web-search-started',
           conversationId,
@@ -1035,6 +1071,8 @@ export class ChatGPTConversationService {
         })
       },
       onToolResult: (callId, toolName, success, rawResults, errorOutput) => {
+        // 只读历史工具无搜索结果卡片，不发出 web-search-* UI 事件。
+        if (toolName === READ_HISTORY_TOOL_NAME) return
         if (toolName === 'openchat_web_fetch') {
           if (success) {
             this.emitStreamEvent({
@@ -1175,8 +1213,12 @@ export class ChatGPTConversationService {
     }
 
     // 持久化 provider-native tool history（V2 schema）
-    // 按真实执行顺序保存 function_call + function_call_output 配对
-    const completeToolHistoryCustom = result.toolCallHistory.filter((entry) => entry.output)
+    // 按真实执行顺序保存 function_call + function_call_output 配对。
+    // 只读历史工具（openchat_read_history）的调用不落库：它是「对历史的查看」，
+    // 不是新产生的历史，避免每次读取都向历史追加一条自引用记录而无限增长。
+    const completeToolHistoryCustom = result.toolCallHistory.filter(
+      (entry) => entry.output && entry.name !== READ_HISTORY_TOOL_NAME
+    )
     if (completeToolHistoryCustom.length > 0) {
       const customItems: ProviderPayloadItem[] = []
       for (const entry of completeToolHistoryCustom) {
@@ -1204,7 +1246,33 @@ export class ChatGPTConversationService {
     this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
   }
 
-  // Codex Hosted Search：使用官方 web_search 工具，服务端执行搜索，单次 SSE 流
+  // 构造本轮的联网工具注册表：在共享的 web 工具之上，追加按当前会话作用域构造的
+  // 只读历史工具（openchat_read_history）。
+  // - 共享 web 工具（openchat_web_search / openchat_web_fetch）从 this.toolRegistry 复制，
+  //   避免污染全局注册表；
+  // - 只读历史工具读取当前会话已持久化的历史工具结果，作用域限定为本会话，绝无跨会话读取。
+  private buildRoundToolRegistry(conversationId: string): ToolRegistry {
+    const registry = new ToolRegistry()
+    for (const def of this.toolRegistry.getDefinitions()) {
+      const executor = this.toolRegistry.getExecutor(def.name)
+      if (executor) registry.register(def.name, executor)
+    }
+    if (this.readHistoryToolEnabled) {
+      const scopedMessages = this.messages.getByConversationId(conversationId)
+      registry.register(READ_HISTORY_TOOL_NAME, new ReadHistoryTool(scopedMessages))
+    }
+    return registry
+  }
+
+  // Codex Hosted Search：官方 web_search 工具由服务端执行；同时通过 ToolLoop 追加
+  // 统一只读历史工具（openchat_read_history），使 Hosted 轮也具备与 Standalone 相同的
+  // 「按需读取历史工具真实结果」能力。
+  //
+  // 关键约束（绝不改变既有行为）：
+  //   - 原生 web_search 仍通过 initialRequest.tools 声明（hosted wire），不进 ToolRegistry；
+  //   - 只注册 read_history 一个 client 工具，绝不注册 openchat_web_search/web_fetch 或 run；
+  //   - 原生 web_search_call 事件（itemId/status/action/sources）经 onWebSearchCall 完整保留；
+  //   - read_history 调用不落库（避免历史自引用），web_search_call 仍按原样持久化。
   private async runGenerationWithCodexHostedSearch(
     conversationId: string,
     adapter: ModelAdapter,
@@ -1215,7 +1283,9 @@ export class ChatGPTConversationService {
     userText: string,
     segmentId: string,
     abortController: AbortController,
-    effectiveResponsesLite: boolean
+    effectiveResponsesLite: boolean,
+    attribution?: { modelText: string; language: 'zh' | 'en' },
+    currentUserMessageId?: string
   ): Promise<void> {
     let accumulatedContent = ''
     const citationBuf = new CitationStreamBuffer()
@@ -1227,11 +1297,20 @@ export class ChatGPTConversationService {
     const webSearchCallItems: Array<{ id: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> } }> = []
 
     const fullInstructions = instructions + '\n\n' + CODEX_SEARCH_INSTRUCTIONS
-    const semIdx = fullInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
-    console.log('[Codex Search Semantics] mode=hosted snippet=%s', semIdx >= 0 ? fullInstructions.slice(semIdx, semIdx + 200) : 'NOT_FOUND')
+    const hostMarkerIdx = fullInstructions.indexOf(CODEX_HOSTED_SEARCH_MODE_MARKER)
+    console.log('[Codex Search Semantics] mode=hosted selfId=%s', hostMarkerIdx >= 0 ? 'PRESENT' : 'NOT_FOUND')
     // effectiveResponsesLite 由 runGeneration 的 Transport Policy 统一计算并传入：
     // codex-hosted 恒为 Non-Lite（Lite 模型在此自动降级），无需任何 debug env。
-    const request = this.buildCanonicalRequest(modelId, fullInstructions, segmentId, userText, effort, adapter.protocol, false, effectiveResponsesLite)
+    // 归因分离：模型只看到实质问题（attribution.modelText）；用户原文仍完整保存，不进入本轮请求。
+    // 关键：替换 modelText 与「跳过原始用户消息」必须同时生效，否则会重复注入（原文 + 实质问题）。
+    // 缺少 currentUserMessageId 时无法安全跳过 → 整体回退为原文，绝不半应用。
+    const applySplit = !!(attribution && currentUserMessageId)
+    const requestUserText = applySplit ? attribution!.modelText : userText
+    const request = this.buildCanonicalRequest(
+      modelId, fullInstructions, segmentId, requestUserText, effort, adapter.protocol, false, effectiveResponsesLite,
+      applySplit ? { currentUserMessageId: currentUserMessageId! } : undefined
+    )
+    // 原生 web_search：hosted wire，经 initialRequest 顶层声明；绝不放进 ToolRegistry。
     request.tools = [{
       name: 'web_search',
       description: '',
@@ -1240,143 +1319,188 @@ export class ChatGPTConversationService {
     }]
     request.toolChoice = 'auto'
 
+    // 只读历史工具注册表：仅 read_history。Hosted 不主动开放 Standalone 的 run，
+    // 也不声明 openchat_web_search / openchat_web_fetch（原生搜索已由 web_search 承担）。
+    const hostedRegistry = new ToolRegistry()
+    if (this.readHistoryToolEnabled) {
+      hostedRegistry.register(
+        READ_HISTORY_TOOL_NAME,
+        new ReadHistoryTool(this.messages.getByConversationId(conversationId))
+      )
+    }
+
+    const controller = new ToolLoopController(
+      adapter,
+      hostedRegistry,
+      undefined,
+      { signal: abortController.signal, conversationId, segmentId, modelId },
+      { maxRounds: this.webSearchConfig.maxToolRounds, replayHostedSearchCalls: true }
+    )
+
+    // 本轮是否观察到原生搜索失败事件（仅用于归因状态区分，不改动既有 UI/持久化语义）。
+    let hostedSearchFailed = false
+
+    // 原生 web_search_call 事件处理：完整保留 started/completed/failed 语义 + itemId/status/action/sources。
+    const handleHostedWebSearchCall = (event: WebSearchCallEvent): void => {
+      switch (event.phase) {
+        case 'started':
+          console.log('[Codex] web_search_call phase=started')
+          this.emitStreamEvent({ type: 'web-search-call-started', conversationId })
+          break
+        case 'searching':
+          break
+        case 'completed': {
+          // 本次事件开始前已有的来源数：用于只向渲染器增量发本次新增来源，
+          // 避免多轮原生搜索在渲染器侧被重复累加（单次搜索时 slice 等于整段，输出不变）。
+          const sourceCountBefore = webSearchResults.length
+          const action = event.action ?? { type: 'search' }
+          // 安全诊断日志：只打印 action.type / url hostname / query / pattern / resultsCount，不打印完整 URL query
+          console.log(
+            '[Codex Hosted Search] action=%s urlHost=%s query=%s pattern=%s resultsCount=%d',
+            action.type ?? '(none)',
+            action.url ? (hostnameFromUrl(action.url) || 'invalid') : '(none)',
+            action.query ?? '(none)',
+            action.pattern ?? '(none)',
+            event.results?.length ?? 0
+          )
+          // 持久化 provider-native web_search_call item（用于跨 turn 模型记忆）
+          if (event.itemId) {
+            webSearchCallItems.push({
+              id: event.itemId,
+              status: event.status,
+              action,
+            })
+          }
+          if (event.results) {
+            for (const item of event.results) {
+              if (item && typeof item === 'object') {
+                const obj = item as Record<string, unknown>
+                const rawUrl = (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null) ?? (typeof obj.uri === 'string' ? obj.uri : null)
+                const rawTitle = (typeof obj.title === 'string' ? obj.title : null)
+                const rawSnippet = (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null)
+                // 内置 API 引用（如 {"type":"api","name":"oai-weather"}），无 URL
+                if (!rawUrl) {
+                  const apiName = typeof obj.name === 'string' ? obj.name : ''
+                  webSearchResults.push({
+                    title: apiName ? `内置服务: ${apiName}` : '内置服务',
+                    url: null,
+                    snippet: rawSnippet,
+                    sourceType: 'api',
+                  })
+                  continue
+                }
+                webSearchResults.push({
+                  title: rawTitle ?? hostnameFromUrl(rawUrl),
+                  url: rawUrl,
+                  snippet: rawSnippet,
+                  sourceType: 'web',
+                })
+              }
+            }
+          }
+          // open_page 只带 action.url、action.sources 常为空，补进参考页面列表，
+          // 使 Direct URL 访问的网页像普通 search source 一样可展开查看。
+          const normalizedResults = mergeHostedWebSearchResults(action, webSearchResults)
+          // 保持 webSearchResults 引用不变，供 turn 末尾统一持久化
+          if (normalizedResults.length !== webSearchResults.length) {
+            webSearchResults.push(...normalizedResults.slice(webSearchResults.length))
+          }
+          // 仅增量发出本次新增来源（渲染器按 append 语义累加），避免多轮重复。
+          this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults: webSearchResults.slice(sourceCountBefore) })
+          console.log('[Codex] web_search_call emitted webSearchResults count=', webSearchResults.length, 'first=', webSearchResults[0] ? JSON.stringify(webSearchResults[0]) : '(empty)')
+          break
+        }
+        case 'failed':
+          hostedSearchFailed = true
+          console.log('[Codex] web_search_call phase=failed')
+          this.emitStreamEvent({ type: 'web-search-call-failed', conversationId })
+          break
+      }
+    }
+
+    const callbacks: ToolLoopCallbacks = {
+      onToolCall: (toolCall: CanonicalToolCall) => {
+        // 只读历史工具读取本地历史，不是联网搜索：不发出「搜索中」UI 事件。
+        // 原生 web_search 不产生 tool_call 事件（走 web_search_call）。
+        if (toolCall.name === READ_HISTORY_TOOL_NAME) return
+        this.emitStreamEvent({
+          type: 'web-search-started',
+          conversationId,
+          toolCallId: toolCall.id,
+          toolCallName: toolCall.name,
+          toolCallArgs: toolCall.arguments,
+        })
+      },
+      onToolResult: (callId, toolName, success, rawResults) => {
+        // 只读历史工具无搜索结果卡片，不发出 web-search-* UI 事件。
+        if (toolName === READ_HISTORY_TOOL_NAME) return
+        if (success) {
+          this.emitStreamEvent({
+            type: 'web-search-completed',
+            conversationId,
+            toolCallId: callId,
+            webSearchResults: rawResults,
+          })
+        }
+      },
+      onWebSearchCall: handleHostedWebSearchCall,
+      onDelta: (text) => {
+        const cleanText = this.cleanDelta(citationBuf, text)
+        if (!cleanText) return
+        accumulatedContent += cleanText
+        this.messages.updateContent(assistantMessageId, accumulatedContent)
+        this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
+      },
+      onReasoningStarted: (itemId) => {
+        reasoningStartedAt = Date.now()
+        this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId })
+      },
+      onReasoningDelta: (text) => {
+        reasoningTextAccum += text
+        this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
+        this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text })
+      },
+      onReasoningCompleted: (itemId, summary) => {
+        const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
+        totalReasoningDuration += phaseDuration
+        const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
+        const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(summary ?? [])]
+        const meta = {
+          duration: totalReasoningDuration,
+          effort: effort || '',
+          summary: accumulatedSummary,
+          available: accumulatedSummary.length > 0,
+        }
+        this.messages.updateReasoningMeta(assistantMessageId, meta)
+        this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId, reasoningMeta: meta })
+      },
+      onTurnStarted: (turnId) => {
+        if (turnId && !providerTurnId) {
+          providerTurnId = turnId
+          this.messages.updateProviderIds(assistantMessageId, turnId, '')
+        }
+        this.emitStreamEvent({ type: 'turn-started', conversationId, turnId })
+      },
+      getProviderTurnId: () => providerTurnId,
+      setProviderTurnId: (id) => {
+        providerTurnId = id
+        this.messages.updateProviderIds(assistantMessageId, id, '')
+      },
+    }
+
     console.log('[Codex] runGenerationWithCodexHostedSearch model=%s conversationId=%s', modelId, conversationId)
 
     try {
-      for await (const event of adapter.stream(request, abortController.signal)) {
-        if (abortController.signal.aborted) break
-
-        switch (event.type) {
-          case 'delta': {
-            const cleanText = this.cleanDelta(citationBuf, event.text)
-            if (!cleanText) break
-            accumulatedContent += cleanText
-            this.messages.updateContent(assistantMessageId, accumulatedContent)
-            this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: cleanText })
-            break
-          }
-
-          case 'turn_started':
-            if (event.turnId && !providerTurnId) {
-              providerTurnId = event.turnId
-              this.messages.updateProviderIds(assistantMessageId, event.turnId, '')
-            }
-            this.emitStreamEvent({ type: 'turn-started', conversationId, turnId: event.turnId ?? '' })
-            break
-
-          case 'reasoning_started':
-            reasoningStartedAt = Date.now()
-            this.emitStreamEvent({ type: 'reasoning-started', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId })
-            break
-
-          case 'reasoning_delta':
-            reasoningTextAccum += event.text || ''
-            this.messages.updateReasoningTextDebounced(assistantMessageId, reasoningTextAccum)
-            this.emitStreamEvent({ type: 'reasoning-delta', conversationId, text: event.text })
-            break
-
-          case 'reasoning_completed': {
-            const phaseDuration = reasoningStartedAt ? Date.now() - reasoningStartedAt : 0
-            totalReasoningDuration += phaseDuration
-            const prevReasoning = this.messages.getById(assistantMessageId)?.reasoningMeta
-            const accumulatedSummary = [...(prevReasoning?.summary ?? []), ...(event.summary ?? [])]
-            const meta = {
-              duration: totalReasoningDuration,
-              effort: effort || '',
-              summary: accumulatedSummary,
-              available: accumulatedSummary.length > 0,
-            }
-            this.messages.updateReasoningMeta(assistantMessageId, meta)
-            this.emitStreamEvent({ type: 'reasoning-completed', conversationId, turnId: providerTurnId ?? '', itemId: event.itemId, reasoningMeta: meta })
-            break
-          }
-
-          case 'web_search_call':
-            switch (event.phase) {
-              case 'started':
-                console.log('[Codex] web_search_call phase=started')
-                this.emitStreamEvent({ type: 'web-search-call-started', conversationId })
-                break
-              case 'searching':
-                break
-              case 'completed': {
-                const action = event.action ?? { type: 'search' }
-                // 安全诊断日志：只打印 action.type / url hostname / query / pattern / resultsCount，不打印完整 URL query
-                console.log(
-                  '[Codex Hosted Search] action=%s urlHost=%s query=%s pattern=%s resultsCount=%d',
-                  action.type ?? '(none)',
-                  action.url ? (hostnameFromUrl(action.url) || 'invalid') : '(none)',
-                  action.query ?? '(none)',
-                  action.pattern ?? '(none)',
-                  event.results?.length ?? 0
-                )
-                // 持久化 provider-native web_search_call item（用于跨 turn 模型记忆）
-                if (event.itemId) {
-                  webSearchCallItems.push({
-                    id: event.itemId,
-                    status: event.status,
-                    action,
-                  })
-                }
-                if (event.results) {
-                  for (const item of event.results) {
-                    if (item && typeof item === 'object') {
-                      const obj = item as Record<string, unknown>
-                      const rawUrl = (typeof obj.url === 'string' ? obj.url : null) ?? (typeof obj.link === 'string' ? obj.link : null) ?? (typeof obj.uri === 'string' ? obj.uri : null)
-                      const rawTitle = (typeof obj.title === 'string' ? obj.title : null)
-                      const rawSnippet = (typeof obj.snippet === 'string' ? obj.snippet : null) ?? (typeof obj.description === 'string' ? obj.description : null)
-                      // 内置 API 引用（如 {"type":"api","name":"oai-weather"}），无 URL
-                      if (!rawUrl) {
-                        const apiName = typeof obj.name === 'string' ? obj.name : ''
-                        webSearchResults.push({
-                          title: apiName ? `内置服务: ${apiName}` : '内置服务',
-                          url: null,
-                          snippet: rawSnippet,
-                          sourceType: 'api',
-                        })
-                        continue
-                      }
-                      webSearchResults.push({
-                        title: rawTitle ?? hostnameFromUrl(rawUrl),
-                        url: rawUrl,
-                        snippet: rawSnippet,
-                        sourceType: 'web',
-                      })
-                    }
-                  }
-                }
-                // open_page 只带 action.url、action.sources 常为空，补进参考页面列表，
-                // 使 Direct URL 访问的网页像普通 search source 一样可展开查看。
-                const normalizedResults = mergeHostedWebSearchResults(action, webSearchResults)
-                // 保持 webSearchResults 引用不变，供 turn 末尾统一持久化
-                if (normalizedResults.length !== webSearchResults.length) {
-                  webSearchResults.push(...normalizedResults.slice(webSearchResults.length))
-                }
-                this.emitStreamEvent({ type: 'web-search-call-completed', conversationId, webSearchResults })
-                console.log('[Codex] web_search_call emitted webSearchResults count=', webSearchResults.length, 'first=', webSearchResults[0] ? JSON.stringify(webSearchResults[0]) : '(empty)')
-                break
-              }
-              case 'failed':
-                console.log('[Codex] web_search_call phase=failed')
-                this.emitStreamEvent({ type: 'web-search-call-failed', conversationId })
-                break
-            }
-            break
-
-          case 'turn_completed':
-            break
-
-          case 'error':
-            this.messages.updateError(assistantMessageId, event.code, event.message)
-            this.emitStreamEvent({ type: 'error', conversationId, errorCode: event.code, errorMessage: event.message })
-            return
-        }
-      }
+      await controller.run(request, abortController.signal, callbacks)
     } catch (err) {
       if (abortController.signal.aborted) {
         return
       }
       throw err
+    }
+    // 轮间边界处被中断：不进入完成收尾（状态已由 interrupt() 置为 stopped）。
+    if (abortController.signal.aborted) {
+      return
     }
 
     const hostedFlushText = this.flushCitationBuffer(citationBuf)
@@ -1384,7 +1508,23 @@ export class ChatGPTConversationService {
       accumulatedContent += hostedFlushText
       this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: hostedFlushText })
     }
-    this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
+    // 工具归因分离（仅命中封闭短语表的 S1 输入）：正文正常流式结束后，追加一次权威归因。
+    // 归因只依据本轮真实 web_search_call 事件，绝不依据当前配置臆测。
+    // 注意：此分支仅在 !aborted 且未抛错时到达；中断/失败路径在上面已 return/throw，不会追加。
+    let finalContent = this.cleanFinalText(accumulatedContent)
+    // 只有「拆分真正生效」（模型确实没看到归因要求）时才追加权威归因；
+    // 否则回退为原行为，避免正文可能已有错误自述时再追加一条矛盾说明。
+    if (applySplit && attribution) {
+      const state = webSearchCallItems.length > 0 ? 'executed' : hostedSearchFailed ? 'failed' : 'notObserved'
+      const statement = buildHostedAttributionStatement(state, attribution.language)
+      const separator = finalContent.trim().length > 0 ? '\n\n' : ''
+      const appended = separator + statement
+      // 一个 delta 追加，随后持久化同一份文本 → 流式与落库严格一致，无重复消息、无重复 delta。
+      this.emitStreamEvent({ type: 'delta', conversationId, turnId: providerTurnId ?? '', text: appended })
+      finalContent = finalContent + appended
+      console.log('[Tool Attribution] hosted state=%s lang=%s webSearchCalls=%d appended=true', state, attribution.language, webSearchCallItems.length)
+    }
+    this.messages.updateContent(assistantMessageId, finalContent)
     this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
 
@@ -1392,7 +1532,8 @@ export class ChatGPTConversationService {
       this.messages.updateWebSearchResults(assistantMessageId, webSearchResults)
     }
 
-    // 持久化 provider-native tool history（V2 schema）
+    // 持久化 provider-native tool history（V2 schema）：仅 web_search_call。
+    // read_history 的 function_call/function_call_output 不落库（避免历史自引用、无限增长）。
     if (webSearchCallItems.length > 0) {
       this.messages.updateProviderPayload(assistantMessageId, {
         provider: 'chatgpt_codex',
@@ -1429,11 +1570,13 @@ export class ChatGPTConversationService {
     // 以「实际提交的 weather 命令 + 真实执行成功」判定，绝不从自然语言推断。
     const runCallCommands = new Map<string, SearchCommands | undefined>()
     const runCallSuccess = new Map<string, boolean>()
+    // 实时仅对内置天气服务来源去重，保留服务端返回的所有网页项（包括重复 URL）。
+    let liveStandaloneSources: ReturnType<typeof buildStandaloneWebSearchResults> = []
 
     // 先构建 canonical request 以获取对话历史，传给 web.run 工具
     const standaloneInstructions = instructions + '\n\n' + CODEX_STANDALONE_SEARCH_INSTRUCTIONS
-    const semIdx2 = standaloneInstructions.indexOf('CODEX_SEARCH_MODE_SEMANTICS_V1')
-    console.log('[Codex Search Semantics] mode=standalone snippet=%s', semIdx2 >= 0 ? standaloneInstructions.slice(semIdx2, semIdx2 + 200) : 'NOT_FOUND')
+    const standaloneMarkerIdx = standaloneInstructions.indexOf(CODEX_STANDALONE_SEARCH_MODE_MARKER)
+    console.log('[Codex Search Semantics] mode=standalone selfId=%s', standaloneMarkerIdx >= 0 ? 'PRESENT' : 'NOT_FOUND')
     // effectiveResponsesLite 由 runGeneration 的 Transport Policy 统一计算并传入：
     //   无 hosted 历史 → 尊重模型 metadata（Lite 模型用 Lite）；
     //   含 hosted 历史 → 强制 Non-Lite（跨模式历史兼容，见 requiresNonLiteTransport）。
@@ -1449,6 +1592,15 @@ export class ChatGPTConversationService {
     )
     standaloneToolRegistry.register('run', webRunTool)
 
+    // 统一只读历史工具：即使本会话此前由别的 Provider（如自定义 Provider 的 openchat_web_search）
+    // 产生历史，Codex standalone 轮也能通过统一接口按需读取真实历史结果，无需理解原工具名。
+    if (this.readHistoryToolEnabled) {
+      standaloneToolRegistry.register(
+        READ_HISTORY_TOOL_NAME,
+        new ReadHistoryTool(this.messages.getByConversationId(conversationId))
+      )
+    }
+
     const controller = new ToolLoopController(adapter, standaloneToolRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
       maxRounds: this.webSearchConfig.maxToolRounds,
     })
@@ -1458,6 +1610,8 @@ export class ChatGPTConversationService {
         if (toolCall.name === 'run') {
           runCallCommands.set(toolCall.id, parseRunCommands(toolCall.arguments))
         }
+        // 只读历史工具读取的是本地历史，不是联网搜索：不发出「搜索中」UI 事件。
+        if (toolCall.name === READ_HISTORY_TOOL_NAME) return
         this.emitStreamEvent({
           type: 'web-search-started',
           conversationId,
@@ -1474,15 +1628,21 @@ export class ChatGPTConversationService {
         throw new CodexProtocolIsolationError()
       },
       onToolResult: (callId, toolName, success, rawResults) => {
+        // 只读历史工具无搜索结果卡片，不发出 web-search-* UI 事件。
+        if (toolName === READ_HISTORY_TOOL_NAME) return
         if (toolName === 'run') {
           if (callId) runCallSuccess.set(callId, success)
           if (success) {
-            // 成功：发出展示来源 = 服务端网页 results +（真实 weather 成功时）内置服务来源。
+            // 以增量形式发出来源，与持久化共用同一条「仅去重天气服务」规则。
+            const callSources = buildStandaloneWebSearchResults(runCallCommands.get(callId), rawResults, true)
+            const mergedSources = dedupeWeatherServiceSources([...liveStandaloneSources, ...callSources])
+            const newSources = mergedSources.slice(liveStandaloneSources.length)
+            liveStandaloneSources = mergedSources
             this.emitStreamEvent({
               type: 'web-search-completed',
               conversationId,
               toolCallId: callId,
-              webSearchResults: buildStandaloneWebSearchResults(runCallCommands.get(callId), rawResults, true),
+              webSearchResults: newSources,
             })
           } else {
             this.emitStreamEvent({
@@ -1562,10 +1722,8 @@ export class ChatGPTConversationService {
         )
         allResults.push(...entryResults)
       }
-      // 按标题去重：多个 weather 调用不重复展示同一内置服务来源。
-      const deduped = allResults.filter(
-        (r, i) => allResults.findIndex((o) => o.title === r.title && o.url === r.url) === i
-      )
+      // 仅合并重复的 oai-weather 服务来源；普通网页结果保持原有数量、顺序和重复项。
+      const deduped = dedupeWeatherServiceSources(allResults)
       if (deduped.length > 0) {
         this.messages.updateWebSearchResults(assistantMessageId, deduped)
       }
@@ -1573,8 +1731,12 @@ export class ChatGPTConversationService {
 
     // 持久化 provider-native tool history（V2 schema）
     // 按真实执行顺序保存 function_call + function_call_output 配对
-    // 只保存有合法 output 的完整 pair（error output 也算合法）
-    const completeToolHistory = result.toolCallHistory.filter((entry) => entry.output)
+    // 只保存有合法 output 的完整 pair（error output 也算合法）。
+    // 只读历史工具（openchat_read_history）的调用不落库：它是「对历史的查看」，
+    // 不是新产生的历史，避免每次读取都向历史追加一条自引用记录而无限增长。
+    const completeToolHistory = result.toolCallHistory.filter(
+      (entry) => entry.output && entry.name !== READ_HISTORY_TOOL_NAME
+    )
     if (completeToolHistory.length > 0) {
       const items: ProviderPayloadItem[] = []
       for (const entry of completeToolHistory) {
@@ -1996,7 +2158,10 @@ User message: ${userText}${contextHint}`
     effort: string,
     targetProtocol?: ProviderProtocol,
     skipWebSearchHistory?: boolean,
-    effectiveResponsesLite?: boolean
+    effectiveResponsesLite?: boolean,
+    // 本轮归因分离（仅 Hosted）：当前用户消息已入库且会被历史循环读到，
+    // 这里排除该条原始消息，并在尾部注入一次「实质问题」文本，避免模型看到归因要求。
+    attribution?: { currentUserMessageId: string }
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
@@ -2007,18 +2172,22 @@ User message: ${userText}${contextHint}`
       if (msg.status !== 'completed') continue
 
       if (msg.role === 'user') {
+        // 归因分离（仅 Hosted）：当前轮用户消息的原始文本含归因要求，不进入模型输入。
+        // 但**附件必须保留**——用实质问题替换文本、沿用原附件，绝不丢图。
+        const isAttributionSource = !!attribution && msg.id === attribution.currentUserMessageId
         // 历史图片附件每轮重新转换为 image input（三个 Provider 均为逐轮完整 replay）。
         // 仅取 chat_input，排除图片生成参考图/结果。
         const images = chatInputImages(msg)
+        const textForModel = isAttributionSource ? userText : msg.content
         if (images.length > 0) {
           const parts: CanonicalInputPart[] = []
-          if (msg.content) parts.push({ type: 'text', text: msg.content })
+          if (textForModel) parts.push({ type: 'text', text: textForModel })
           for (const att of images) {
             parts.push({ type: 'image', attachmentId: att.id, detail: att.detail })
           }
-          messages.push({ role: 'user', content: msg.content, inputParts: parts })
-        } else if (msg.content) {
-          messages.push({ role: 'user', content: msg.content })
+          messages.push({ role: 'user', content: textForModel, inputParts: parts })
+        } else if (textForModel) {
+          messages.push({ role: 'user', content: textForModel })
         }
         continue
       }
