@@ -753,6 +753,14 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
             >
               {fetchingModels ? '获取中...' : '从 API 获取模型列表'}
             </button>
+            {models.length > 0 && (
+              <button
+                className="provider-model-clear-btn"
+                onClick={() => setModels([])}
+              >
+                清空全部
+              </button>
+            )}
           </div>
           {fetchError && (
             <p className="provider-model-fetch-error">{fetchError}</p>
