@@ -10,6 +10,7 @@ import { DefaultModelSettings } from './DefaultModelSettings'
 import { WebSearchEngineSettings } from './WebSearchEngineSettings'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { hastCacheClear } from '../../packages/markdownHastCache'
+import { APP_VERSION, ELECTRON_VERSION } from '../../packages/appVersion'
 const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: '浅色' },
   { mode: 'dark', label: '深色' },
@@ -111,8 +112,8 @@ export function SettingsDialog() {
           <div className="settings-section">
             <h4>关于</h4>
             <div className="about-info">
-              <div>OpenChat Desktop 0.1.0</div>
-              <div>Electron 22.3.27</div>
+              <div>OpenChat Desktop {APP_VERSION}</div>
+              <div>Electron {ELECTRON_VERSION}</div>
             </div>
           </div>
         </div>

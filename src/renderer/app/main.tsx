@@ -1,13 +1,14 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { APP_VERSION } from '../packages/appVersion'
 import 'katex/dist/katex.min.css'
 import '../styles/global.css'
 
 // 尽早更新 Splash 版本号（build-time define，不依赖 React）
 const versionEl = document.getElementById('splash-version')
-if (versionEl && typeof __APP_VERSION__ !== 'undefined') {
-  versionEl.textContent = `v${__APP_VERSION__}`
+if (versionEl) {
+  versionEl.textContent = `v${APP_VERSION}`
 }
 
 // 全局焦点模式跟踪：仅 Tab 键导航视为「键盘模式」，才显示 :focus-visible 轮廓。
