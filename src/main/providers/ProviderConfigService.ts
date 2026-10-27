@@ -2,6 +2,7 @@ import { ProviderConfigRepository } from '../storage/ProviderConfigRepository'
 import type { CustomProviderConfig, ModelAdapter, ImageGenerationAdapter, ImageGenerationParameterProfile, ImageGenerationRequestMapping, RequestParameterProfile, DynamicRequestParameterDefinition } from '../../shared/types/provider'
 import { ChatCompletionsAdapter } from './ChatCompletionsAdapter'
 import { ResponsesAdapter } from './ResponsesAdapter'
+import { AnthropicMessagesAdapter } from './anthropic/AnthropicMessagesAdapter'
 import { OpenAIImageGenerationAdapter } from './OpenAIImageGenerationAdapter'
 import type { ChatGPTCodexClient } from '../openai/chatgpt/transport/ChatGPTCodexClient'
 import { ChatGPTCodexAdapter } from './ChatGPTCodexAdapter'
@@ -165,6 +166,23 @@ export class ProviderConfigService {
         extraHeaders: config.extraHeaders,
         supportsReasoning: true,
         imageInput: config.imageInput ?? false,
+      })
+    }
+    if (config.protocol === 'anthropic_messages') {
+      const anthropic = config.anthropic
+      return new AnthropicMessagesAdapter({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        toolCalling,
+        imageInput: config.imageInput ?? false,
+        apiVersion: anthropic?.apiVersion,
+        authMode: anthropic?.authMode,
+        endpoint: anthropic?.endpoint,
+        anthropicMessagesPath: config.anthropicMessagesPath,
+        maxOutputTokens: anthropic?.maxOutputTokens,
+        thinking: anthropic?.thinking,
+        promptCaching: anthropic?.promptCaching,
+        extraHeaders: config.extraHeaders,
       })
     }
     // responses

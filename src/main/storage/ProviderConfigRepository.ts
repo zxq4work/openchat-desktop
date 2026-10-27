@@ -1,5 +1,5 @@
 import { StorageService } from './StorageService'
-import type { CustomProviderConfig, ToolCallingMode, ImageGenerationParameterProfile, RequestParameterProfile } from '../../shared/types/provider'
+import type { CustomProviderConfig, ToolCallingMode, ImageGenerationParameterProfile, RequestParameterProfile, AnthropicMessagesConfig } from '../../shared/types/provider'
 import { normalizeImageGenerationProfile } from '../../shared/image-generation/parameterProfile'
 import { normalizeRequestParameterProfile } from '../../shared/request-parameters/requestParameters'
 import { randomUUID } from 'crypto'
@@ -18,7 +18,8 @@ export class ProviderConfigRepository {
              models_path, chat_completions_path, responses_path,
              extra_headers, tool_calling, image_input, image_generations_path,
              image_generation_profile_json, created_at, updated_at,
-             request_parameter_profile_json
+             request_parameter_profile_json,
+             anthropic_messages_path, anthropic_config_json
       FROM provider_configs
       ORDER BY created_at ASC
     `)
@@ -45,7 +46,8 @@ export class ProviderConfigRepository {
              models_path, chat_completions_path, responses_path,
              extra_headers, tool_calling, image_input, image_generations_path,
              image_generation_profile_json, created_at, updated_at,
-             request_parameter_profile_json
+             request_parameter_profile_json,
+             anthropic_messages_path, anthropic_config_json
       FROM provider_configs WHERE id = ?
     `, [id])
 
@@ -72,8 +74,9 @@ export class ProviderConfigRepository {
         models_path, chat_completions_path, responses_path,
         extra_headers, tool_calling, image_input, image_generations_path,
         image_generation_profile_json, created_at, updated_at,
-        request_parameter_profile_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        request_parameter_profile_json,
+        anthropic_messages_path, anthropic_config_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       id,
       fullConfig.name,
@@ -92,6 +95,8 @@ export class ProviderConfigRepository {
       now,
       now,
       fullConfig.requestParameterProfile ? JSON.stringify(fullConfig.requestParameterProfile) : null,
+      fullConfig.anthropicMessagesPath ?? null,
+      fullConfig.anthropic ? JSON.stringify(fullConfig.anthropic) : null,
     ])
 
     return fullConfig
@@ -144,6 +149,14 @@ export class ProviderConfigRepository {
     if (updates.imageGenerationsPath !== undefined) {
       sets.push('image_generations_path = ?')
       values.push(updates.imageGenerationsPath || null)
+    }
+    if (updates.anthropicMessagesPath !== undefined) {
+      sets.push('anthropic_messages_path = ?')
+      values.push(updates.anthropicMessagesPath || null)
+    }
+    if (updates.anthropic !== undefined) {
+      sets.push('anthropic_config_json = ?')
+      values.push(updates.anthropic ? JSON.stringify(updates.anthropic) : null)
     }
     if (updates.imageGenerationProfile !== undefined) {
       sets.push('image_generation_profile_json = ?')
@@ -216,6 +229,18 @@ export class ProviderConfigRepository {
       }
     }
 
+    // Anthropic Messages 协议配置：非法 / 缺失 → undefined（使用安全默认值）。
+    let anthropic: AnthropicMessagesConfig | undefined
+    const anthropicStr = row[18] ? String(row[18]) : null
+    if (anthropicStr) {
+      try {
+        const parsed = JSON.parse(anthropicStr)
+        if (parsed && typeof parsed === 'object') anthropic = parsed as AnthropicMessagesConfig
+      } catch {
+        anthropic = undefined
+      }
+    }
+
     return {
       id: String(row[0]),
       name: String(row[1]),
@@ -232,6 +257,8 @@ export class ProviderConfigRepository {
       imageGenerationsPath: row[12] ? String(row[12]) : undefined,
       imageGenerationProfile,
       requestParameterProfile,
+      anthropicMessagesPath: row[17] ? String(row[17]) : undefined,
+      anthropic,
       createdAt: Number(row[14]),
       updatedAt: Number(row[15]),
     }

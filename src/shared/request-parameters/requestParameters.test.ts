@@ -108,7 +108,7 @@ describe('applyRequestField', () => {
 
 describe('protected paths', () => {
   it('protects model/stream for all protocols', () => {
-    for (const p of ['chat_completions', 'responses', 'image_generations'] as const) {
+    for (const p of ['chat_completions', 'responses', 'anthropic_messages', 'image_generations'] as const) {
       expect(getProtectedRequestPaths(p).has('model')).toBe(true)
       expect(getProtectedRequestPaths(p).has('stream')).toBe(true)
     }
@@ -117,6 +117,8 @@ describe('protected paths', () => {
   it('protects protocol-specific fields', () => {
     expect(isProtectedRequestPath('chat_completions', 'messages')).toBe(true)
     expect(isProtectedRequestPath('responses', 'input')).toBe(true)
+    expect(isProtectedRequestPath('anthropic_messages', 'system')).toBe(true)
+    expect(isProtectedRequestPath('anthropic_messages', 'thinking')).toBe(true)
     expect(isProtectedRequestPath('image_generations', 'prompt')).toBe(true)
   })
 
@@ -127,6 +129,9 @@ describe('protected paths', () => {
   it('does not protect arbitrary fields', () => {
     expect(isProtectedRequestPath('chat_completions', 'temperature')).toBe(false)
     expect(isProtectedRequestPath('chat_completions', 'extra_body.foo')).toBe(false)
+    // Anthropic 采样参数不保护（Adapter 不写入；2026-10-21 在构建阶段剔除）。
+    expect(isProtectedRequestPath('anthropic_messages', 'temperature')).toBe(false)
+    expect(isProtectedRequestPath('anthropic_messages', 'top_p')).toBe(false)
   })
 })
 

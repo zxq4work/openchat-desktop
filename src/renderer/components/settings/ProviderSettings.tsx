@@ -21,6 +21,7 @@ import type {
   ImageGenerationInputCardinality,
   ImageGenerationResponseFormatValueType,
   RequestParameterProfile,
+  AnthropicMessagesConfig,
 } from '../../../shared/types/provider'
 import { normalizeImageGenerationProfile, openAIImageProfile, customMinimalProfile, customImageToImageProfile, validateImageGenerationPayloadPath } from '../../../shared/image-generation/parameterProfile'
 import { validateRequestParameterProfile, computeReservedRequestPaths } from '../../../shared/request-parameters/requestParameters'
@@ -29,10 +30,11 @@ import { RequestParameterProfileEditor } from './RequestParameterProfileEditor'
 const PROTOCOL_OPTIONS = [
   { value: 'chat_completions', label: 'Chat Completions' },
   { value: 'responses', label: 'Responses' },
+  { value: 'anthropic_messages', label: 'Anthropic Messages API' },
   { value: 'image_generations', label: 'Image Generations' },
 ]
 
-type ProviderProtocolValue = 'chat_completions' | 'responses' | 'image_generations'
+type ProviderProtocolValue = 'chat_completions' | 'responses' | 'anthropic_messages' | 'image_generations'
 
 // 图片 API 兼容预设：openai 官方兼容 / 自定义（含图生图扩展）/ 自定义最小集。
 // 预设只是填写模板，保存后仍逐个字段存进 Profile；运行期能力一律以 Profile 为准，
@@ -89,6 +91,176 @@ const TOOL_CALLING_OPTIONS = [
   { value: 'enabled', label: '开启' },
   { value: 'disabled', label: '关闭' },
 ]
+
+// ── Anthropic Messages API 高级设置 ──
+// 协议特有参数全部收进「高级设置」折叠区，默认视图与其它服务商保持一致。
+// 全部可选；未填写时使用安全默认值（x-api-key + 2023-06-01 + 自动 /v1/messages）。
+// 注意：最大输出 Token 不再在服务商编辑窗口展示；未配置时请求仍按默认值 4096 发送，
+// 已保存的自定义值在 pruneAnthropicConfig 中原样保留，不会因隐藏输入框而丢失。
+const ANTHROPIC_KNOWN_VERSIONS = ['2023-06-01', '2026-10-21']
+
+const ANTHROPIC_VERSION_OPTIONS = [
+  { value: '2023-06-01', label: '2023-06-01（默认）' },
+  { value: '2026-10-21', label: '2026-10-21' },
+]
+
+const ANTHROPIC_AUTH_OPTIONS = [
+  { value: 'x-api-key', label: 'x-api-key（默认）' },
+  { value: 'bearer', label: 'Bearer' },
+]
+
+const ANTHROPIC_THINKING_OPTIONS = [
+  { value: 'off', label: '关闭（默认）' },
+  { value: 'adaptive', label: '自适应' },
+  { value: 'budget', label: '手动预算' },
+]
+
+// 清理空字段，避免把默认空壳写库；返回 undefined 表示全部使用默认值。
+function pruneAnthropicConfig(config: AnthropicMessagesConfig): AnthropicMessagesConfig | undefined {
+  const out: AnthropicMessagesConfig = {}
+  if (config.apiVersion && config.apiVersion.trim()) out.apiVersion = config.apiVersion.trim()
+  if (config.authMode) out.authMode = config.authMode
+  if (config.endpoint && config.endpoint.trim()) out.endpoint = config.endpoint.trim()
+  // 保留已有自定义 max_tokens（输入框已隐藏），不因 UI 简化而丢弃。
+  if (typeof config.maxOutputTokens === 'number' && config.maxOutputTokens > 0) out.maxOutputTokens = config.maxOutputTokens
+  if (config.thinking && config.thinking.mode !== 'off') out.thinking = config.thinking
+  if (config.promptCaching) out.promptCaching = true
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+// 版本下拉仅提供受支持的 2023-06-01 / 2026-10-21。
+// 旧配置若保存了其它版本号，不静默覆盖：以一个禁用的 synthetic option 展示原值并提示，
+// 用户明确选择受支持版本后才写回。
+function AnthropicAdvancedEditor(props: {
+  config: AnthropicMessagesConfig
+  onChange: (next: AnthropicMessagesConfig) => void
+  messagesPath: string
+  onMessagesPathChange: (next: string) => void
+}) {
+  const { config, onChange, messagesPath, onMessagesPathChange } = props
+  const rawVersion = config.apiVersion?.trim() ?? ''
+  const isSupportedVersion = !rawVersion || ANTHROPIC_KNOWN_VERSIONS.includes(rawVersion)
+  const version = isSupportedVersion ? (rawVersion || '2023-06-01') : rawVersion
+  const authMode = config.authMode ?? 'x-api-key'
+  const thinkingMode = config.thinking?.mode ?? 'off'
+
+  const versionOptions = isSupportedVersion
+    ? ANTHROPIC_VERSION_OPTIONS
+    : [{ value: rawVersion, label: `${rawVersion}（不支持的版本，请选择）`, disabled: true, invalid: true }, ...ANTHROPIC_VERSION_OPTIONS]
+
+  return (
+    <div className="provider-anthropic-config">
+      <div className="provider-form-field">
+        <label className="provider-label">API 版本</label>
+        <Dropdown
+          className="provider-dropdown"
+          value={version}
+          options={versionOptions}
+          onChange={(v) => onChange({ ...config, apiVersion: v })}
+          ariaLabel="选择 Anthropic API 版本"
+          matchTriggerWidth
+        />
+        <p className="provider-hint">
+          {isSupportedVersion
+            ? '默认 2023-06-01。选择 2026-10-21 时不发送 temperature / top_p / top_k。'
+            : '当前保存的 API 版本不在受支持列表中，请选择一个受支持的版本。'}
+        </p>
+      </div>
+
+      <div className="provider-form-field">
+        <label className="provider-label">认证方式</label>
+        <Dropdown
+          className="provider-dropdown"
+          value={authMode}
+          options={ANTHROPIC_AUTH_OPTIONS}
+          onChange={(v) => onChange({ ...config, authMode: v as 'x-api-key' | 'bearer' })}
+          ariaLabel="选择认证方式"
+          matchTriggerWidth
+        />
+        <p className="provider-hint">默认 x-api-key，兼容多数第三方中转；如服务商要求可切换为 Bearer。</p>
+      </div>
+
+      <div className="provider-form-field">
+        <label className="provider-label">完整接口地址（可选）</label>
+        <input
+          className="provider-input"
+          type="text"
+          value={config.endpoint ?? ''}
+          onChange={(e) => onChange({ ...config, endpoint: e.target.value.trim() || undefined })}
+          placeholder="留空则按 Base URL 自动推导 /v1/messages"
+        />
+        <p className="provider-hint">填写后将原样使用该地址（不追加路径），适用于反向代理前缀。</p>
+      </div>
+
+      <div className="provider-form-field">
+        <label className="provider-label">请求路径（可选）</label>
+        <input
+          className="provider-input"
+          type="text"
+          value={messagesPath}
+          onChange={(e) => onMessagesPathChange(e.target.value)}
+          placeholder="留空则自动推导 /v1/messages"
+        />
+        <p className="provider-hint">通常留空；仅当服务商的 Messages 接口路径与默认不同时填写。</p>
+      </div>
+
+      <div className="provider-form-field">
+        <label className="provider-label">扩展思考</label>
+        <Dropdown
+          className="provider-dropdown"
+          value={thinkingMode}
+          options={ANTHROPIC_THINKING_OPTIONS}
+          onChange={(v) =>
+            onChange({
+              ...config,
+              thinking: v === 'off' ? { mode: 'off' } : { mode: v as 'adaptive' | 'budget', budgetTokens: config.thinking?.budgetTokens },
+            })
+          }
+          ariaLabel="选择思考模式"
+          matchTriggerWidth
+        />
+        {thinkingMode === 'budget' && (
+          <input
+            className="provider-input"
+            type="number"
+            min={1024}
+            value={config.thinking?.budgetTokens ?? 4096}
+            onChange={(e) => {
+              const n = parseInt(e.target.value, 10)
+              onChange({ ...config, thinking: { mode: 'budget', budgetTokens: Number.isFinite(n) ? n : undefined } })
+            }}
+            placeholder="思考预算（至少 1024）"
+            style={{ marginTop: 6 }}
+          />
+        )}
+        <p className="provider-hint">默认关闭。是否被模型接受取决于服务端能力；预算须小于最大输出 Token。</p>
+      </div>
+
+      <div className="provider-form-field">
+        <label className="provider-label">Prompt Caching</label>
+        <div className="provider-switch-row">
+          <span>启用 ephemeral 缓存断点</span>
+          <div
+            className={`settings-switch ${config.promptCaching ? 'settings-switch-on' : ''}`}
+            onClick={() => onChange({ ...config, promptCaching: !config.promptCaching })}
+            role="switch"
+            aria-checked={!!config.promptCaching}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onChange({ ...config, promptCaching: !config.promptCaching })
+              }
+            }}
+          >
+            <div className="settings-switch-thumb" />
+          </div>
+        </div>
+        <p className="provider-hint">默认关闭。开启后在 system 与最后一条消息添加缓存断点（最多 2 个）。</p>
+      </div>
+    </div>
+  )
+}
 
 const PROTOCOL_LABELS: Record<string, string> = Object.fromEntries(
   PROTOCOL_OPTIONS.map((o) => [o.value, o.label])
@@ -401,6 +573,8 @@ interface ProviderFormDialogProps {
   initialImageGenerationsPath: string
   initialImageGenerationProfile: ImageGenerationParameterProfile | null
   initialRequestParameterProfile: RequestParameterProfile | null
+  initialAnthropic: AnthropicMessagesConfig | null
+  initialAnthropicMessagesPath: string
   onSave: () => void
   onClose: () => void
 }
@@ -429,17 +603,23 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
   const [requestParameterProfile, setRequestParameterProfile] = useState<RequestParameterProfile | undefined>(
     props.initialRequestParameterProfile ?? undefined
   )
+  // Anthropic Messages 协议配置（仅 protocol='anthropic_messages' 有意义）。
+  const [anthropic, setAnthropic] = useState<AnthropicMessagesConfig>(props.initialAnthropic ?? {})
+  const [anthropicMessagesPath, setAnthropicMessagesPath] = useState(props.initialAnthropicMessagesPath ?? '')
   // 「请求参数」默认折叠；仅高级用户需要。
   const [requestParamOpen, setRequestParamOpen] = useState(false)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   // 「高级协议兼容设置」默认折叠；普通用户无需理解协议细节。
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  // Anthropic 高级设置折叠状态（默认折叠，与普通服务商配置体验一致）。
+  const [anthropicAdvancedOpen, setAnthropicAdvancedOpen] = useState(false)
   const [saveError, setSaveError] = useState('')
   const overlayRef = useRef<HTMLDivElement>(null)
   const showToast = useUiStore((s) => s.showToast)
 
   const isImageProtocol = protocol === 'image_generations'
+  const isAnthropicProtocol = protocol === 'anthropic_messages'
   const apiKey = apiKeyState.value
 
   useDialogStack(props.onClose)
@@ -509,7 +689,10 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         baseUrl.trim(),
         apiKey.trim(),
         undefined,
-        props.editId ?? undefined
+        props.editId ?? undefined,
+        isAnthropicProtocol
+          ? { protocol: 'anthropic_messages', authMode: anthropic.authMode ?? 'x-api-key', apiVersion: anthropic.apiVersion }
+          : undefined
       )
       if (fetchedModels.length === 0) {
         setFetchError('未获取到模型，请检查 API 地址和 Key')
@@ -571,6 +754,9 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
       if (isImageProtocol) {
         updates.imageGenerationProfile = imageProfile
       }
+      // Anthropic 配置仅在 Anthropic 协议下保存；切走时清空，避免残留污染。
+      updates.anthropic = isAnthropicProtocol ? pruneAnthropicConfig(anthropic) : null
+      updates.anthropicMessagesPath = isAnthropicProtocol ? (anthropicMessagesPath.trim() || undefined) : null
       // 只有用户真正改过 API Key 才写库；避免「打开 → 未修改 → 保存」重复写入，
       // 也避免把加载失败留下的空值覆盖掉原 Key。
       if (shouldCommitApiKey(apiKeyState)) {
@@ -590,6 +776,8 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
         imageGenerationsPath: imageGenerationsPath.trim() || undefined,
         ...(isImageProtocol ? { imageGenerationProfile: imageProfile } : {}),
         ...(requestParameterProfile ? { requestParameterProfile } : {}),
+        ...(isAnthropicProtocol && pruneAnthropicConfig(anthropic) ? { anthropic: pruneAnthropicConfig(anthropic) } : {}),
+        ...(isAnthropicProtocol && anthropicMessagesPath.trim() ? { anthropicMessagesPath: anthropicMessagesPath.trim() } : {}),
       })
     }
     props.onSave()
@@ -724,6 +912,36 @@ function ProviderFormDialog(props: ProviderFormDialogProps) {
               )}
             </div>
           </>
+        )}
+
+        {isAnthropicProtocol && (
+          <div className="provider-form-field">
+            <button
+              type="button"
+              className="provider-advanced-toggle"
+              onClick={() => setAnthropicAdvancedOpen((v) => !v)}
+              aria-expanded={anthropicAdvancedOpen}
+            >
+              <svg
+                className={`provider-advanced-chevron${anthropicAdvancedOpen ? ' provider-advanced-chevron--open' : ''}`}
+                width="12" height="12" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+              >
+                <path d="M9 6l6 6-6 6" />
+              </svg>
+              <span>高级设置</span>
+            </button>
+            {anthropicAdvancedOpen && (
+              <div className="provider-advanced-body">
+                <AnthropicAdvancedEditor
+                  config={anthropic}
+                  onChange={setAnthropic}
+                  messagesPath={anthropicMessagesPath}
+                  onMessagesPathChange={setAnthropicMessagesPath}
+                />
+              </div>
+            )}
+          </div>
         )}
 
         <div className="provider-form-field">
@@ -900,6 +1118,8 @@ export function ProviderSettings() {
     imageGenerationsPath: '',
     imageGenerationProfile: null as ImageGenerationParameterProfile | null,
     requestParameterProfile: null as RequestParameterProfile | null,
+    anthropic: null as AnthropicMessagesConfig | null,
+    anthropicMessagesPath: '',
   })
 
   useEffect(() => {
@@ -913,7 +1133,7 @@ export function ProviderSettings() {
 
   function openAddDialog() {
     setEditId(null)
-    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', hasApiKey: false, models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null, requestParameterProfile: null })
+    setDialogInitial({ name: '', protocol: 'chat_completions', baseUrl: '', hasApiKey: false, models: [], toolCalling: 'auto', imageInput: false, imageGenerationsPath: '', imageGenerationProfile: null, requestParameterProfile: null, anthropic: null, anthropicMessagesPath: '' })
     setDialogOpen(true)
   }
 
@@ -931,6 +1151,8 @@ export function ProviderSettings() {
       imageGenerationsPath: p.imageGenerationsPath ?? '',
       imageGenerationProfile: p.imageGenerationProfile ?? null,
       requestParameterProfile: p.requestParameterProfile ?? null,
+      anthropic: p.anthropic ?? null,
+      anthropicMessagesPath: p.anthropicMessagesPath ?? '',
     })
     setDialogOpen(true)
   }
@@ -967,6 +1189,8 @@ export function ProviderSettings() {
           initialImageGenerationsPath={dialogInitial.imageGenerationsPath}
           initialImageGenerationProfile={dialogInitial.imageGenerationProfile}
           initialRequestParameterProfile={dialogInitial.requestParameterProfile}
+          initialAnthropic={dialogInitial.anthropic}
+          initialAnthropicMessagesPath={dialogInitial.anthropicMessagesPath}
           onSave={handleSave}
           onClose={() => setDialogOpen(false)}
         />

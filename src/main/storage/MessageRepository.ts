@@ -28,7 +28,9 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, reasoning_text, reasoning_display_mode, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
+             provider_payload_json,
+             protocol_blocks_json, usage_json, stop_reason,
+             error_code, error_message, web_search_error, created_at, updated_at
       FROM messages
       WHERE conversation_id = ?
       ORDER BY created_at ASC
@@ -111,7 +113,9 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, reasoning_text, reasoning_display_mode, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
+             provider_payload_json,
+             protocol_blocks_json, usage_json, stop_reason,
+             error_code, error_message, web_search_error, created_at, updated_at
       FROM messages
       WHERE segment_id = ?
       ORDER BY created_at ASC
@@ -127,7 +131,9 @@ export class MessageRepository {
     const result = db.exec(`
       SELECT id, conversation_id, segment_id, role, content, reasoning_json, reasoning_text, reasoning_display_mode, web_search_results_json, status,
              model_id, reasoning_effort, provider_turn_id, provider_item_id,
-             provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
+             provider_payload_json,
+             protocol_blocks_json, usage_json, stop_reason,
+             error_code, error_message, web_search_error, created_at, updated_at
       FROM messages WHERE id = ?
     `, [id])
 
@@ -154,6 +160,9 @@ export class MessageRepository {
       message.providerTurnId,
       message.providerItemId,
       message.providerPayloadJson ?? null,
+      message.protocolBlocksJson ?? null,
+      message.usageJson ?? null,
+      message.stopReason ?? null,
       message.errorCode,
       message.errorMessage,
       message.webSearchError ?? null,
@@ -165,8 +174,9 @@ export class MessageRepository {
         INSERT INTO messages (
           id, conversation_id, segment_id, role, content, reasoning_json, reasoning_text, reasoning_display_mode, web_search_results_json, status,
           model_id, reasoning_effort, provider_turn_id, provider_item_id,
-          provider_payload_json, error_code, error_message, web_search_error, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          provider_payload_json, protocol_blocks_json, usage_json, stop_reason,
+          error_code, error_message, web_search_error, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, params)
     } catch (e) {
       const types = params.map((p, i) => `[${i}]=${typeof p}(${p === undefined ? 'UNDEFINED' : p === null ? 'null' : String(p).slice(0, 30)})`)
@@ -338,6 +348,51 @@ export class MessageRepository {
     }
   }
 
+  // 协议原生内容块（同协议 + 同模型才可重放）。写入失败不应破坏主流程。
+  updateProtocolBlocks(id: string, payload: {
+    protocol: string
+    modelId: string | null
+    blocks: unknown[]
+    transcript?: unknown[]
+  }): void {
+    const db = this.storage.database
+    try {
+      db.run(
+        `UPDATE messages SET protocol_blocks_json = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(payload), Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateProtocolBlocks params:', { id: typeof id, idVal: id })
+      throw e
+    }
+  }
+
+  updateUsage(id: string, usage: Record<string, unknown>): void {
+    const db = this.storage.database
+    try {
+      db.run(
+        `UPDATE messages SET usage_json = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(usage), Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateUsage params:', { id: typeof id, idVal: id })
+      throw e
+    }
+  }
+
+  updateStopReason(id: string, reason: string | null): void {
+    const db = this.storage.database
+    try {
+      db.run(
+        `UPDATE messages SET stop_reason = ?, updated_at = ? WHERE id = ?`,
+        [reason, Date.now(), id]
+      )
+    } catch (e) {
+      console.error('[DB] updateStopReason params:', { id: typeof id, idVal: id })
+      throw e
+    }
+  }
+
   updateError(id: string, code: string, message: string): void {
     const db = this.storage.database
     try {
@@ -389,11 +444,14 @@ export class MessageRepository {
       providerTurnId: row[12] ? String(row[12]) : null,
       providerItemId: row[13] ? String(row[13]) : null,
       providerPayloadJson: row[14] ? String(row[14]) : null,
-      errorCode: row[15] ? String(row[15]) : null,
-      errorMessage: row[16] ? String(row[16]) : null,
-      webSearchError: row[17] ? String(row[17]) : null,
-      createdAt: Number(row[18]),
-      updatedAt: Number(row[19]),
+      protocolBlocksJson: row[15] ? String(row[15]) : null,
+      usageJson: row[16] ? String(row[16]) : null,
+      stopReason: row[17] ? String(row[17]) : null,
+      errorCode: row[18] ? String(row[18]) : null,
+      errorMessage: row[19] ? String(row[19]) : null,
+      webSearchError: row[20] ? String(row[20]) : null,
+      createdAt: Number(row[21]),
+      updatedAt: Number(row[22]),
     }
   }
 }

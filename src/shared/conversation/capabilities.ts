@@ -9,7 +9,7 @@ import type { ConversationType } from '../types/conversation'
 
 // 聊天协议：走 ModelAdapter 的文字对话协议（含 Codex 原生）。
 // image_generations 是唯一非聊天协议。
-const CHAT_PROTOCOLS: ReadonlySet<string> = new Set(['chatgpt_codex', 'chat_completions', 'responses'])
+const CHAT_PROTOCOLS: ReadonlySet<string> = new Set(['chatgpt_codex', 'chat_completions', 'responses', 'anthropic_messages'])
 
 export function isChatProtocol(protocol: string | null | undefined): boolean {
   return !!protocol && CHAT_PROTOCOLS.has(protocol)

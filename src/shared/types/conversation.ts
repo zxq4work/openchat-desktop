@@ -178,6 +178,13 @@ export interface Message {
   providerTurnId: string | null
   providerItemId: string | null
   providerPayloadJson: string | null
+  // 协议原生内容块（按原始顺序），仅同协议 + 同模型时由 Adapter 原样重放。
+  // 结构：{ protocol, modelId, blocks: [...] }。其它协议 / 旧数据为 null / undefined。
+  protocolBlocksJson?: string | null
+  // 原始 Token usage（无损保存；未提供时为 null / undefined）。
+  usageJson?: string | null
+  // 原始 stop_reason（end_turn / max_tokens / tool_use / refusal / ...）。
+  stopReason?: string | null
   errorCode: string | null
   errorMessage: string | null
   createdAt: number

@@ -6,7 +6,9 @@ import { Dropdown } from '../Dropdown'
 import { resolveConversationBinding } from '../../../shared/conversation/capabilities'
 import { reasoningEffortOptions } from '../../packages/modelPresentation'
 
-// 自定义供应商 Chat Completions API 支持的推理等级
+// 自定义供应商（Chat Completions / Responses / Anthropic Messages）共享的推理等级。
+// Anthropic 通过 providerConfigId 自然落入「自定义供应商」分支，复用同一套选项与交互，
+// 不定义 Anthropic 专属选项；协议差异只在请求层映射（reasoning_effort vs output_config.effort）。
 const CUSTOM_REASONING_EFFORTS = [
   { reasoningEffort: 'none', description: 'No reasoning' },
   { reasoningEffort: 'minimal', description: 'Minimal reasoning' },
@@ -40,7 +42,7 @@ export function ReasoningSelector() {
   const bindingInvalid = !!binding && binding.status !== 'valid' && binding.status !== 'unconfigured'
 
   // Codex 模型：推理等级来自 supportedReasoningEfforts
-  // 自定义供应商：使用 Chat Completions 标准推理等级
+  // 自定义供应商（含 Anthropic）：使用标准推理等级
   const efforts = isCustomProvider
     ? CUSTOM_REASONING_EFFORTS
     : (currentModel?.supportedReasoningEfforts ?? [])

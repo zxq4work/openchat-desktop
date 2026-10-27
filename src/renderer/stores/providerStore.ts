@@ -1,15 +1,17 @@
 import { create } from 'zustand'
-import type { ImageGenerationParameterProfile, RequestParameterProfile } from '../../shared/types/provider'
+import type { ImageGenerationParameterProfile, RequestParameterProfile, AnthropicMessagesConfig } from '../../shared/types/provider'
 
 export interface SafeProviderConfig {
   id: string
   name: string
-  protocol: 'chat_completions' | 'responses' | 'image_generations'
+  protocol: 'chat_completions' | 'responses' | 'anthropic_messages' | 'image_generations'
   baseUrl: string
   models: string[]
   modelsPath?: string
   chatCompletionsPath?: string
   responsesPath?: string
+  anthropicMessagesPath?: string
+  anthropic?: AnthropicMessagesConfig
   imageGenerationsPath?: string
   // Image Generation 参数能力 Profile（仅 image_generations 协议有意义）
   imageGenerationProfile?: ImageGenerationParameterProfile

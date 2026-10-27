@@ -92,7 +92,19 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return Math.max(min, Math.min(max, Math.round(value)))
 }
 
-async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]> {
+async function fetchModelsFromUrl(
+  url: string,
+  apiKey: string,
+  auth?: { authMode?: 'x-api-key' | 'bearer'; apiVersion?: string }
+): Promise<string[]> {
+  const authMode = auth?.authMode ?? 'bearer'
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (authMode === 'x-api-key') {
+    headers['x-api-key'] = apiKey
+    headers['anthropic-version'] = auth?.apiVersion || '2023-06-01'
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`
+  }
   return new Promise((resolve, reject) => {
     const parsed = new URL(url)
     const req = createRequest(
@@ -101,10 +113,7 @@ async function fetchModelsFromUrl(url: string, apiKey: string): Promise<string[]
         port: parsed.port ? parseInt(parsed.port, 10) : undefined,
         path: parsed.pathname + parsed.search,
         method: 'GET',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'application/json',
-        },
+        headers,
         timeout: 15000,
         protocol: parsed.protocol === 'https:' ? 'https:' : 'http:',
       },
@@ -551,8 +560,8 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     services.providerConfigService?.update(id, updates)
   })
 
-  ipcMain.handle(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, async (_event, params: { baseUrl: string; apiKey: string; modelsPath?: string; providerId?: string }) => {
-    const { baseUrl, apiKey: inputKey, modelsPath, providerId } = params
+  ipcMain.handle(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, async (_event, params: { baseUrl: string; apiKey: string; modelsPath?: string; providerId?: string; protocol?: string; authMode?: 'x-api-key' | 'bearer'; apiVersion?: string }) => {
+    const { baseUrl, apiKey: inputKey, modelsPath, providerId, protocol } = params
     // 编辑模式下 apiKey 可能为空，尝试从存储中获取
     let apiKey = inputKey
     if (!apiKey && providerId) {
@@ -561,7 +570,12 @@ export function registerIpcHandlers(services: Services, getMainWindow: () => Bro
     const url = modelsPath
       ? (baseUrl.replace(/\/+$/, '') + (modelsPath.startsWith('/') ? modelsPath : '/' + modelsPath))
       : (baseUrl.replace(/\/+$/, '') + '/models')
-    return await fetchModelsFromUrl(url, apiKey)
+    // Anthropic 官方 /models 需要在 URL 上排除 /v1 重复：baseUrl 可能已经含 /v1。
+    // 这里沿用既有拼接（baseUrl + /models），与 Chat Completions 一致；不需要额外特性。
+    const auth = protocol === 'anthropic_messages'
+      ? { authMode: params.authMode ?? 'x-api-key', apiVersion: params.apiVersion }
+      : undefined
+    return await fetchModelsFromUrl(url, apiKey, auth)
   })
 
   // 按需读取已保存的 API Key 明文：仅响应 Renderer 用户主动「查看」动作。

@@ -7,6 +7,7 @@ export type ChatProtocol =
   | 'chatgpt_codex'
   | 'chat_completions'
   | 'responses'
+  | 'anthropic_messages'
 
 // Provider 协议全集。image_generations 与 Chat 协议同级，
 // 对应 POST /v1/images/generations，不走 ModelAdapter（无 SSE、无 messages）。
@@ -58,6 +59,23 @@ export interface CanonicalMessage {
   toolCalls?: CanonicalToolCall[]
   toolResult?: CanonicalToolResult
   webSearchCalls?: CanonicalWebSearchCall[]
+  // 协议原生内容块（按原始顺序）。仅在「源协议 === 目标协议」时由 Adapter 原样重放，
+  // 用于无损恢复 Anthropic thinking / signature / redacted_thinking / tool_use / tool_result 等块。
+  // 跨协议时为空，Adapter 按 canonical 字段重新序列化。
+  nativeBlocks?: Array<Record<string, unknown>>
+  // nativeBlocks 的来源协议；与目标协议不一致时 Adapter 必须忽略 nativeBlocks。
+  nativeBlocksProtocol?: ProviderProtocol
+  // 该消息生成时使用的模型 ID（用于判断 thinking signature 是否可跨模型重放）。
+  nativeBlocksModelId?: string
+  // 完整的单轮原生 transcript（含中间工具轮与工具结果）。存在时 Adapter 优先按顺序精确重放，
+  // 无损保留 Anthropic thinking signature 与多轮工具调用；不存在时退回 nativeBlocks / canonical。
+  nativeTranscript?: CanonicalNativeTranscriptItem[]
+}
+
+// Anthropic 无损 transcript 中的一项：一条原始消息（assistant 或 user / tool_result）。
+export interface CanonicalNativeTranscriptItem {
+  role: 'user' | 'assistant'
+  blocks: Array<Record<string, unknown>>
 }
 
 // 工具定义（JSON Schema 参数）
@@ -83,9 +101,37 @@ export interface CanonicalModelRequest {
   responsesLite?: boolean
   maxOutputTokens?: number
   temperature?: number
+  // Anthropic 协议专用：请求级 thinking / prompt caching 覆盖（来自 Provider 配置）。
+  // 其它协议忽略。未提供时 Adapter 使用安全默认值（不发送 thinking / cache）。
+  anthropic?: AnthropicRequestOptions
   // 通用动态请求参数（Main 权威层 resolve + validate 后的结果）。
   // Adapter 只按 path 写入 body，不认识具体参数名。空数组 / undefined 时行为完全不变。
   dynamicParameters?: ResolvedRequestParameter[]
+}
+
+// Anthropic 请求级选项（由 Provider 配置派生，Adapter 只按字段写入 body）。
+export interface AnthropicRequestOptions {
+  apiVersion?: string
+  authMode?: AnthropicAuthMode
+  maxOutputTokens?: number
+  thinking?: AnthropicThinkingConfig
+  promptCaching?: boolean
+}
+
+// 协议无关的 Token 用量。缺失字段保留 undefined（unknown），绝不用 0 伪造。
+export interface CanonicalTokenUsage {
+  inputTokens?: number
+  outputTokens?: number
+  cacheCreationInputTokens?: number
+  cacheReadInputTokens?: number
+  // 原始 usage 对象（无损保存，便于后续扩展计费 / 诊断）。
+  raw?: Record<string, unknown>
+}
+
+// 协议原生内容块（按原始顺序）。仅同一协议内重放，不做跨协议转换。
+export interface CanonicalNativeBlock {
+  type: string
+  [key: string]: unknown
 }
 
 export type CanonicalModelEvent =
@@ -97,6 +143,13 @@ export type CanonicalModelEvent =
   | { type: 'web_search_call'; phase: 'started' | 'searching' | 'completed' | 'failed'; itemId?: string; status?: string; action?: { type: string; query?: string; queries?: string[]; url?: string; pattern?: string; sources?: Array<{ url?: string; title?: string; type?: string; name?: string; snippet?: string }> }; results?: unknown[] }
   | { type: 'turn_started'; turnId?: string }
   | { type: 'turn_completed'; turnId?: string }
+  // 流式阶段产出的原生内容块（thinking/signature/redacted_thinking/tool_use 等），
+  // 供上层无损持久化并在同协议后续轮次重放。text 正文块不在此重复发送。
+  | { type: 'native_block'; block: CanonicalNativeBlock }
+  // 累计 usage 快照（后续快照覆盖较早快照，绝不累加）。
+  | { type: 'usage'; usage: CanonicalTokenUsage }
+  // 原始 stop_reason（end_turn / max_tokens / tool_use / refusal / ... 未知值原样保留）。
+  | { type: 'stop_reason'; reason: string | null }
   | { type: 'error'; code: string; message: string }
 
 export interface ModelAdapter {
@@ -110,8 +163,36 @@ export interface ModelAdapter {
 
 export type ToolCallingMode = 'auto' | 'enabled' | 'disabled'
 
-// 自定义 Provider 可选的协议：Chat Completions / Responses / Image Generations
+// 自定义 Provider 可选的协议：Chat Completions / Responses / Anthropic Messages / Image Generations
 export type CustomProviderProtocol = Exclude<ProviderProtocol, 'chatgpt_codex'>
+
+// Anthropic 认证方式：x-api-key（默认，兼容多数第三方中转）或 Bearer。
+export type AnthropicAuthMode = 'x-api-key' | 'bearer'
+
+// Anthropic Messages API 的协议级配置（仅 protocol='anthropic_messages' 有意义）。
+// 全部 optional：缺失时使用安全默认值（x-api-key + 2023-06-01 + 自动解析 /v1/messages）。
+export interface AnthropicThinkingConfig {
+  // off: 不发送 thinking；adaptive: thinking {type:'adaptive'}；budget: thinking {type:'enabled', budget_tokens}
+  mode: 'off' | 'adaptive' | 'budget'
+  // budget 模式下的思考预算（至少 1024，且必须小于 max_tokens）。
+  budgetTokens?: number
+}
+
+export interface AnthropicMessagesConfig {
+  // anthropic-version 请求头。默认 '2023-06-01'；可为 '2026-10-21' 或任意自定义字符串。
+  // 版本参与请求构建：2026-10-21 不发送 temperature/top_p/top_k。
+  apiVersion?: string
+  // 认证方式，默认 'x-api-key'。
+  authMode?: AnthropicAuthMode
+  // 完整接口地址覆盖（含 host）。非空时原样使用，不再拼接 /v1/messages。
+  endpoint?: string
+  // 最大输出 Token（Anthropic 请求的必填字段）。默认 4096。绝不等于上下文窗口。
+  maxOutputTokens?: number
+  // 扩展思考配置。默认 off（不发送 thinking）。
+  thinking?: AnthropicThinkingConfig
+  // Prompt Caching：默认关闭。开启时最多添加 2 个 ephemeral 断点（system + 最后一条消息）。
+  promptCaching?: boolean
+}
 
 export interface CustomProviderConfig {
   id: string
@@ -123,6 +204,10 @@ export interface CustomProviderConfig {
   modelsPath?: string
   chatCompletionsPath?: string
   responsesPath?: string
+  // Anthropic Messages 请求路径（默认 /v1/messages；Base URL 已含 /v1 时用 /messages）
+  anthropicMessagesPath?: string
+  // Anthropic Messages 协议配置（版本 / 认证 / 完整地址覆盖）
+  anthropic?: AnthropicMessagesConfig
   // Image Generations 请求路径，默认 /images/generations（baseUrl 已含 /v1 时）
   imageGenerationsPath?: string
   // Image Generations 参数能力 Profile（仅 protocol=image_generations 有意义）。

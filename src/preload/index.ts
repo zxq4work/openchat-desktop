@@ -223,8 +223,20 @@ const openchat = {
     create: (config: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_CREATE, config),
     delete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_DELETE, id),
     update: (id: string, updates: unknown) => ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_UPDATE, id, updates),
-    fetchModels: (baseUrl: string, apiKey: string, modelsPath?: string, providerId?: string) =>
-      ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, { baseUrl, apiKey, modelsPath, providerId }),
+    fetchModels: (
+      baseUrl: string,
+      apiKey: string,
+      modelsPath?: string,
+      providerId?: string,
+      options?: { protocol?: string; authMode?: 'x-api-key' | 'bearer'; apiVersion?: string }
+    ) =>
+      ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_FETCH_MODELS, {
+        baseUrl,
+        apiKey,
+        modelsPath,
+        providerId,
+        ...(options ?? {}),
+      }),
     // 按需读取已保存的 API Key 明文。仅用户主动触发时调用；不随 providers.list() 返回。
     revealApiKey: (id: string): Promise<string | null> =>
       ipcRenderer.invoke(IPC_CHANNELS.PROVIDERS_REVEAL_API_KEY, id),

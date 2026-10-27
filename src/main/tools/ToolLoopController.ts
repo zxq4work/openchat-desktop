@@ -6,6 +6,9 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
   CanonicalWebSearchCall,
+  CanonicalNativeBlock,
+  CanonicalNativeTranscriptItem,
+  CanonicalTokenUsage,
 } from '../../shared/types/provider'
 import { ToolRegistry, type ToolExecutionContext } from './ToolRegistry'
 import { READ_HISTORY_TOOL_NAME } from './history/ReadHistoryTool'
@@ -79,6 +82,14 @@ export interface ToolLoopResult {
   providerTurnId: string | null
   totalToolCalls: number
   toolCallHistory: ToolCallHistoryEntry[]
+  // 最后一轮（最终回答轮）产出的协议原生内容块 / usage / stop_reason。
+  // 仅 Anthropic 等会发出 native_block 事件的协议非空；其它协议为空 → 上层不落库。
+  finalNativeBlocks: CanonicalNativeBlock[]
+  finalUsage?: CanonicalTokenUsage
+  finalStopReason: string | null
+  // 完整单轮原生 transcript（Anthropic；含中间工具轮 + 工具结果 + 最终回答）。
+  // 存在时上层保存为 transcript，历史重放可无损保留 thinking signature 与工具往返。
+  nativeTranscript?: CanonicalNativeTranscriptItem[]
 }
 
 export class ToolLoopController {
@@ -105,6 +116,14 @@ export class ToolLoopController {
     let totalToolCalls = 0
     let accumulatedContent = ''
     let providerTurnId: string | null = null
+
+    // 追踪「最后一轮」的原生块 / usage / stopReason（最终回答轮，用于上层持久化）。
+    let finalNativeBlocks: CanonicalNativeBlock[] = []
+    let finalUsage: CanonicalTokenUsage | undefined
+    let finalStopReason: string | null = null
+    // 完整单轮原生 transcript：仅在 Anthropic 发出 native_block 时收集。
+    const nativeTranscript: CanonicalNativeTranscriptItem[] = []
+    const hasNativeEvents = () => nativeTranscript.length > 0
 
     let searchCallCount = 0
     let fetchCallCount = 0
@@ -142,6 +161,11 @@ export class ToolLoopController {
       const toolCalls: CanonicalToolCall[] = []
       // 本轮新产生的 provider-native web_search_call（仅 replayHostedSearchCalls 时收集）。
       const roundWebSearchCalls: CanonicalWebSearchCall[] = []
+      // 本轮产出的协议原生内容块（Anthropic thinking / tool_use）。带 thinking signature 时，
+      // 后续带工具结果的请求必须原样回传，否则上游拒绝。其它协议不会产生此类事件。
+      const roundNativeBlocks: CanonicalNativeBlock[] = []
+      let roundUsage: CanonicalTokenUsage | undefined
+      let roundStopReason: string | null = null
       let roundDeltaCount = 0
 
       console.log('[ToolLoop] Round', round, 'starting, messages=', messages.length)
@@ -202,6 +226,18 @@ export class ToolLoopController {
             callbacks.onReasoningCompleted(event.itemId, event.summary)
             break
 
+          case 'native_block':
+            roundNativeBlocks.push(event.block)
+            break
+
+          case 'usage':
+            roundUsage = event.usage
+            break
+
+          case 'stop_reason':
+            roundStopReason = event.reason
+            break
+
           case 'turn_completed':
             break
 
@@ -217,6 +253,14 @@ export class ToolLoopController {
       // 没有工具调用，模型已输出最终回答，退出循环
       if (toolCalls.length === 0) {
         console.log('[ToolLoop] round=%d decision=final-answer returning=true', round)
+        // 记录最终回答轮的原生块（Anthropic thinking / text 等），供上层持久化。
+        finalNativeBlocks = roundNativeBlocks.filter((b) => b.type !== 'tool_use')
+        finalUsage = roundUsage
+        finalStopReason = roundStopReason
+        // 最终回答轮的 assistant 内容块并入 transcript（紧随之前的工具往返）。
+        if (hasNativeEvents() && finalNativeBlocks.length > 0) {
+          nativeTranscript.push({ role: 'assistant', blocks: finalNativeBlocks })
+        }
         break
       }
 
@@ -261,8 +305,34 @@ export class ToolLoopController {
       if (roundWebSearchCalls.length > 0) {
         messages.push({ role: 'assistant', webSearchCalls: roundWebSearchCalls })
       }
-      messages.push({ role: 'assistant', toolCalls })
+      // Anthropic：带 thinking signature / tool_use 的原生块必须原样回传，
+      // 否则工具结果轮的上游会拒绝（thinking signature 与上下文强绑定）。
+      // canonical toolCalls 仍会被序列化为独立 tool_use 块——此时改由原生块承载 assistant 内容，
+      // 因此仅在存在原生块时不重复 push canonical toolCalls。
+      if (roundNativeBlocks.length > 0) {
+        nativeTranscript.push({ role: 'assistant', blocks: roundNativeBlocks })
+        messages.push({
+          role: 'assistant',
+          nativeBlocks: roundNativeBlocks,
+          nativeBlocksProtocol: this.adapter.protocol,
+        })
+      } else {
+        messages.push({ role: 'assistant', toolCalls })
+      }
 
+      // 原生 transcript：同一轮的多个工具结果合并为一条 user 消息（多个 tool_result 块），
+      // 避免产生多条连续的 user 消息。
+      if (hasNativeEvents() && toolResults.length > 0) {
+        nativeTranscript.push({
+          role: 'user',
+          blocks: toolResults.map((tr) => ({
+            type: 'tool_result',
+            tool_use_id: tr.callId,
+            content: tr.output,
+            ...(tr.isError ? { is_error: true } : {}),
+          })),
+        })
+      }
       for (const tr of toolResults) {
         messages.push({
           role: 'tool',
@@ -296,6 +366,9 @@ export class ToolLoopController {
         }
         let wrapUpDeltas = 0
         let wrapUpReasoningDeltas = 0
+        const wrapUpNativeBlocks: CanonicalNativeBlock[] = []
+        let wrapUpUsage: CanonicalTokenUsage | undefined
+        let wrapUpStopReason: string | null = null
         for await (const event of this.adapter.stream(wrapUpRequest, signal)) {
           if (signal.aborted) break
           switch (event.type) {
@@ -320,6 +393,15 @@ export class ToolLoopController {
               // Standalone / 自定义 Provider 收尾轮行为保持完全不变。
               if (this.config.replayHostedSearchCalls) callbacks.onWebSearchCall?.(event)
               break
+            case 'native_block':
+              wrapUpNativeBlocks.push(event.block)
+              break
+            case 'usage':
+              wrapUpUsage = event.usage
+              break
+            case 'stop_reason':
+              wrapUpStopReason = event.reason
+              break
             case 'turn_completed':
               break
             case 'error':
@@ -330,6 +412,12 @@ export class ToolLoopController {
           }
         }
         console.log('[ToolLoop] Wrap-up finished, deltas=', wrapUpDeltas, 'reasoningDeltas=', wrapUpReasoningDeltas, 'content length=', accumulatedContent.length)
+        finalNativeBlocks = wrapUpNativeBlocks.filter((b) => b.type !== 'tool_use')
+        finalUsage = wrapUpUsage
+        finalStopReason = wrapUpStopReason
+        if (hasNativeEvents() && finalNativeBlocks.length > 0) {
+          nativeTranscript.push({ role: 'assistant', blocks: finalNativeBlocks })
+        }
         break
       }
     }
@@ -340,6 +428,10 @@ export class ToolLoopController {
       providerTurnId,
       totalToolCalls,
       toolCallHistory,
+      finalNativeBlocks,
+      finalUsage,
+      finalStopReason,
+      ...(nativeTranscript.length > 0 ? { nativeTranscript } : {}),
     }
   }
 

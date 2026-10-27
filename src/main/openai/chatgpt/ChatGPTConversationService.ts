@@ -23,6 +23,7 @@ import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
 import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
+import { shouldIncludeNoSearchNotice } from './anthropicPlainChatPolicy'
 import {
   splitAttributionRequest,
   buildHostedAttributionStatement,
@@ -93,6 +94,23 @@ const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available 
 - Do NOT output any search-related syntax (no <tool_call>, no <!-- START: WEB_SEARCH_CALL -->, no function calls).
 - Do NOT mention that search is "disabled" or "unavailable" — just answer the question directly.
 - If the user explicitly asks you to search or look something up, simply say you're unable to look that up right now and suggest they try enabling web search.`
+
+// 脱敏诊断：只记录 System Prompt 的「来源布尔 + 长度」，绝不打印 Prompt 正文 / 用户对话 / 凭证。
+// 仅在显式开启 OPENCHAT_DEBUG_SYSTEM_PROMPT=1 时输出，避免生产日志噪声。
+export function logSystemPromptDebug(info: {
+  webSearch: boolean
+  hasModelInstructions: boolean
+  baseMetadataLength: number
+  finalLength: number
+}): void {
+  const enabled = process.env.OPENCHAT_DEBUG_SYSTEM_PROMPT === '1' || process.env.OPENCHAT_DEBUG_SYSTEM_PROMPT === 'true'
+  if (!enabled) return
+  const sources: string[] = []
+  if (info.baseMetadataLength > 0) sources.push('baseMetadata')
+  if (info.hasModelInstructions) sources.push('modelInstructions')
+  console.log('[SystemPromptDebug] sources=%s baseLen=%d finalLen=%d webSearch=%s',
+    sources.join(','), info.baseMetadataLength, info.finalLength, info.webSearch)
+}
 
 // 判断某个模型是否支持图片输入。
 // - ChatGPT Codex：以模型 metadata 的 inputModalities 为准（三态语义，见 supportsImageFromModalities）
@@ -829,31 +847,49 @@ export class ChatGPTConversationService {
         throw new ImageInputUnsupportedError()
       }
 
+      const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+
       const modelInstructions = useModelInstructions
         ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
         : ''
-      const conversationSystemPrompt = systemPrompt.trim()
+      const isAnthropic = adapter.protocol === 'anthropic_messages'
+      // 用户提示词：Anthropic 不再伪造 "You are a helpful assistant."（用户从未配置过它）。
+      // 其它协议保持原有兜底文案，行为完全不变。
+      const userPrompt = systemPrompt.trim()
         ? systemPrompt
-        : 'You are a helpful assistant.'
-      const baseMetadata = [
-        `Current model: ${modelId}`,
+        : (isAnthropic ? '' : 'You are a helpful assistant.')
+      // 基础 metadata：模型名 / 日期 / 时区 + 用户提示词。
+      // Anthropic 不注入 `Current model`（仅此处生产、无任何消费者），也不注入无提示词时的
+      // 兜底文案与 'Additional info for this conversation:' 标题；
+      // 但**保留日期与时区**——模型无法从其它途径获知当前日期/时区（Anthropic 不注入
+      // 服务端时钟），属于确实被依赖的功能上下文，绝不删除。
+      // 用户提示词仍位于 metadata 之后（保持原有合并顺序与优先级）。
+      const metadataLines = [
+        ...(isAnthropic ? [] : [`Current model: ${modelId}`]),
         `Current date: ${this.getLocalDate()}`,
         `Current timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
-        'Additional info for this conversation:',
-        '',
-        conversationSystemPrompt,
-      ].join('\n')
+      ]
+      const baseMetadata = (userPrompt
+        ? [...metadataLines, ...(isAnthropic ? [] : ['Additional info for this conversation:']), '', userPrompt]
+        : metadataLines
+      ).join('\n')
 
       // 本轮可信指令：基础 metadata + 当前模型 instructions。
       // 搜索模式的「本轮自我识别」内嵌在按策略隔离的搜索指令尾部（见 codexSearchInstructions），
       // 由对应生成路径在 instructions 之后拼接，无需在此单独追加声明。
+      // 每轮都从会话快照重新计算，不与上一轮结果叠加（无累积）。
       const instructions = modelInstructions
         ? `${modelInstructions}\n\n${baseMetadata}`
         : baseMetadata
 
-      this.messages.updateStatus(assistantMessageId, 'streaming')
+      logSystemPromptDebug({
+        webSearch: webSearchEnabled,
+        hasModelInstructions: !!modelInstructions,
+        baseMetadataLength: baseMetadata.length,
+        finalLength: instructions.length,
+      })
 
-      const segmentId = this.messages.getById(assistantMessageId)?.segmentId ?? ''
+      this.messages.updateStatus(assistantMessageId, 'streaming')
 
       const searchStrategy = this.resolveSearchStrategy(providerConfigId, webSearchEnabled, codexSearchMode)
       // 模型 catalog 明确声明不支持 hosted search（supports_search_tool === false）时，
@@ -1195,6 +1231,20 @@ export class ChatGPTConversationService {
     }
     const finalContent = this.cleanFinalText(accumulatedContent)
     this.messages.updateContent(assistantMessageId, finalContent)
+
+    // 协议原生内容块 / usage / stop_reason（仅 Anthropic 等会发出 native_block 的协议非空）。
+    if (result.finalNativeBlocks.length > 0 || result.nativeTranscript) {
+      this.messages.updateProtocolBlocks(assistantMessageId, {
+        protocol: adapter.protocol,
+        modelId,
+        blocks: result.finalNativeBlocks,
+        ...(result.nativeTranscript ? { transcript: result.nativeTranscript } : {}),
+      })
+    }
+    if (result.finalUsage?.raw) this.messages.updateUsage(assistantMessageId, result.finalUsage.raw)
+    if (result.finalStopReason !== null && result.finalStopReason !== undefined) {
+      this.messages.updateStopReason(assistantMessageId, result.finalStopReason)
+    }
 
     this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
     this.messages.updateStatus(assistantMessageId, 'completed')
@@ -1812,7 +1862,8 @@ export class ChatGPTConversationService {
         webSearchResults: [],
       })
       await this.runGenerationDirect(
-        conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController
+        conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController,
+        undefined, true
       )
       return
     }
@@ -1889,7 +1940,8 @@ export class ChatGPTConversationService {
       : instructions
 
     await this.runGenerationDirect(
-      conversationId, adapter, modelId, fullInstructions, effort, assistantMessageId, segmentId, abortController
+      conversationId, adapter, modelId, fullInstructions, effort, assistantMessageId, segmentId, abortController,
+      undefined, true
     )
   }
 
@@ -1913,6 +1965,20 @@ export class ChatGPTConversationService {
         m.role === 'assistant' &&
         (m.providerPayloadJson || (m.webSearchResults && m.webSearchResults.length > 0))
     )
+  }
+
+  // 当前上下文段是否执行过搜索：与 buildCanonicalRequest 的重放范围一致（仅 completed）。
+  private segmentHasSearchHistory(segmentId: string): boolean {
+    if (!segmentId) return false
+    const completed = this.messages.getBySegmentId(segmentId).filter((m) => m.status === 'completed')
+    return this.detectSearchWasEnabledInHistory(completed)
+  }
+
+  // 当前上下文段是否已有可注入的搜索来源上下文（buildCanonicalRequest 的确定性 provenance）。
+  // 有 provenance 时其 disabledNote 已完整覆盖「无当前工具 / 勿声称已搜索」，无需重复模板。
+  private segmentHasSearchProvenance(segmentId: string): boolean {
+    if (!segmentId) return false
+    return resolveAllSearchProvenance(this.messages.getBySegmentId(segmentId)).length > 0
   }
 
   // 判断是否需要搜索，是则提取 query；否则返回空字符串跳过搜索
@@ -1997,9 +2063,21 @@ User message: ${userText}${contextHint}`
     assistantMessageId: string,
     segmentId: string,
     abortController: AbortController,
-    effectiveResponsesLite?: boolean
+    effectiveResponsesLite?: boolean,
+    searchEnabledThisTurn = false
   ): Promise<void> {
-    const noSearchInstructions = instructions + '\n\n' + NO_SEARCH_CAPABILITY_NOTICE
+    // 是否需要搜索声明只由搜索状态与历史工具依赖决定，与用户提示词 / instructions 无关。
+    // 关键：一旦注入了 history provenance，就绝不再追加 NO_SEARCH_CAPABILITY_NOTICE，
+    // 否则「历史确实搜索过」与「你没有搜索工具/别提升级搜索」互相否定，导致模型否认历史搜索。
+    const hasSearchHistory = searchEnabledThisTurn || this.segmentHasSearchHistory(segmentId)
+    const hasProvenanceContext = this.segmentHasSearchProvenance(segmentId)
+    const includeNotice = shouldIncludeNoSearchNotice({
+      protocol: adapter.protocol,
+      searchEnabledThisTurn,
+      hasSearchHistory,
+      hasProvenanceContext,
+    })
+    const noSearchInstructions = includeNotice ? (instructions ? instructions + '\n\n' + NO_SEARCH_CAPABILITY_NOTICE : NO_SEARCH_CAPABILITY_NOTICE) : instructions
     const request = this.buildCanonicalRequest(modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true, effectiveResponsesLite)
     await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
   }
@@ -2022,6 +2100,22 @@ User message: ${userText}${contextHint}`
     let toolCallTextActive = false
     let toolCallTextBuffer = ''
     let finalized = false
+    // 协议原生内容块 / usage / stop_reason（Anthropic 无损持久化；其它协议 adapter 不发送 → 保持 null）。
+    const nativeBlocks: Array<Record<string, unknown>> = []
+    let lastUsage: Record<string, unknown> | null = null
+    let lastStopReason: string | null = null
+
+    const persistProtocolMeta = (): void => {
+      if (nativeBlocks.length > 0) {
+        this.messages.updateProtocolBlocks(assistantMessageId, {
+          protocol: adapter.protocol,
+          modelId: request.model,
+          blocks: nativeBlocks,
+        })
+      }
+      if (lastUsage) this.messages.updateUsage(assistantMessageId, lastUsage)
+      if (lastStopReason !== null) this.messages.updateStopReason(assistantMessageId, lastStopReason)
+    }
 
     const sanitizeDelta = (rawText: string): string => {
       let out = ''
@@ -2110,6 +2204,19 @@ User message: ${userText}${contextHint}`
           break
         }
 
+        case 'native_block':
+          // 协议原生块（Anthropic thinking / redacted_thinking / tool_use 等）无损收集。
+          nativeBlocks.push(event.block as Record<string, unknown>)
+          break
+
+        case 'usage':
+          lastUsage = event.usage.raw ?? null
+          break
+
+        case 'stop_reason':
+          lastStopReason = event.reason
+          break
+
         case 'turn_completed':
           // 刷新 citation 缓冲区残余
           {
@@ -2121,6 +2228,7 @@ User message: ${userText}${contextHint}`
           }
           this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
           this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
+          persistProtocolMeta()
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
           finalized = true
@@ -2137,6 +2245,9 @@ User message: ${userText}${contextHint}`
     // 流结束但未收到 turn_completed 或 error（被中断或异常结束）
     if (!finalized && this.activeGeneration?.assistantMessageId === assistantMessageId) {
       if (abortController.signal.aborted) {
+        // 中断：保留已完成的原生块（中断时未完成的 tool JSON 不会出现在 native_block 中），
+        // 但不伪造完整 thinking signature。
+        persistProtocolMeta()
         this.messages.updateStatus(assistantMessageId, 'stopped')
         this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'interrupted' })
       } else {
@@ -2147,6 +2258,7 @@ User message: ${userText}${contextHint}`
           if (directFlush) accumulatedContent += directFlush
           this.messages.updateContent(assistantMessageId, this.cleanFinalText(accumulatedContent))
           this.messages.flushReasoningText(assistantMessageId, reasoningTextAccum)
+          persistProtocolMeta()
           this.messages.updateStatus(assistantMessageId, 'completed')
           this.emitStreamEvent({ type: 'turn-completed', conversationId, status: 'completed' })
         } else {
@@ -2200,6 +2312,54 @@ User message: ${userText}${contextHint}`
       }
 
       if (msg.role === 'assistant') {
+        // 协议原生块重放：仅当历史消息与目标协议一致、且生成模型与当前模型一致时
+        // 才原样重放（Anthropic thinking signature 绑定模型，跨模型重放会被拒签）。
+        // 原生块包含 thinking / tool_use 等完整内容，与下方 canonical 重建互斥。
+        if (targetProtocol === 'anthropic_messages' && msg.protocolBlocksJson) {
+          try {
+            const payload = JSON.parse(msg.protocolBlocksJson) as {
+              protocol?: string
+              modelId?: string | null
+              blocks?: Array<Record<string, unknown>>
+              transcript?: Array<{ role?: string; blocks?: Array<Record<string, unknown>> }>
+            }
+            const sameProtocol = payload.protocol === 'anthropic_messages'
+            const sameModel = !payload.modelId || payload.modelId === modelId
+            if (sameProtocol && sameModel) {
+              const transcript = Array.isArray(payload.transcript)
+                ? payload.transcript
+                    .filter((it) => it && (it.role === 'user' || it.role === 'assistant') && Array.isArray(it.blocks) && it.blocks.length > 0)
+                    .map((it) => ({ role: it.role as 'user' | 'assistant', blocks: it.blocks as Array<Record<string, unknown>> }))
+                : []
+              const blocks = Array.isArray(payload.blocks) && payload.blocks.length > 0 ? payload.blocks : []
+              // 搜索关闭（skipWebSearchHistory）时与其它协议同规则：不重放历史工具调用。
+              // 否则同一轮搜索会同时以 native tool_use/tool_result（messages）和 provenance（system）
+              // 出现两次，且请求在未声明 tools 的情况下携带 tool_use 块，模型会据此误判「本轮又搜索了」。
+              // 仅含 thinking / text 的纯回答轮不受影响，仍可无损重放。
+              const allNativeBlocks = [...transcript.flatMap((it) => it.blocks), ...blocks] as Array<{ type?: string }>
+              const hasToolBlocks = allNativeBlocks.some(
+                (b) => b.type === 'tool_use' || b.type === 'tool_result'
+              )
+              const replayNative = (transcript.length > 0 || blocks.length > 0)
+                && !(skipWebSearchHistory === true && hasToolBlocks)
+              if (replayNative) {
+                messages.push({
+                  role: 'assistant',
+                  content: msg.content || undefined,
+                  nativeBlocks: blocks,
+                  nativeBlocksProtocol: 'anthropic_messages',
+                  nativeBlocksModelId: payload.modelId ?? modelId,
+                  ...(transcript.length > 0 ? { nativeTranscript: transcript } : {}),
+                })
+                continue
+              }
+              // 否则落到下方 canonical 重建：跳过 provider history 解析后只保留正文文本。
+            }
+          } catch {
+            // 解析失败：退回 canonical 重建
+          }
+        }
+
         // 解析 providerPayloadJson，按真实执行顺序重建 history
         let webSearchCalls: CanonicalWebSearchCall[] | undefined
         // 源 Provider / Protocol 身份（用于只读历史说明「历史工具来自哪个 Provider」）。
@@ -2358,9 +2518,13 @@ User message: ${userText}${contextHint}`
     // 将 developer 转成 system 后出现在消息中间被服务端拒绝（"System message must be at the beginning."）
     const allProvenances = resolveAllSearchProvenance(segmentMessages)
     if (allProvenances.length > 0) {
-      const ctx = buildAllProvenanceContext(allProvenances, skipWebSearchHistory)
+      // 搜索是否关闭：以本轮是否重放历史搜索工具为准（skipWebSearchHistory）。
+      // PreSearch 回退同样不带工具，故文案统一表述为「本轮不提供搜索工具」，
+      // 不臆测具体原因（用户关闭 / Provider 不支持 tool calling 两种情况都成立）。
+      const searchDisabled = skipWebSearchHistory === true
+      const ctx = buildAllProvenanceContext(allProvenances, searchDisabled)
       instructions = instructions + '\n\n' + ctx
-      console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), skipWebSearchHistory ? 'true' : 'false')
+      console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), searchDisabled ? 'true' : 'false')
     }
 
     // 不可移植的历史工具调用 → 有界只读历史记录（明确标注非当前可用工具，保留真实结果）。

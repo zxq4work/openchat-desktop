@@ -124,6 +124,20 @@ export class StorageService {
       this.db.run("ALTER TABLE messages ADD COLUMN web_search_error TEXT")
       changed = true
     }
+    // 迁移：协议原生内容块 / usage / stop_reason（Anthropic 等协议的无损持久化）。
+    // 纯 additive：旧消息为 NULL，读取时按 null 处理，既有协议行为完全不变。
+    if (!msgColumnNames.includes('protocol_blocks_json')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN protocol_blocks_json TEXT")
+      changed = true
+    }
+    if (!msgColumnNames.includes('usage_json')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN usage_json TEXT")
+      changed = true
+    }
+    if (!msgColumnNames.includes('stop_reason')) {
+      this.db.run("ALTER TABLE messages ADD COLUMN stop_reason TEXT")
+      changed = true
+    }
 
     // 迁移：conversations 表 provider_config_id 列
     if (!convColumnNames.includes('provider_config_id')) {
@@ -311,6 +325,18 @@ export class StorageService {
       // 纯 additive：旧 Provider 无值 → 视为空 profile，request body 完全不变。
       if (!pcNames.includes('request_parameter_profile_json')) {
         this.db.run("ALTER TABLE provider_configs ADD COLUMN request_parameter_profile_json TEXT")
+        changed = true
+      }
+      // 迁移：anthropic_messages_path 列（Anthropic Messages 自定义请求路径）。
+      // 纯 additive：旧 Provider 无值 → 按 baseUrl 自动推导 /v1/messages。
+      if (!pcNames.includes('anthropic_messages_path')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN anthropic_messages_path TEXT")
+        changed = true
+      }
+      // 迁移：anthropic_config_json 列（Anthropic 版本 / 认证 / max_tokens / thinking / 缓存）。
+      // 纯 additive：旧 Provider 无值 → 使用安全默认值。
+      if (!pcNames.includes('anthropic_config_json')) {
+        this.db.run("ALTER TABLE provider_configs ADD COLUMN anthropic_config_json TEXT")
         changed = true
       }
     }
@@ -509,6 +535,9 @@ export class StorageService {
         provider_turn_id TEXT,
         provider_item_id TEXT,
         provider_payload_json TEXT,
+        protocol_blocks_json TEXT,
+        usage_json TEXT,
+        stop_reason TEXT,
         error_code TEXT,
         error_message TEXT,
         web_search_error TEXT,
@@ -552,6 +581,8 @@ export class StorageService {
         image_generations_path TEXT,
         image_generation_profile_json TEXT,
         request_parameter_profile_json TEXT,
+        anthropic_messages_path TEXT,
+        anthropic_config_json TEXT,
         extra_headers TEXT,
         tool_calling TEXT NOT NULL DEFAULT 'auto',
         image_input INTEGER NOT NULL DEFAULT 0,

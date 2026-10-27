@@ -125,6 +125,17 @@ export function getProtectedRequestPaths(protocol: ProviderProtocol): Set<string
     set.add('tool_choice')
     // 推理等级：Adapter 由 request.reasoningEffort 写入。
     set.add('reasoning')
+  } else if (protocol === 'anthropic_messages') {
+    // Anthropic Messages：system / tools / thinking / max_tokens 由 Adapter 控制。
+    // temperature / top_p / top_k 不在保护列表（Adapter 从不写入；用户可经动态参数发送，
+    // 但 2026-10-21 版本会在构建阶段强制剔除这三个采样参数）。
+    set.add('messages')
+    set.add('system')
+    set.add('tools')
+    set.add('tool_choice')
+    set.add('thinking')
+    set.add('output_config')
+    set.add('max_tokens')
   } else if (protocol === 'image_generations') {
     set.add('prompt')
     // 图片参数由 ImageGenerationProfile 单一管理，动态参数不重复定义，避免双源。

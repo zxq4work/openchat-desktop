@@ -58,7 +58,11 @@ export function isHistoryToolPortableToProtocol(
   if (targetProtocol === 'chatgpt_codex') {
     return tool.name === 'run' && tool.namespace === 'web'
   }
-  if (targetProtocol === 'chat_completions' || targetProtocol === 'responses') {
+  if (
+    targetProtocol === 'chat_completions' ||
+    targetProtocol === 'responses' ||
+    targetProtocol === 'anthropic_messages'
+  ) {
     return tool.name === 'openchat_web_search' || tool.name === 'openchat_web_fetch'
   }
   return false
