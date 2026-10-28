@@ -113,6 +113,20 @@ describe('搜索关闭时 Provider History 回放门控（静态守卫）', () =
   })
 
   it('runGenerationDirect 仍以 skipWebSearchHistory=true 构造请求（搜索关闭路径）', () => {
-    expect(serviceSrc).toMatch(/noSearchInstructions[^\n]*\n[^\n]*buildCanonicalRequest\([^)]*,\s*true\s*,\s*effectiveResponsesLite\s*\)/)
+    // 签名参数顺序未变：...adapter.protocol, true, effectiveResponsesLite, ...，
+    // 其后追加的可选参数（attribution / searchEnabledThisTurn / preSearchOutcome）不影响该门控位置。
+    // 允许 noSearchInstructions 与 buildCanonicalRequest 之间跨多行（含注释）。
+    expect(serviceSrc).toMatch(/noSearchInstructions[\s\S]{0,600}?buildCanonicalRequest\([^)]*,\s*true\s*,\s*effectiveResponsesLite\s*,/)
+  })
+
+  // Responses PreSearch 分支必须复用统一构建器，而不是自建只遍历正文的循环，
+  // 否则会丢失 Provenance / 开关说明 / 只读历史工具。
+  it('buildCanonicalRequestWithDeveloper 复用 buildCanonicalRequest（不得自建历史遍历）', () => {
+    const fnStart = serviceSrc.indexOf('private buildCanonicalRequestWithDeveloper')
+    expect(fnStart).toBeGreaterThan(-1)
+    const fnBody = serviceSrc.slice(fnStart, fnStart + 1200)
+    expect(fnBody).toMatch(/this\.buildCanonicalRequest\(/)
+    // 不得再次出现「手写 for (const msg of segmentMessages)」式的正文重建
+    expect(fnBody).not.toMatch(/for\s*\(\s*const msg of segmentMessages\s*\)/)
   })
 })

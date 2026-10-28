@@ -22,8 +22,8 @@ import { MAX_IMAGES_PER_MESSAGE, TITLE_MAX_LENGTH } from '../../../shared/consta
 import type { ChatGPTCodexClient } from './transport/ChatGPTCodexClient'
 import { UsageLimitReachedError } from './transport/ChatGPTCodexClient'
 import type { ChatGPTModelService } from './models/ChatGPTModelService'
-import { resolveAllSearchProvenance, buildAllProvenanceContext } from './search/SearchProvenanceResolver'
-import { shouldIncludeNoSearchNotice } from './anthropicPlainChatPolicy'
+import { resolveAllSearchProvenance, buildAllProvenanceContext, type SearchTurnMode } from './search/SearchProvenanceResolver'
+import { shouldIncludeNoSearchNotice } from './searchNoticePolicy'
 import {
   splitAttributionRequest,
   buildHostedAttributionStatement,
@@ -34,6 +34,7 @@ import {
   buildReadOnlyToolHistoryContent,
   type ReadOnlyHistoryToolCall,
 } from './history/toolHistoryPortability'
+import { findSupersededUserMessageIds, buildHistoricalFailureContext } from './history/supersededUserMessages'
 import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks, WebSearchCallEvent } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
@@ -94,6 +95,35 @@ const NO_SEARCH_CAPABILITY_NOTICE = `You do not have web search tools available 
 - Do NOT output any search-related syntax (no <tool_call>, no <!-- START: WEB_SEARCH_CALL -->, no function calls).
 - Do NOT mention that search is "disabled" or "unavailable" — just answer the question directly.
 - If the user explicitly asks you to search or look something up, simply say you're unable to look that up right now and suggest they try enabling web search.`
+
+// PreSearch 本轮的真实执行结果（仅当搜索功能开启且已代为执行预搜索时存在）。
+//   succeeded  已执行搜索并得到结果（results > 0）
+//   empty      已执行搜索，但没有匹配结果（results === 0）
+//   failed     已尝试搜索，但搜索失败
+export type PreSearchTurnOutcome = 'succeeded' | 'empty' | 'failed'
+
+// 本轮预搜索结果的如实说明（低层执行事实，不是历史记录）。
+// 头部只陈述「能力」：搜索已开启、本轮未暴露工具给模型、不得自行发起工具调用、不得说成关闭。
+// 本轮是否真的执行过搜索，完全由 outcome 分支单独陈述（绝不把「开启」等同于「已执行」）。
+function buildPreSearchTurnNotice(outcome: PreSearchTurnOutcome): string {
+  const head = `CURRENT TURN: web search is enabled in OpenChat. No web search tool is exposed to the model in this request. Do not emit tool-call syntax. Do not describe web search as disabled.`
+  switch (outcome) {
+    case 'succeeded':
+      return `${head}
+A web search was executed successfully for this turn.
+Search results are provided in this request.
+Use those results and cite sources where appropriate.`
+    case 'empty':
+      return `${head}
+A web search was executed for this turn and returned no matching results.
+Do not invent results or source URLs.`
+    case 'failed':
+      return `${head}
+A web search was attempted for this turn, but the operation failed.
+Do not claim the search succeeded or invent results.
+Do not claim web search is disabled.`
+  }
+}
 
 // 脱敏诊断：只记录 System Prompt 的「来源布尔 + 长度」，绝不打印 Prompt 正文 / 用户对话 / 凭证。
 // 仅在显式开启 OPENCHAT_DEBUG_SYSTEM_PROMPT=1 时输出，避免生产日志噪声。
@@ -852,27 +882,23 @@ export class ChatGPTConversationService {
       const modelInstructions = useModelInstructions
         ? (this.modelService.getInstructionsTemplate(modelId) ?? '')
         : ''
-      const isAnthropic = adapter.protocol === 'anthropic_messages'
-      // 用户提示词：Anthropic 不再伪造 "You are a helpful assistant."（用户从未配置过它）。
-      // 其它协议保持原有兜底文案，行为完全不变。
+      // 基础 System Prompt 与协议无关：所有第三方协议（chat_completions / responses /
+      // anthropic_messages）及 Codex 使用同一套规则——模型名 / 日期 / 时区 + 兜底角色 +
+      // 'Additional info for this conversation:' 标题 + 用户提示词。
+      // 协议只负责把这些内容序列化到各自的字段（system / instructions / 顶层 system），
+      // 绝不因协议而省略或改写应用级提示词。
+      // 用户提示词：未配置（含空串 / 仅空白）时使用统一兜底角色；配置后原样保留，
+      // 并位于 metadata 之后（保持原有合并顺序与优先级）。
       const userPrompt = systemPrompt.trim()
         ? systemPrompt
-        : (isAnthropic ? '' : 'You are a helpful assistant.')
-      // 基础 metadata：模型名 / 日期 / 时区 + 用户提示词。
-      // Anthropic 不注入 `Current model`（仅此处生产、无任何消费者），也不注入无提示词时的
-      // 兜底文案与 'Additional info for this conversation:' 标题；
-      // 但**保留日期与时区**——模型无法从其它途径获知当前日期/时区（Anthropic 不注入
-      // 服务端时钟），属于确实被依赖的功能上下文，绝不删除。
-      // 用户提示词仍位于 metadata 之后（保持原有合并顺序与优先级）。
+        : 'You are a helpful assistant.'
       const metadataLines = [
-        ...(isAnthropic ? [] : [`Current model: ${modelId}`]),
+        `Current model: ${modelId}`,
         `Current date: ${this.getLocalDate()}`,
         `Current timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
       ]
-      const baseMetadata = (userPrompt
-        ? [...metadataLines, ...(isAnthropic ? [] : ['Additional info for this conversation:']), '', userPrompt]
-        : metadataLines
-      ).join('\n')
+      // userPrompt 恒非空（有兜底），因此始终追加标题与用户提示词，顺序与 Chat Completions 基线一致。
+      const baseMetadata = [...metadataLines, 'Additional info for this conversation:', '', userPrompt].join('\n')
 
       // 本轮可信指令：基础 metadata + 当前模型 instructions。
       // 搜索模式的「本轮自我识别」内嵌在按策略隔离的搜索指令尾部（见 codexSearchInstructions），
@@ -1861,6 +1887,9 @@ export class ChatGPTConversationService {
         toolCallId: 'pre-search',
         webSearchResults: [],
       })
+      // 模型判定无需搜索：未执行任何预搜索，但用户**确实开启了搜索功能**。
+      // 因此绝不注入「搜索已关闭」语义（searchEnabledThisTurn=true），
+      // 也不存在本轮搜索执行结果（preSearchOutcome=undefined）。
       await this.runGenerationDirect(
         conversationId, adapter, modelId, instructions, effort, assistantMessageId, segmentId, abortController,
         undefined, true
@@ -1878,9 +1907,11 @@ export class ChatGPTConversationService {
     })
 
     let searchContext = ''
+    let preSearchOutcome: PreSearchTurnOutcome = 'failed'
     try {
       const results = await this.webSearchService.search(searchQuery, abortController.signal)
       console.log('[PreSearch] query=', searchQuery, 'results count=', results.length)
+      preSearchOutcome = results.length > 0 ? 'succeeded' : 'empty'
       if (results.length > 0) {
         const lines = [
           `You searched the web for: "${searchQuery}"`,
@@ -1924,10 +1955,15 @@ export class ChatGPTConversationService {
       })
     }
 
-    // Responses 协议优先使用 developer message 注入搜索上下文
+    // 本轮预搜索已实际执行（成功 / 0 结果 / 失败均由 preSearchOutcome 如实表达）。
+    // 无论哪一种，用户都开启了搜索功能 → searchEnabledThisTurn=true，绝不注入关闭语义。
+
+    // Responses 协议优先使用 developer message 承载本轮搜索结果。
+    // 有结果时把结果文本作为 developer 注入；无结果 / 失败时退化到 system 的本轮说明
+    //（与其它协议一致），不得因「无结果」而丢失「本轮已搜索」的事实。
     if (searchContext && adapter.protocol === 'responses') {
       const request = this.buildCanonicalRequestWithDeveloper(
-        modelId, instructions, searchContext, segmentId, effort
+        modelId, instructions, searchContext, segmentId, effort, adapter.protocol, preSearchOutcome
       )
       await this.runGenerationDirectStream(
         conversationId, adapter, request, assistantMessageId, abortController
@@ -1935,13 +1971,14 @@ export class ChatGPTConversationService {
       return
     }
 
+    // 有结果 → 作为附加上下文；无结果/失败 → 仅靠 buildCanonicalRequest 的本轮说明。
     const fullInstructions = searchContext
       ? instructions + '\n\n' + searchContext
       : instructions
 
     await this.runGenerationDirect(
       conversationId, adapter, modelId, fullInstructions, effort, assistantMessageId, segmentId, abortController,
-      undefined, true
+      undefined, true, preSearchOutcome
     )
   }
 
@@ -1965,13 +2002,6 @@ export class ChatGPTConversationService {
         m.role === 'assistant' &&
         (m.providerPayloadJson || (m.webSearchResults && m.webSearchResults.length > 0))
     )
-  }
-
-  // 当前上下文段是否执行过搜索：与 buildCanonicalRequest 的重放范围一致（仅 completed）。
-  private segmentHasSearchHistory(segmentId: string): boolean {
-    if (!segmentId) return false
-    const completed = this.messages.getBySegmentId(segmentId).filter((m) => m.status === 'completed')
-    return this.detectSearchWasEnabledInHistory(completed)
   }
 
   // 当前上下文段是否已有可注入的搜索来源上下文（buildCanonicalRequest 的确定性 provenance）。
@@ -2064,21 +2094,30 @@ User message: ${userText}${contextHint}`
     segmentId: string,
     abortController: AbortController,
     effectiveResponsesLite?: boolean,
-    searchEnabledThisTurn = false
+    // 本轮 OpenChat 搜索功能是否已开启。注意：这描述的是「用户是否开启搜索」，
+    // 与「本轮是否有可用工具 / 是否已执行预搜索」是不同维度——
+    // 模型不能自行调用工具 ≠ 用户关闭了搜索。
+    searchEnabledThisTurn = false,
+    // PreSearch 本轮的实际执行结果（仅搜索功能开启且已执行预搜索时传入）。
+    preSearchOutcome?: PreSearchTurnOutcome
   ): Promise<void> {
-    // 是否需要搜索声明只由搜索状态与历史工具依赖决定，与用户提示词 / instructions 无关。
-    // 关键：一旦注入了 history provenance，就绝不再追加 NO_SEARCH_CAPABILITY_NOTICE，
-    // 否则「历史确实搜索过」与「你没有搜索工具/别提升级搜索」互相否定，导致模型否认历史搜索。
-    const hasSearchHistory = searchEnabledThisTurn || this.segmentHasSearchHistory(segmentId)
+    // 是否需要搜索声明只由「用户是否开启搜索功能」与「历史 provenance」决定，与协议、
+    // 用户提示词 / instructions、以及本轮是否拿到结果无关：
+    //   - 搜索功能已开启（Tools / PreSearch 成功 / 0 结果 / 失败）：绝不注入关闭语义；
+    //   - 已注入 history provenance：不注入，其能力说明已覆盖当前状态；
+    //   - 其余（用户确实关闭搜索且无历史）：注入统一 NOTICE。
     const hasProvenanceContext = this.segmentHasSearchProvenance(segmentId)
     const includeNotice = shouldIncludeNoSearchNotice({
-      protocol: adapter.protocol,
       searchEnabledThisTurn,
-      hasSearchHistory,
       hasProvenanceContext,
     })
     const noSearchInstructions = includeNotice ? (instructions ? instructions + '\n\n' + NO_SEARCH_CAPABILITY_NOTICE : NO_SEARCH_CAPABILITY_NOTICE) : instructions
-    const request = this.buildCanonicalRequest(modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true, effectiveResponsesLite)
+    // Direct 路径本轮无 tools：skipWebSearchHistory=true。搜索功能开启时把「已执行预搜索」
+    // 及其真实结果状态传入 request 构建，使 provenance / 开关说明按「搜索开启」而非「搜索关闭」表述。
+    const request = this.buildCanonicalRequest(
+      modelId, noSearchInstructions, segmentId, '', effort, adapter.protocol, true, effectiveResponsesLite,
+      undefined, searchEnabledThisTurn, preSearchOutcome
+    )
     await this.runGenerationDirectStream(conversationId, adapter, request, assistantMessageId, abortController)
   }
 
@@ -2280,15 +2319,30 @@ User message: ${userText}${contextHint}`
     effectiveResponsesLite?: boolean,
     // 本轮归因分离（仅 Hosted）：当前用户消息已入库且会被历史循环读到，
     // 这里排除该条原始消息，并在尾部注入一次「实质问题」文本，避免模型看到归因要求。
-    attribution?: { currentUserMessageId: string }
+    attribution?: { currentUserMessageId: string },
+    // 本轮 OpenChat 搜索功能是否已开启（用户视角）。与 preSearchOutcome 一起区分：
+    //   功能关闭 / 工具可用 / 已代为预搜索（成功·0结果·失败）。
+    searchEnabledThisTurn?: boolean,
+    // PreSearch 本轮的真实执行结果；仅当 searchEnabledThisTurn 且确实执行了预搜索时传入。
+    preSearchOutcome?: PreSearchTurnOutcome
   ): CanonicalModelRequest {
     const segmentMessages = this.messages.getBySegmentId(segmentId)
     const messages: CanonicalMessage[] = []
     // 记录无法被目标协议原生重放的历史工具调用（折叠为只读历史记录，见下）。
     const readOnlyToolCalls: ReadOnlyHistoryToolCall[] = []
 
+    // 失败重试去重（三协议共用）：某 user 的下一条是 failed assistant，且其后紧随的
+    // user 与其等价（正文 + chat_input 图片一致）→ 旧 user 已被新一轮取代，跳过它。
+    // 这是结构性证据，不是「文本相同即删除」：正常连续发送 / 两次都成功 / 内容不同 /
+    // 附件不同 / 状态为 stopped·pending·streaming 等都不会触发。数据库记录不变。
+    // 过滤旧 user（findSupersededUserMessageIds）与失败事实渲染（buildHistoricalFailureContext）
+    // 共用同一判定算法 findSupersededRetries，绝不重复实现第二套重试判断。
+    const supersededUserIds = findSupersededUserMessageIds(segmentMessages)
+
     for (const msg of segmentMessages) {
       if (msg.status !== 'completed') continue
+      // 已被失败重试取代的 user 消息不进入模型输入（数据库与 UI 仍保留）。
+      if (msg.role === 'user' && supersededUserIds.has(msg.id)) continue
 
       if (msg.role === 'user') {
         // 归因分离（仅 Hosted）：当前轮用户消息的原始文本含归因要求，不进入模型输入。
@@ -2517,14 +2571,37 @@ User message: ${userText}${contextHint}`
     // 通过 systemPrompt 携带（而非 mid-array developer message），避免 Chat Completions 协议
     // 将 developer 转成 system 后出现在消息中间被服务端拒绝（"System message must be at the beginning."）
     const allProvenances = resolveAllSearchProvenance(segmentMessages)
+    // 本轮搜索模式（协议无关）：
+    //   - 'tools'    ：本轮声明了搜索工具，模型可直接调用；
+    //   - 'presearch'：搜索功能已开启，但本轮未声明工具（模型不能自行调用）；
+    //   - 'disabled' ：用户确实关闭了搜索。
+    // 关键：模式只由「用户是否开启搜索功能」决定，与本轮是否拿到结果、
+    // 或模型是否判断无需搜索无关。'presearch' 绝不等于「搜索已关闭」。
+    const currentSearchMode: SearchTurnMode =
+      skipWebSearchHistory !== true
+        ? 'tools'
+        : (searchEnabledThisTurn === true ? 'presearch' : 'disabled')
     if (allProvenances.length > 0) {
-      // 搜索是否关闭：以本轮是否重放历史搜索工具为准（skipWebSearchHistory）。
-      // PreSearch 回退同样不带工具，故文案统一表述为「本轮不提供搜索工具」，
-      // 不臆测具体原因（用户关闭 / Provider 不支持 tool calling 两种情况都成立）。
-      const searchDisabled = skipWebSearchHistory === true
-      const ctx = buildAllProvenanceContext(allProvenances, searchDisabled)
+      const ctx = buildAllProvenanceContext(allProvenances, currentSearchMode)
       instructions = instructions + '\n\n' + ctx
-      console.log('[Search Provenance] count=%d modes=%s searchDisabled=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), searchDisabled ? 'true' : 'false')
+      console.log('[Search Provenance] count=%d modes=%s currentMode=%s', allProvenances.length, allProvenances.map((p) => p.mode).join(','), currentSearchMode)
+    }
+
+    // 本轮预搜索的真实结果说明（不属于历史 Provenance：它描述的是「本轮」）。
+    // 仅在「搜索功能开启、无 tools、已代为预搜索」时注入；如实区分成功 / 0 结果 / 失败，
+    // 绝不表述为「搜索已关闭」。（模型判定无需搜索时 preSearchOutcome=undefined，不注入此段。）
+    if (currentSearchMode === 'presearch' && preSearchOutcome) {
+      instructions = instructions + '\n\n' + buildPreSearchTurnNotice(preSearchOutcome)
+    }
+
+    // 历史失败事实：失败 assistant 会被历史重建过滤，导致模型不知道历史上发生过「请求失败 + 重发」。
+    // 这里仅依据真实数据库记录（status=failed + 可解析的 HTTP 状态码 + 结构性重发证据）如实陈述，
+    // 与 Search Provenance 完全独立（不计为搜索、不恢复被过滤的 user）。三协议共用同一注入点。
+    // 无任何失败记录时 build 返回 ''，不追加任何提示。
+    const failureContext = buildHistoricalFailureContext(segmentMessages)
+    if (failureContext) {
+      instructions = instructions + '\n\n' + failureContext
+      console.log('[History Failures] injected')
     }
 
     // 不可移植的历史工具调用 → 有界只读历史记录（明确标注非当前可用工具，保留真实结果）。
@@ -2546,7 +2623,8 @@ User message: ${userText}${contextHint}`
 
     // 搜索开关状态切换提示：若本次请求的搜索能力与历史轮次不同，
     // 在 systemPrompt 中追加说明告知模型，避免它把能力变化误判为自己的失误
-    const currentlyDisabled = skipWebSearchHistory === true
+    // 仅当本轮确实「搜索关闭」时才提示开关变化；PreSearch（搜索开启、无 tools）不属于关闭。
+    const currentlyDisabled = currentSearchMode === 'disabled'
     const hadSearchEnabled = this.detectSearchWasEnabledInHistory(segmentMessages)
     // 历史中是否出现过模型声称"没有搜索能力"的表述（曾因开关关闭而无法搜索）
     const historyContainsNoSearchClaim = segmentMessages.some(
@@ -2559,8 +2637,10 @@ User message: ${userText}${contextHint}`
       instructions = instructions + '\n\n' + 'NOTE: The user has just toggled web search OFF. In earlier turns you had web search tools, but for this turn they are gone. This is a user settings change, not a mistake on your part. Do NOT apologize, do NOT claim you "lied" or "made an error", and do NOT invent a self-contradictory explanation. Just answer using past search results or your own knowledge.'
     }
 
-    // 本次开启 + 历史中出现过"不能搜索"的表述 → 告知模型搜索已恢复，别解释过去
-    if (!currentlyDisabled && historyContainsNoSearchClaim) {
+    // 本次开启 + 历史中出现过"不能搜索"的表述 → 告知模型搜索已恢复，别解释过去。
+    // 仅在「工具可调用」时声称「又有搜索能力」；PreSearch 本轮不带 tools，模型无法直接调用，
+    // 由预搜索上下文说明当前能力，绝不在此宣称可直接使用搜索工具。
+    if (currentSearchMode === 'tools' && historyContainsNoSearchClaim) {
       instructions = instructions + '\n\n' + 'NOTE: Web search was toggled off in earlier turns (which is why the model previously said it could not search), but the user has now toggled it back ON. Do NOT apologize, do NOT explain past inconsistency, and do NOT dwell on previous turns. You now have web search available again — use it when needed.'
     }
 
@@ -2653,50 +2733,30 @@ User message: ${userText}${contextHint}`
     }
   }
 
-  // 为 Responses 协议构建带 developer message 的请求（搜索上下文注入为 developer role）
+  // 为 Responses 协议构建带 developer message 的请求（搜索上下文注入为 developer role）。
+  //
+  // 关键：PreSearch 降级路径同样必须获得与其它协议一致的应用级历史上下文——
+  //   Provenance / 搜索开关说明 / 不可移植历史工具（只读）。
+  // 因此这里直接复用 buildCanonicalRequest（skipWebSearchHistory=true, preSearch=true），
+  // 再仅在本轮的 developer 搜索上下文处做协议专属的序列化（Responses 的 developer role
+  // 优先级高于顶层 instructions）。绝不另建一套只遍历正文、会丢失历史事实的构建逻辑。
   private buildCanonicalRequestWithDeveloper(
     modelId: string,
     instructions: string,
     searchContext: string,
     segmentId: string,
-    effort: string
+    effort: string,
+    targetProtocol?: ProviderProtocol,
+    preSearchOutcome?: PreSearchTurnOutcome
   ): CanonicalModelRequest {
-    const segmentMessages = this.messages.getBySegmentId(segmentId)
-    const messages: CanonicalMessage[] = []
-
-    // 搜索上下文作为 developer message 注入（Responses API 优先级高于 system）
-    messages.push({ role: 'developer', content: searchContext })
-
-    for (const msg of segmentMessages) {
-      if (msg.status !== 'completed') continue
-      if (msg.role === 'user') {
-        const images = chatInputImages(msg)
-        if (images.length > 0) {
-          const parts: CanonicalInputPart[] = []
-          if (msg.content) parts.push({ type: 'text', text: msg.content })
-          for (const att of images) parts.push({ type: 'image', attachmentId: att.id, detail: att.detail })
-          messages.push({ role: 'user', content: msg.content, inputParts: parts })
-        } else if (msg.content) {
-          messages.push({ role: 'user', content: msg.content })
-        }
-        continue
-      }
-      if (msg.role === 'assistant') {
-        const assistantMsg: CanonicalMessage = { role: 'assistant' }
-        if (msg.content) assistantMsg.content = msg.content
-        if (assistantMsg.content) messages.push(assistantMsg)
-      }
-    }
-
-    const dynamicParameters = this.resolveDynamicParametersForSegment(segmentId)
-
+    // 搜索功能已开启且本轮已执行预搜索 → 'presearch'（而非 'disabled'），与是否拿到结果无关。
+    const base = this.buildCanonicalRequest(
+      modelId, instructions, segmentId, '', effort, targetProtocol ?? 'responses',
+      true, undefined, undefined, true, preSearchOutcome
+    )
     return {
-      model: modelId,
-      systemPrompt: instructions,
-      messages,
-      attachmentResolver: this.attachmentResolver(),
-      ...(effort ? { reasoningEffort: effort } : {}),
-      ...(dynamicParameters ? { dynamicParameters } : {}),
+      ...base,
+      messages: [{ role: 'developer', content: searchContext }, ...base.messages],
     }
   }
 

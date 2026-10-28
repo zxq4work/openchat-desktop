@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveAllSearchProvenance, buildAllProvenanceContext } from './SearchProvenanceResolver'
-import { shouldIncludeNoSearchNotice } from '../anthropicPlainChatPolicy'
+import { shouldIncludeNoSearchNotice } from '../searchNoticePolicy'
 import type { Message } from '../../../../shared/types/conversation'
 
 // =====================================================================
@@ -646,33 +646,23 @@ describe('注入文本 — 明确区分「历史已执行」与「当前关闭�
   })
 })
 
-describe('NO_SEARCH_CAPABILITY_NOTICE 与 provenance 不得同时注入', () => {
-  it('有 provenance + 搜索关闭 → 任何协议都不追加 NOTICE（消除语义冲突）', () => {
-    for (const protocol of ['chat_completions', 'responses', 'anthropic_messages', 'chatgpt_codex']) {
-      expect(shouldIncludeNoSearchNotice({
-        protocol, searchEnabledThisTurn: false, hasSearchHistory: true, hasProvenanceContext: true,
-      })).toBe(false)
-    }
-  })
-
-  it('有 provenance + 本轮搜索开启（PreSearch 回退）→ 保持既有流程（不受本次修复影响）', () => {
-    for (const protocol of ['chat_completions', 'responses', 'anthropic_messages', 'chatgpt_codex']) {
-      expect(shouldIncludeNoSearchNotice({
-        protocol, searchEnabledThisTurn: true, hasSearchHistory: true, hasProvenanceContext: true,
-      })).toBe(true)
-    }
-  })
-
-  it('无历史、搜索关闭：cc / responses 保持原行为；Anthropic 保持纯净', () => {
+describe('NO_SEARCH_CAPABILITY_NOTICE 与 provenance 不得同时注入（协议无关）', () => {
+  it('有 provenance + 搜索关闭 → 不追加 NOTICE（消除语义冲突）', () => {
     expect(shouldIncludeNoSearchNotice({
-      protocol: 'chat_completions', searchEnabledThisTurn: false, hasSearchHistory: false, hasProvenanceContext: false,
-    })).toBe(true)
-    expect(shouldIncludeNoSearchNotice({
-      protocol: 'responses', searchEnabledThisTurn: false, hasSearchHistory: false, hasProvenanceContext: false,
-    })).toBe(true)
-    expect(shouldIncludeNoSearchNotice({
-      protocol: 'anthropic_messages', searchEnabledThisTurn: false, hasSearchHistory: false, hasProvenanceContext: false,
+      searchEnabledThisTurn: false, hasProvenanceContext: true,
     })).toBe(false)
+  })
+
+  it('有 provenance + 本轮搜索开启 → 不追加 NOTICE（能力已有说明）', () => {
+    expect(shouldIncludeNoSearchNotice({
+      searchEnabledThisTurn: true, hasProvenanceContext: true,
+    })).toBe(false)
+  })
+
+  it('无历史、搜索关闭：三个第三方协议使用同一策略（均注入）', () => {
+    expect(shouldIncludeNoSearchNotice({
+      searchEnabledThisTurn: false, hasProvenanceContext: false,
+    })).toBe(true)
   })
 })
 
@@ -719,17 +709,14 @@ describe('六轮 OFF→ON→OFF→ON→OFF→ON 结构', () => {
       const provBefore = resolveAllSearchProvenance(history)
       expect(provBefore.length).toBe(factsBefore[i])
 
-      // 当前轮是否追加 NOTICE，取决于「本轮之前是否已有 provenance」
+      // 当前轮是否追加 NOTICE，取决于「本轮搜索是否开启」与「是否已有 provenance」
       const includeNotice = shouldIncludeNoSearchNotice({
-        protocol: 'chat_completions',
         searchEnabledThisTurn: round.search,
-        hasSearchHistory: provBefore.length > 0,
         hasProvenanceContext: provBefore.length > 0,
       })
       // 搜索关闭 + 有历史事实 → 绝不注入冲突声明；
-      // 搜索开启时 NOTICE 与实际工具可用性无关（原行为），保持 true
-      if (provBefore.length > 0 && !round.search) expect(includeNotice).toBe(false)
-      if (provBefore.length === 0) expect(includeNotice).toBe(true)
+      // 搜索开启（Tools / PreSearch）→ 能力已有说明，不注入 NOTICE
+      expect(includeNotice).toBe(!round.search && provBefore.length === 0)
 
       round.decide()
     })

@@ -43,6 +43,7 @@ import { MessageRepository } from '../../../storage/MessageRepository'
 import { ChatGPTConversationService } from '../ChatGPTConversationService'
 import { RealChatGPTCodexClient } from '../transport/ChatGPTCodexClient'
 import { ChatCompletionsAdapter } from '../../../providers/ChatCompletionsAdapter'
+import { ResponsesAdapter } from '../../../providers/ResponsesAdapter'
 import type { Conversation, ContextSegment, Message } from '../../../../shared/types/conversation'
 
 // =====================================================================
@@ -60,7 +61,7 @@ import type { Conversation, ContextSegment, Message } from '../../../../shared/t
 const MODEL = 'deepseek-v4-pro'
 const PROVIDER_ID = 'prov-1'
 
-async function setup(webSearchEnabled: boolean) {
+async function setup(webSearchEnabled: boolean, protocol: 'chat_completions' | 'responses' = 'chat_completions') {
   const dir = fs.mkdtempSync(join(os.tmpdir(), 'openchat-provwire-'))
   const storage = new StorageService(join(dir, 'openchat.db'))
   await storage.init()
@@ -84,7 +85,9 @@ async function setup(webSearchEnabled: boolean) {
     providerThreadId: null, systemPromptRevision: 0, systemPromptSnapshot: '', createdAt: now,
   } satisfies ContextSegment)
 
-  const adapter = new ChatCompletionsAdapter({ baseUrl: 'https://api.example', apiKey: 'k', toolCalling: true })
+  const adapter = protocol === 'responses'
+    ? new ResponsesAdapter({ baseUrl: 'https://api.example', apiKey: 'k', toolCalling: true })
+    : new ChatCompletionsAdapter({ baseUrl: 'https://api.example', apiKey: 'k', toolCalling: true })
   const credentialManager = { getAccessToken: async () => 'tok', getAccountId: async () => 'acc' } as never
   const modelService = {
     currentModels: [{ id: MODEL, supportedReasoningEfforts: [] }],
@@ -108,7 +111,7 @@ async function setup(webSearchEnabled: boolean) {
     toolRegistry,
     { getEngineName: () => 'bing', setEngine: () => {}, search: async () => [], setMaxResults: () => {} } as never,
     {
-      listSafe: () => [{ id: PROVIDER_ID, name: 'P', protocol: 'chat_completions', models: [MODEL] }],
+      listSafe: () => [{ id: PROVIDER_ID, name: 'P', protocol, models: [MODEL] }],
       getAdapter: () => adapter,
       getBaseUrl: () => 'https://api.example',
       getResolvedRequestParameters: () => [],
@@ -187,7 +190,11 @@ function activeLock(service: ChatGPTConversationService): unknown {
   return (service as unknown as { activeGeneration: unknown }).activeGeneration
 }
 
-async function sendAndCapture(service: ChatGPTConversationService, text: string): Promise<Record<string, unknown>> {
+async function sendAndCapture(
+  service: ChatGPTConversationService,
+  text: string,
+  protocol: 'chat_completions' | 'responses' = 'chat_completions'
+): Promise<Record<string, unknown>> {
   net.lastRequest = null
   void service.sendMessage('conv-1', text).catch(() => { /* 只关心请求体 */ })
   await waitFor(() => net.lastRequest !== null && net.lastRequest.body.length > 0)
@@ -205,16 +212,25 @@ async function sendAndCapture(service: ChatGPTConversationService, text: string)
   rec.respond()
   await ready
   for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0))
-  rec.res.emit('data', Buffer.from(
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
-  ))
+  if (protocol === 'responses') {
+    rec.res.emit('data', Buffer.from(
+      `data: ${JSON.stringify({ type: 'response.created', response: { id: 'r1' } })}\n\n` +
+      `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'ok' })}\n\n` +
+      `data: ${JSON.stringify({ type: 'response.completed', response: {} })}\n\n`
+    ))
+  } else {
+    rec.res.emit('data', Buffer.from(
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`
+    ))
+  }
   rec.res.emit('end')
   await waitFor(() => activeLock(service) === null, 3000)
   await new Promise((r) => setTimeout(r, 5))
   return parsed
 }
 
-function systemOf(body: Record<string, unknown>): string {
+function systemOf(body: Record<string, unknown>, protocol: 'chat_completions' | 'responses' = 'chat_completions'): string {
+  if (protocol === 'responses') return typeof body.instructions === 'string' ? body.instructions : ''
   const msgs = body.messages as Array<{ role: string; content: unknown }>
   const sys = msgs.find((m) => m.role === 'system')
   return sys ? String(sys.content) : ''
@@ -352,6 +368,40 @@ describe('无历史搜索时（第 1 轮 OFF）保持既有行为', () => {
     expect(system).toContain(NO_SEARCH_SENTINEL)
     expect(system).not.toContain(PROVENANCE_SENTINEL)
     expect(body.tools).toBeUndefined()
+    ctx.storage.close()
+  })
+
+  it('responses 协议同样注入 NO_SEARCH_CAPABILITY_NOTICE，且无 provenance（跨协议一致）', async () => {
+    const ctx = await setup(false, 'responses')
+    const body = await sendAndCapture(ctx.service, '你好', 'responses')
+    const system = systemOf(body, 'responses')
+
+    expect(system).toContain(NO_SEARCH_SENTINEL)
+    expect(system).not.toContain(PROVENANCE_SENTINEL)
+    expect(body.tools).toBeUndefined()
+    ctx.storage.close()
+  })
+})
+
+describe('跨协议一致：responses 的 OFF + 历史搜索（与 cc 相同规则）', () => {
+  it('注入 provenance、无 NOTICE、无 tools、无历史工具重放', async () => {
+    const ctx = await setup(false, 'responses')
+    seedUser(ctx.messages, '你好')
+    seedPlainAssistant(ctx.messages, '你好！')
+    seedUser(ctx.messages, 'OpenAI 最新消息')
+    seedSearchAssistant(ctx.messages, 'openai news', [{ title: 'A1', url: 'https://a' }], '查到 A1')
+
+    const body = await sendAndCapture(ctx.service, '你刚才搜到了什么？', 'responses')
+    const system = systemOf(body, 'responses')
+
+    expect(system).toContain(PROVENANCE_SENTINEL)
+    expect(system).toMatch(/turn: #2/)
+    expect(system).toContain('no web search tool is provided for this turn')
+    expect(system).not.toContain(NO_SEARCH_SENTINEL)
+    expect(body.tools).toBeUndefined()
+    // 关闭态：历史 function_call 不得被重放为可调用项
+    const input = body.input as Array<{ type?: string; role?: string }>
+    expect(input.some((it) => it.type === 'function_call')).toBe(false)
     ctx.storage.close()
   })
 })

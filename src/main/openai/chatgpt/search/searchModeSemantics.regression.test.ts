@@ -101,3 +101,43 @@ describe('buildAllProvenanceContext — 历史列表不得冒充当前轮', () =
     expect(CODEX_SEARCH_INSTRUCTIONS).toContain('call it "Hosted Web Search"')
   })
 })
+
+describe('buildAllProvenanceContext — 三态当前能力说明（disabled / tools / presearch）', () => {
+  const prov: SearchProvenance = {
+    mode: 'custom', mechanism: 'openchat_web_search', queries: ['q'], assistantMessageId: 'm1',
+    outcome: 'succeeded', resultCount: 1, sources: [{ title: 'T', url: 'https://e' }],
+  }
+
+  it('disabled → 明确「本轮无搜索工具」', () => {
+    const ctx = buildAllProvenanceContext([prov], 'disabled')
+    expect(ctx).toContain('no web search tool is provided for this turn')
+    expect(ctx).not.toContain('web search is enabled for this turn')
+  })
+
+  it('tools → 明确「本轮可用搜索工具」', () => {
+    const ctx = buildAllProvenanceContext([prov], 'tools')
+    expect(ctx).toContain('a web search tool is available this turn')
+  })
+
+  it('presearch → 只陈述「搜索已开启、未暴露工具」，绝不推断本轮已搜索', () => {
+    const ctx = buildAllProvenanceContext([prov], 'presearch')
+    // 能力事实：开启 + 未向模型暴露工具
+    expect(ctx).toContain('web search is enabled in OpenChat for this turn')
+    expect(ctx).toContain('no web search tool is exposed to the model')
+    // 绝不因「已开启」就宣称本轮已执行搜索（旧断言句式 "a search was ALREADY performed for you this turn"）
+    expect(ctx).not.toMatch(/a search was ALREADY performed for you this turn/i)
+    expect(ctx).toMatch(/must be determined ONLY from an explicit current-turn search execution notice/i)
+    // 不得表述为「已关闭」
+    expect(ctx).toMatch(/Do not describe web search as switched OFF or disabled/i)
+    expect(ctx).not.toContain('no web search tool is provided for this turn')
+    expect(ctx).not.toContain('they can enable web search')
+    // 历史仍标注为过去轮
+    expect(ctx).toMatch(/EARLIER turn, NOT the current turn/i)
+  })
+
+  it('布尔兼容：true→disabled，false→tools（既有调用方不受影响）', () => {
+    expect(buildAllProvenanceContext([prov], true)).toBe(buildAllProvenanceContext([prov], 'disabled'))
+    expect(buildAllProvenanceContext([prov], false)).toBe(buildAllProvenanceContext([prov], 'tools'))
+    expect(buildAllProvenanceContext([prov])).toBe(buildAllProvenanceContext([prov], 'disabled'))
+  })
+})
