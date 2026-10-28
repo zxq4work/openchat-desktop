@@ -160,6 +160,17 @@ export interface AttachmentImportResult {
   errors: Array<{ fileName: string; code: string; message: string }>
 }
 
+// 消息归属元数据（轻量投影）：供 Model Provenance 等「只需模型归属、不需正文/附件/推理」
+// 的场景使用，避免为此加载完整 Message（正文 / reasoning / provider payload / 附件）。
+// 字段子集与 Message 保持一致。
+export interface MessageAttributionMeta {
+  id: string
+  segmentId: string
+  role: 'user' | 'assistant'
+  status: MessageStatus
+  modelId: string | null
+}
+
 export interface Message {
   id: string
   conversationId: string

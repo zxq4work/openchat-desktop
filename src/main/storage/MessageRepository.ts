@@ -1,5 +1,5 @@
 import { StorageService } from './StorageService'
-import type { Message, MessageStatus, ReasoningDisplayMode, ReasoningMeta, WebSearchResultItem } from '../../shared/types/conversation'
+import type { Message, MessageStatus, ReasoningDisplayMode, ReasoningMeta, WebSearchResultItem, MessageAttributionMeta } from '../../shared/types/conversation'
 import { AttachmentRepository } from './AttachmentRepository'
 import { cleanCitationText } from '../services/ai/CitationParser'
 import { escapeLike } from '../../shared/search/conversationSearch'
@@ -39,6 +39,33 @@ export class MessageRepository {
     if (!result.length || !result[0].values.length) return []
 
     return this.attachTo(result[0].values.map((row) => this.rowToMessage(row)))
+  }
+
+  // 轻量归属查询：只取 id / segment_id / role / status / model_id，不读正文、reasoning、
+  // provider payload、协议原生块和附件。作用域限定在**当前上下文段**——这是模型请求实际
+  // 可见的消息范围（Cmd+R / 新话题 / 系统提示词变更会新建 ContextSegment，新段不得读取旧段）。
+  // 排序固定为 created_at, rowid：rowid 作为稳定次级键，避免同一毫秒内多条消息顺序漂移。
+  getAttributionBySegment(segmentId: string): MessageAttributionMeta[] {
+    const db = this.storage.database
+    const result = db.exec(`
+      SELECT id, segment_id, role, status, model_id
+      FROM messages
+      WHERE segment_id = ?
+      ORDER BY created_at ASC, rowid ASC
+    `, [segmentId])
+    return result.length && result[0].values.length
+      ? result[0].values.map((row) => this.rowToAttribution(row))
+      : []
+  }
+
+  private rowToAttribution(row: unknown[]): MessageAttributionMeta {
+    return {
+      id: String(row[0]),
+      segmentId: String(row[1]),
+      role: String(row[2]) === 'user' ? 'user' : 'assistant',
+      status: String(row[3]) as MessageStatus,
+      modelId: row[4] != null ? String(row[4]) : null,
+    }
   }
 
   // 全局会话搜索（正文）：返回包含 query 的可见消息。

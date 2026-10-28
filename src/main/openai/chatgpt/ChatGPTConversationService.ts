@@ -35,6 +35,7 @@ import {
   type ReadOnlyHistoryToolCall,
 } from './history/toolHistoryPortability'
 import { findSupersededUserMessageIds, buildHistoricalFailureContext } from './history/supersededUserMessages'
+import { resolveHistoricalModels, buildModelProvenanceContext, shouldInjectModelProvenance, type ProvenanceScope } from './history/modelProvenance'
 import { ToolLoopController } from '../../tools/ToolLoopController'
 import type { ToolLoopCallbacks, WebSearchCallEvent } from '../../tools/ToolLoopController'
 import { ToolRegistry } from '../../tools/ToolRegistry'
@@ -1118,10 +1119,10 @@ export class ChatGPTConversationService {
     let totalReasoningDuration = 0
     let reasoningTextAccum = ''
 
-    // 统一只读历史工具：按当前会话消息构造，作用域限定在本会话。
+    // 统一只读历史工具：按当前上下文段消息构造，作用域限定在本上下文段。
     // 与联网工具（openchat_web_search / openchat_web_fetch）注册在同一循环内，
     // 使任意具备 tool-calling 能力的 Provider 都能通过统一接口按需读取真实历史结果。
-    const roundRegistry = this.buildRoundToolRegistry(conversationId)
+    const roundRegistry = this.buildRoundToolRegistry(segmentId)
 
     const controller = new ToolLoopController(adapter, roundRegistry, undefined, { signal: abortController.signal, conversationId, segmentId, modelId }, {
       maxRounds: this.webSearchConfig.maxToolRounds,
@@ -1334,14 +1335,16 @@ export class ChatGPTConversationService {
   // - 共享 web 工具（openchat_web_search / openchat_web_fetch）从 this.toolRegistry 复制，
   //   避免污染全局注册表；
   // - 只读历史工具读取当前会话已持久化的历史工具结果，作用域限定为本会话，绝无跨会话读取。
-  private buildRoundToolRegistry(conversationId: string): ToolRegistry {
+  private buildRoundToolRegistry(segmentId: string): ToolRegistry {
     const registry = new ToolRegistry()
     for (const def of this.toolRegistry.getDefinitions()) {
       const executor = this.toolRegistry.getExecutor(def.name)
       if (executor) registry.register(def.name, executor)
     }
     if (this.readHistoryToolEnabled) {
-      const scopedMessages = this.messages.getByConversationId(conversationId)
+      // 作用域 = 当前上下文段（与发送给模型的消息范围一致）。
+      // Cmd+R / 新话题后的新段不得读取旧段的工具调用历史（含搜索结果、网页正文）。
+      const scopedMessages = this.messages.getBySegmentId(segmentId)
       registry.register(READ_HISTORY_TOOL_NAME, new ReadHistoryTool(scopedMessages))
     }
     return registry
@@ -1408,7 +1411,7 @@ export class ChatGPTConversationService {
     if (this.readHistoryToolEnabled) {
       hostedRegistry.register(
         READ_HISTORY_TOOL_NAME,
-        new ReadHistoryTool(this.messages.getByConversationId(conversationId))
+        new ReadHistoryTool(this.messages.getBySegmentId(segmentId))
       )
     }
 
@@ -1680,7 +1683,7 @@ export class ChatGPTConversationService {
     if (this.readHistoryToolEnabled) {
       standaloneToolRegistry.register(
         READ_HISTORY_TOOL_NAME,
-        new ReadHistoryTool(this.messages.getByConversationId(conversationId))
+        new ReadHistoryTool(this.messages.getBySegmentId(segmentId))
       )
     }
 
@@ -2602,6 +2605,34 @@ User message: ${userText}${contextHint}`
     if (failureContext) {
       instructions = instructions + '\n\n' + failureContext
       console.log('[History Failures] injected')
+    }
+
+    // 历史模型归属：每个已完成 assistant 回合真实使用的模型（来自 messages.model_id）。
+    // 三协议共用同一注入点。顶层 baseMetadata 的「Current model」只描述当前轮，
+    // 绝不能据此推断整个会话历史。
+    //
+    // 作用域 = **当前上下文段**（与 buildCanonicalRequest 发送给模型的消息范围完全一致）。
+    // 这是 Cmd+R / 新话题 / 系统提示词变更建立的上下文重置边界的正确语义：新段请求绝不能
+    // 读取旧段已完成回合的模型归属。使用轻量段级查询 getAttributionBySegment（只取
+    // id/segment/role/status/model_id），绝不调用全会话查询（getAttributionByConversation /
+    // getByConversationId）——那会让重置后的模型看见重置前的历史元数据，违背上下文隔离。
+    const attributionMetas = this.messages.getAttributionBySegment(segmentId)
+    const provenanceScope: ProvenanceScope = { kind: 'segment' }
+    const historicalModels = resolveHistoricalModels(attributionMetas, segmentId)
+    if (shouldInjectModelProvenance(historicalModels)) {
+      const built = buildModelProvenanceContext({ turns: historicalModels, currentModelId: modelId, scope: provenanceScope })
+      if (built.text) {
+        instructions = instructions + '\n\n' + built.text
+        // 有界诊断：只打计数与完整性，绝不打印模型长列表或用户内容。
+        console.log(
+          '[Model Provenance] scope=segment turns=%d distinctModels=%d unknown=%d truncated=%s chars=%d',
+          built.turnCount,
+          built.distinctModelCount,
+          built.unknownCount,
+          String(built.truncated),
+          built.text.length
+        )
+      }
     }
 
     // 不可移植的历史工具调用 → 有界只读历史记录（明确标注非当前可用工具，保留真实结果）。
