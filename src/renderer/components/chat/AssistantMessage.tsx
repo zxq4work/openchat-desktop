@@ -646,12 +646,13 @@ export const AssistantMessage = React.memo(function AssistantMessage({ message }
             : `${message.errorCode}: ${message.errorMessage}`}
         </div>
       )}
-      {/* 时间仅在回答已结束（completed/stopped/failed）时展示，取消息真实的最后更新时间；
-          流式进行中不展示时间，但复制按钮始终可复制已产出的正文。 */}
+      {/* 时间与复制只在回答结束后（completed/stopped/failed）提供，
+          生成中不展示时间，也不提供复制，避免复制到半截正文。 */}
       <MessageFooter
         content={rawContent}
         timestamp={isMessageSettled ? message.updatedAt : null}
         align="left"
+        copyable={isMessageSettled}
       />
     </div>
   )

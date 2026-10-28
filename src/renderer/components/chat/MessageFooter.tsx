@@ -56,10 +56,12 @@ interface Props {
   // 真实消息时间（用户 = 发送时间，AI = 完成时间）。缺失时不展示时间，仅保留复制按钮。
   timestamp: number | null | undefined
   align: 'left' | 'right'
+  // 是否允许复制。回答尚未生成完成时不提供复制，避免复制到半截正文。
+  copyable?: boolean
 }
 
 // 消息底部：时间 + 单条复制。时间与复制按钮同一行，用户消息右对齐、AI 消息左对齐。
-export function MessageFooter({ content, timestamp, align }: Props) {
+export function MessageFooter({ content, timestamp, align, copyable = true }: Props) {
   const [copied, setCopied] = useState(false)
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -80,7 +82,7 @@ export function MessageFooter({ content, timestamp, align }: Props) {
   const now = useNow()
   const timeLabel = formatMessageTime(timestamp, now)
   const fullTimeLabel = formatFullMessageTime(timestamp)
-  const canCopy = content.length > 0
+  const canCopy = copyable && content.length > 0
   if (!timeLabel && !canCopy) return null
 
   return (
